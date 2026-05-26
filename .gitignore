@@ -1,0 +1,37 @@
+## ROS / ROS2 workspace artifacts
+build/
+devel/
+install/
+log/
+logs/
+
+## Catkin / Colcon workspaces
+catkin_ws/build/
+catkin_ws/devel/
+catkin_ws/install/
+catkin_ws/log/
+src/**/build/
+src/**/install/
+src/**/log/
+
+## Generated files
+*.bag
+*.bag.active
+*.launch.pyc
+*.pyc
+*.pyo
+*.swp
+
+## Colcon / ROS metadata
+COLCON_IGNORE
+.colcon/
+ament_cmake_environment_hooks/
+ament_cmake_index/
+
+## Python caches
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+
+## IDE / Editor files
+.vscode/
