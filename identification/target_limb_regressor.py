@@ -3,8 +3,10 @@
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-import numpy as np # type: ignore
+import numpy as np
 import pinocchio as pin
+
+from ament_index_python.packages import get_package_share_directory
 
 LEFT_LEG_Q_INDICES  = [0, 1, 2, 3, 4, 5]
 RIGHT_LEG_Q_INDICES = [6, 7, 8, 9, 10, 11]
@@ -25,15 +27,9 @@ VALID_LIMB_GROUPS = {
 GROUP_TO_IDENTIFY = 'left_arm' 
 
 URDF_PATH = (
-    Path(__file__).resolve().parent
-    / ".."
-    / ".."
-    / "simulation"
-    / "mujoco"
-    / "assets"
+    Path(get_package_share_directory('identification'))
     / "resource"
     / "robot"
-    / "pm_v2"
     / "urdf"
     / "serial_pm_v2_identify.urdf"
 ).resolve()
@@ -47,22 +43,23 @@ class TargetLimbRegressor:
         urdf_path: Path = URDF_PATH,
         group_to_identify = GROUP_TO_IDENTIFY
     ):
+        
+        if not urdf_path.is_file():
+            raise FileNotFoundError(f"URDF file not found at: {urdf_path}")
         if group_to_identify not in VALID_LIMB_GROUPS:
             raise ValueError(
                 f"Invalid group_to_identify: {group_to_identify}. "
                 f"Must be one of: {list(VALID_LIMB_GROUPS.keys())}"
             )
-        if not urdf_path.is_file():
-            raise FileNotFoundError(f"URDF file not found at: {urdf_path}")
         
         self.urdf_path = Path(urdf_path).resolve()
         self.group_to_identify = list(VALID_LIMB_GROUPS[group_to_identify])
         self.rng_seed = int(RNG_SEED)
 
-        self.model = self._load_model(self.urdf_path)
+        self.model = self._model_from_urdf(self.urdf_path)
         self.data = self.model.createData()
         self.urdf_dynamics = self._load_urdf_joint_dynamics(self.urdf_path)
-        self.joint_infos, self.target_v_indices = self.collect_target_limb_info()
+        self.all_joint_infos, self.target_joint_infos, self.target_v_indices = self.collect_target_limb_info()
 
         self.limits = {
             "q_lower": self.model.lowerPositionLimit[self.group_to_identify],
@@ -77,7 +74,7 @@ class TargetLimbRegressor:
         return "[" + ", ".join(f"{x:.6g}" for x in arr) + "]"
 
     @staticmethod
-    def _load_model(urdf_path: Path) -> pin.Model:
+    def _model_from_urdf(urdf_path: Path) -> pin.Model:
         if not urdf_path.is_file():
             raise FileNotFoundError(f"URDF file not found at: {urdf_path}")
         return pin.buildModelFromUrdf(str(urdf_path))
@@ -93,13 +90,15 @@ class TargetLimbRegressor:
             name = joint_elem.attrib.get("name")
             if not name:
                 continue
+            elif name == 'LAY_DOWN':
+                continue # LAY_DOWN is used only to tune the pose when identify
 
             dyn_elem = joint_elem.find("dynamics")
             damping = 0.0
             friction = 0.0
             if dyn_elem is not None:
-                damping = float(dyn_elem.attrib.get("damping", "0.0") or 0.0)
-                friction = float(dyn_elem.attrib.get("friction", "0.0") or 0.0)
+                damping = float(dyn_elem.attrib.get("damping", "0.0"))
+                friction = float(dyn_elem.attrib.get("friction", "0.0"))
 
             dynamics_by_joint[name] = {
                 "damping": damping,
@@ -128,35 +127,72 @@ class TargetLimbRegressor:
 
     def collect_target_limb_info(self):
         target_q_set = set(self.group_to_identify)
-        infos = []
+        all_infos = []
+        target_infos = []
         target_v_indices = []
 
         for joint_id in range(1, self.model.njoints):
             joint = self.model.joints[joint_id]
-            q_range = list(range(joint.idx_q, joint.idx_q + joint.nq))
-            if target_q_set.intersection(q_range):
-                v_range = list(range(joint.idx_v, joint.idx_v + joint.nv))
-                infos.append(
+
+            if joint.nq != 1 or joint.nv != 1:
+                raise ValueError(
+                    f"Only 1-DoF joints are supported. Joint {joint_id}: '{self.model.names[joint_id]}' has nq={joint.nq}, nv={joint.nv}."
+                )
+            
+            all_infos.append(
+                {
+                    "joint_id": joint_id-1, # skip LAY_DOWN
+                    "name": self.model.names[joint_id],
+                    "idx_q": joint.idx_q,
+                    "nq": joint.nq,
+                    "idx_v": joint.idx_v,
+                    "nv": joint.nv,
+                    "q_lower": self.model.lowerPositionLimit[joint.idx_q : joint.idx_q + joint.nq].copy(),
+                    "q_upper": self.model.upperPositionLimit[joint.idx_q : joint.idx_q + joint.nq].copy(),
+                    "v_limit": self.model.velocityLimit[joint.idx_v : joint.idx_v + joint.nv].copy(),
+                    "effort_limit": self.model.effortLimit[joint.idx_v : joint.idx_v + joint.nv].copy(),
+                    "damping": self.urdf_dynamics.get(self.model.names[joint_id], {}).get("damping", 0.0),
+                    "friction": self.urdf_dynamics.get(self.model.names[joint_id], {}).get("friction", 0.0),
+                }
+            )
+            if target_q_set.intersection([joint.idx_q]):                
+                target_infos.append(
                     {
-                        "joint_id": joint_id,
+                        "joint_id": joint_id-1, # skip LAY_DOWN
                         "name": self.model.names[joint_id],
                         "idx_q": joint.idx_q,
                         "nq": joint.nq,
                         "idx_v": joint.idx_v,
                         "nv": joint.nv,
-                        "q_range": q_range,
-                        "v_range": v_range,
                         "q_lower": self.model.lowerPositionLimit[joint.idx_q : joint.idx_q + joint.nq].copy(),
                         "q_upper": self.model.upperPositionLimit[joint.idx_q : joint.idx_q + joint.nq].copy(),
                         "v_limit": self.model.velocityLimit[joint.idx_v : joint.idx_v + joint.nv].copy(),
                         "effort_limit": self.model.effortLimit[joint.idx_v : joint.idx_v + joint.nv].copy(),
+                        "damping": self.urdf_dynamics.get(self.model.names[joint_id], {}).get("damping", 0.0),
+                        "friction": self.urdf_dynamics.get(self.model.names[joint_id], {}).get("friction", 0.0),
                     }
                 )
-                target_v_indices.extend(v_range)
+                target_v_indices.extend([joint.idx_v])
 
         target_v_indices = sorted(set(target_v_indices))
-        infos.sort(key=lambda x: x["idx_q"])
-        return infos, target_v_indices
+        target_infos.sort(key=lambda x: x["idx_q"])
+        all_infos.sort(key=lambda x: x["idx_q"])
+        return all_infos, target_infos, target_v_indices
+
+    def print_joint_info(self, target_only=True):
+        print("\n" + f"\033[92m{f'Target' if target_only else 'All'} limb joint parameters\033[0m".center(60, "="))
+        joint_infos = self.target_joint_infos if target_only else self.all_joint_infos
+        for info in joint_infos:
+            print(
+                f"joint_id={info['joint_id']:<2d} name={info['name']} "
+                f"idx_q={info['idx_q']} idx_v={info['idx_v']}"
+            )
+            print(f"  q_lower      = {self._fmt_array(info['q_lower'])}")
+            print(f"  q_upper      = {self._fmt_array(info['q_upper'])}")
+            print(f"  velocity_lim = {self._fmt_array(info['v_limit'])}")
+            print(f"  effort_lim   = {self._fmt_array(info['effort_limit'])}")
+            print(f"  damping      = {info['damping']:.6g}")
+            print(f"  friction     = {info['friction']:.6g}")
 
     def sample_state(self, target_v_indices):
         rng = np.random.default_rng(self.rng_seed)
@@ -250,7 +286,7 @@ class TargetLimbRegressor:
             target_joint_names,
             friction_params_from_urdf,
         ) = self.build_augmented_target_regressor(
-            joint_infos=self.joint_infos,
+            joint_infos=self.target_joint_infos,
             target_v_indices=self.target_v_indices,
             Y_target_limb=Y_target_limb,
             v=v,
@@ -270,7 +306,7 @@ class TargetLimbRegressor:
             )
 
             print("\n=== Target limb joint parameters ===")
-            for info in self.joint_infos:
+            for info in self.target_joint_infos:
                 print(
                     f"joint_id={info['joint_id']:>2d} name={info['name']} "
                     f"idx_q={info['idx_q']} nq={info['nq']} idx_v={info['idx_v']} nv={info['nv']}"
@@ -339,7 +375,9 @@ def main():
         urdf_path=URDF_PATH,
         group_to_identify=GROUP_TO_IDENTIFY
     )
-    regressor.compute_regressor(print_info=True)
+    regressor.print_joint_info(target_only=True)
+    regressor.print_joint_info(target_only=False)
+    # regressor.compute_regressor(print_info=True)
 
 
 if __name__ == "__main__":
