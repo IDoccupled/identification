@@ -5,7 +5,6 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 import pinocchio as pin
-from sympy import true
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -217,7 +216,7 @@ class TargetLimbRegressor:
     def build_augmented_target_regressor(
         self,
         Y_target_limb,
-        v,
+        v_target_limb,
     ):
         """
         Build target-limb regressor with 12 columns per 1-DoF joint:
@@ -234,8 +233,8 @@ class TargetLimbRegressor:
             col_begin = 10 * joint
             col_end = col_begin + 10
             inertial_blocks.append(Y_target_limb[:, col_begin:col_end])
-            Y_target_friction[idx, 2*idx] = v[idx]
-            Y_target_friction[idx, 2*idx+1] = np.tanh(v[idx]*1e3)
+            Y_target_friction[idx, 2*idx] = v_target_limb[idx]
+            Y_target_friction[idx, 2*idx+1] = np.tanh(v_target_limb[idx]*1e3)
             friction_params_from_urdf.extend([
                 self.target_joint_infos[idx]['damping'], 
                 self.target_joint_infos[idx]['friction']
@@ -257,11 +256,11 @@ class TargetLimbRegressor:
                           ):
 
         if q is None or v is None or a is None:
-            print("\n \033[92mNo state provided, sampling random state within limits for target limb...\033[0m") if print_info else None
+            print("\n\033[92mNo state provided, sampling random state within limits for target limb...\033[0m") if print_info else None
             q, v, a = self.sample_state(self.group_to_identify)
         else:
             if print_info:
-                print("\n \033[92mUsing provided state for regressor computation...\033[0m")
+                print("\n\033[92mUsing provided state for regressor computation...\033[0m")
                 print(f"q: {self._fmt_array_lines(q)}")
                 print(f"v: {self._fmt_array_lines(v)}")
                 print(f"a: {self._fmt_array_lines(a)}")
@@ -270,6 +269,7 @@ class TargetLimbRegressor:
         # Y satisfies tau = Y * pi, where pi is the stacked inertial parameter vector.
         Y = pin.computeJointTorqueRegressor(self.model, self.data, q, v, a)
         Y_target_limb = Y[self.group_to_identify, :]
+        v_target_limb = v[self.group_to_identify]
         (
             self.Y_aug,
             self.Y_target_inertial,
@@ -277,7 +277,7 @@ class TargetLimbRegressor:
             self.tau_friction
         ) = self.build_augmented_target_regressor(
             Y_target_limb=Y_target_limb,
-            v=v,
+            v_target_limb=v_target_limb,
         )
 
         tau_inertia = pin.rnea(self.model, self.data, q, v, a)[self.group_to_identify]
@@ -334,6 +334,13 @@ class TargetLimbRegressor:
 
     
 '''
+LEFT_LEG_Q_INDICES  = [0, 1, 2, 3, 4, 5]
+RIGHT_LEG_Q_INDICES = [6, 7, 8, 9, 10, 11]
+WAIST_Q_INDICES     = [12]
+LEFT_ARM_Q_INDICES  = [13, 14, 15, 16, 17]
+RIGHT_ARM_Q_INDICES = [18, 19, 20, 21, 22]
+NECK_Q_INDICES      = [23]
+
 VALID_LIMB_GROUPS = {
     'left_leg': LEFT_LEG_Q_INDICES,
     'right_leg': RIGHT_LEG_Q_INDICES,
@@ -342,25 +349,27 @@ VALID_LIMB_GROUPS = {
     'waist': WAIST_Q_INDICES,
     'neck': NECK_Q_INDICES
 }
+
+GROUP_TO_IDENTIFY = 'left_arm' 
 '''
 
 def main():
     regressor = TargetLimbRegressor(
         urdf_path=URDF_PATH,
-        group_to_identify=GROUP_TO_IDENTIFY
+        group_to_identify='left_arm'
     )
 
-    regressor.print_joint_info(selected_group=False)
-    regressor.print_joint_info(selected_group=True)
+    # regressor.print_joint_info(selected_group=False)
+    # regressor.print_joint_info(selected_group=True)
 
     regressor.compute_regressor(
-        q=[-1.5, 1.0, 0.0, 0.0, 0.0],
-        v=[0.0, 0.0, 0.0, 0.0, 0.0],
+        q=[-1.6, 1.5, 0.0, 0.0, 0.0],
+        v=[1.0, 1.0, 1.0, 1.0, 1.0],
         a=[0.0, 0.0, 0.0, 0.0, 0.0],
         print_info=True,
         )
     
-    regressor.print_regressor_info(select='aug')
+    # regressor.print_regressor_info(select='aug')
     regressor.print_regressor_info(select='inertia')
     regressor.print_regressor_info(select='friction')
     regressor.print_tau_info()
