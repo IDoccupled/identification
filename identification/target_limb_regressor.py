@@ -41,10 +41,9 @@ class TargetLimbRegressor:
     def __init__(
         self,
         urdf_path: Path = URDF_PATH,
-        group_to_identify = GROUP_TO_IDENTIFY
+        group_to_identify = GROUP_TO_IDENTIFY,
+        print_info=False
     ):
-
-        print(f"\033[93m*\033[0m"*60)
         
         if not urdf_path.is_file():
             raise FileNotFoundError(f"URDF file not found at: {urdf_path}")
@@ -55,7 +54,7 @@ class TargetLimbRegressor:
             )
         
         self.urdf_path = Path(urdf_path).resolve()
-        print(f"\033[91mUsing URDF path: {self.urdf_path}\033[0m")
+        print(f"\033[91mUsing URDF path: {self.urdf_path}\033[0m") if print_info else None
         self.group_to_identify = list(VALID_LIMB_GROUPS[group_to_identify])
 
         self.model = self._model_from_urdf(self.urdf_path)
@@ -69,6 +68,12 @@ class TargetLimbRegressor:
             "v_limit": self.model.velocityLimit[self.group_to_identify],
             "effort_limit": self.model.effortLimit[self.group_to_identify],
         }
+        self.q_upper_limit, self.q_lower_limit, self.v_limit, self.tau_limit = [], [], [], []
+        for idx in self.group_to_identify:
+            self.q_upper_limit.append(self.model.upperPositionLimit[idx])
+            self.q_lower_limit.append(self.model.lowerPositionLimit[idx])
+            self.v_limit.append(self.model.velocityLimit[idx])
+            self.tau_limit.append(self.model.effortLimit[idx])
 
         np.random.seed(int(RNG_SEED))
 
@@ -174,8 +179,6 @@ class TargetLimbRegressor:
                     }
                 )
 
-        target_infos.sort(key=lambda x: x["idx_q"])
-        all_infos.sort(key=lambda x: x["idx_q"])
         return all_infos, target_infos
     
     def state_size_check_and_form(self, q: list, v: list, a: list):
@@ -234,7 +237,7 @@ class TargetLimbRegressor:
             col_end = col_begin + 10
             inertial_blocks.append(Y_target_limb[:, col_begin:col_end])
             Y_target_friction[idx, 2*idx] = v_target_limb[idx]
-            Y_target_friction[idx, 2*idx+1] = np.tanh(v_target_limb[idx]*1e3)
+            Y_target_friction[idx, 2*idx+1] = np.tanh(v_target_limb[idx]*1e2)
             friction_params_from_urdf.extend([
                 self.target_joint_infos[idx]['damping'], 
                 self.target_joint_infos[idx]['friction']
@@ -260,7 +263,7 @@ class TargetLimbRegressor:
             q, v, a = self.sample_state(self.group_to_identify)
         else:
             if print_info:
-                print("\n\033[92mUsing provided state for regressor computation...\033[0m")
+                print("\033[92mUsing provided state for regressor computation...\033[0m")
                 print(f"q: {self._fmt_array_lines(q)}")
                 print(f"v: {self._fmt_array_lines(v)}")
                 print(f"a: {self._fmt_array_lines(a)}")
@@ -283,11 +286,48 @@ class TargetLimbRegressor:
         tau_inertia = pin.rnea(self.model, self.data, q, v, a)[self.group_to_identify]
 
         self.tau_aug = tau_inertia + self.tau_friction
+        
+        q_excess = 0.0
+        v_excess = 0.0
+        tau_excess = 0.0
 
-        return self.Y_aug, self.tau_aug
+        for i, joint_id in enumerate(self.group_to_identify):
+            q_i = q[joint_id]
+            v_i = v[joint_id]
+            tau_i = self.tau_aug[i]
+
+            q_lower = self.model.lowerPositionLimit[joint_id]
+            q_upper = self.model.upperPositionLimit[joint_id]
+            v_limit = self.model.velocityLimit[joint_id]
+            tau_limit = self.model.effortLimit[joint_id]
+            
+            if q_i < q_lower:
+                dq = q_lower - q_i
+                q_excess += dq * dq
+            elif q_i > q_upper:
+                dq = q_i - q_upper
+                q_excess += dq * dq
+                
+            av = v_i if v_i >= 0.0 else -v_i
+            dv = av - v_limit
+            if dv > 0.0:
+                v_excess += dv * dv
+                
+            at = tau_i if tau_i >= 0.0 else -tau_i
+            dt = at - tau_limit
+            if dt > 0.0:
+                tau_excess += dt
+                
+        self.q_excess = q_excess
+        self.v_excess = v_excess
+        self.tau_excess = tau_excess
+
+        return self.Y_aug, self.tau_aug, self.q_excess, self.v_excess, self.tau_excess
 
     def print_joint_info(self, selected_group=True):
         print("\n" + f"\033[92m{f'Target' if selected_group else 'All'} limb joint parameters\033[0m".center(60, "="))
+        printed = self.group_to_identify if selected_group else 'All joints'
+        print(f"Printing joint info for: {printed}\n")
         joint_infos = self.target_joint_infos if selected_group else self.all_joint_infos
         for info in joint_infos:
             print(
@@ -301,29 +341,46 @@ class TargetLimbRegressor:
             print(f"  damping      = {info['damping']:.6g}")
             print(f"  friction     = {info['friction']:.6g}")
 
-    def print_regressor_info(self, select='aug'):
-        if select == 'aug':
-            Y = self.Y_aug
-            title = "Augmented regressor (inertia + friction)"
-        elif select == 'inertia':
-            Y = self.Y_target_inertial
-            title = "Inertia-only regressor"
-        elif select == 'friction':
-            Y = self.Y_target_friction
-            title = "Friction-only regressor"
-        else:
-            raise ValueError(f"Invalid select: {select}. Must be one of ['aug', 'inertia', 'friction']")
+    def print_info(self,
+                   aug = True,
+                   inertial = False,
+                   friction = False,
+                   computed_torques = False,
+                   excess = False
+                   ):
         
-        print("\n" + f"\033[94m{title}\033[0m".center(80, "-"))
-        print(f"Shape: {Y.shape}")
-        for i in range(Y.shape[0]):
-            print(
-                f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
-                f"{self._fmt_array_lines(Y[i, :], per_line=10)} \n"
+        print(f'Selected group to identify: {self.group_to_identify}')
+        
+        print("\n" + f"\033[94mRegressor Infos\033[0m".center(80, "-"))
+        if aug:
+            print(f"\033[93mAugmented regressor (inertia + friction)\033[0m".center(80, " "))
+            print(f"Shape: {self.Y_aug.shape}")
+            for i in range(self.Y_aug.shape[0]):
+                print(
+                    f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
+                    f"{self._fmt_array_lines(self.Y_aug[i, :], per_line=10)} \n"
             )
 
-    def print_tau_info(self):
-        print("\n" + f"\033[95mComputed torques for target limb\033[0m".center(60, "="))
+        if inertial:
+            print(f"\033[93mInertia-only regressor\033[0m".center(80, " "))
+            print(f"Shape: {self.Y_target_inertial.shape}")
+            for i in range(self.Y_target_inertial.shape[0]):
+                print(
+                    f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
+                    f"{self._fmt_array_lines(self.Y_target_inertial[i, :], per_line=10)} \n"
+                )
+
+        if friction:
+            print(f"\033[93mFriction-only regressor\033[0m".center(80, " "))
+            print(f"Shape: {self.Y_target_friction.shape}")
+            for i in range(self.Y_target_friction.shape[0]):
+                print(
+                    f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
+                    f"{self._fmt_array_lines(self.Y_target_friction[i, :], per_line=10)} \n"
+                )
+
+        if computed_torques:
+            print(f"\033[95mComputed torques for target limb\033[0m".center(60, "="))
         for i in range(len(self.group_to_identify)):
             print(
                 f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
@@ -331,6 +388,12 @@ class TargetLimbRegressor:
                 f"  tau_friction = {self.tau_friction[i]:.6g} \n"
                 f"  tau_total    = {self.tau_aug[i]:.6g}"
             )
+
+        if excess:
+            print("\n" + f"\033[92mExcess state/torque beyond limits\033[0m".center(60, "="))
+            print(f"q excess: {self.q_excess:.2g}")
+            print(f"v excess: {self.v_excess:.2g}")
+            print(f"tau excess: {self.tau_excess:.2g}")
 
     
 '''
@@ -356,23 +419,18 @@ GROUP_TO_IDENTIFY = 'left_arm'
 def main():
     regressor = TargetLimbRegressor(
         urdf_path=URDF_PATH,
-        group_to_identify='left_arm'
+        group_to_identify='left_arm',
+        print_info=True
     )
-
-    # regressor.print_joint_info(selected_group=False)
-    # regressor.print_joint_info(selected_group=True)
-
+    
     regressor.compute_regressor(
         q=[-1.6, 1.5, 0.0, 0.0, 0.0],
-        v=[1.0, 1.0, 1.0, 1.0, 1.0],
-        a=[0.0, 0.0, 0.0, 0.0, 0.0],
+        v=[0.5, 0.4, 0.3, 0.2, 0.1],
+        a=[10.0, 8.0, 5.0, 3.0, 1.0],
         print_info=True,
         )
     
-    # regressor.print_regressor_info(select='aug')
-    regressor.print_regressor_info(select='inertia')
-    regressor.print_regressor_info(select='friction')
-    regressor.print_tau_info()
+    regressor.print_info()
 
 
 if __name__ == "__main__":
