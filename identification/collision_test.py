@@ -31,29 +31,29 @@ MESH_DIR = (
 PKG_DIR = Path(get_package_share_directory('identification')).resolve()
 
 class CollisionTest:
-    def _geometry_id(self, collision_model, geometry_name):
-        geom_id = collision_model.getGeometryId(geometry_name)
-        if geom_id < 0 or geom_id >= len(collision_model.geometryObjects):
+    def _geometry_id(self, geometry_name):
+        geom_id = self.collision_model.getGeometryId(geometry_name)
+        if geom_id < 0 or geom_id >= len(self.collision_model.geometryObjects):
             raise ValueError(f"Geometry '{geometry_name}' was not found in collision model")
         return geom_id
-    def _joint_id_idx(self, model, joint_name):
-        joint_id = model.joints[model.getJointId(joint_name)].idx_q
-        if joint_id < 0 or joint_id >= len(model.joints):
+    def _joint_id_idx(self, joint_name):
+        joint_id = self.model.joints[self.model.getJointId(joint_name)].idx_q
+        if joint_id < 0 or joint_id >= len(self.model.joints):
             raise ValueError(f"Joint '{joint_name}' was not found in model")
         return joint_id
 
-    def _add_collision_pairs_by_name(self, collision_model, collision_pairs):
+    def _add_collision_pairs_by_name(self, collision_pairs):
         for first_name, second_name in collision_pairs:
-            collision_model.addCollisionPair(
+            self.collision_model.addCollisionPair(
                 pin.CollisionPair(
-                    self._geometry_id(collision_model, first_name),
-                    self._geometry_id(collision_model, second_name),
+                    self._geometry_id(first_name),
+                    self._geometry_id(second_name),
                 )
             )
-    def _pair_geometry_names(self, collision_model, pair_index):
-        pair = collision_model.collisionPairs[pair_index]
-        first_name = collision_model.geometryObjects[pair.first].name
-        second_name = collision_model.geometryObjects[pair.second].name
+    def _pair_geometry_names(self, pair_index):
+        pair = self.collision_model.collisionPairs[pair_index]
+        first_name = self.collision_model.geometryObjects[pair.first].name
+        second_name = self.collision_model.geometryObjects[pair.second].name
         return first_name, second_name
 
     def __init__(
@@ -109,7 +109,7 @@ class CollisionTest:
         if self.pair_added:
             raise Exception('Add collision pairs only once before any collision computation')
 
-        self._add_collision_pairs_by_name(self.collision_model, collision_pairs)
+        self._add_collision_pairs_by_name(collision_pairs)
         self.pair_added = True
 
         self.collision_data = pin.GeometryData(self.collision_model)
@@ -145,10 +145,10 @@ class CollisionTest:
                 pin.computeCollision(self.collision_model, self.collision_data, k)
                 result = self.collision_data.collisionResults[k]
                 if result.isCollision():
-                    first_name, second_name = self._pair_geometry_names(self.collision_model, k)
+                    first_name, second_name = self._pair_geometry_names(k)
                     print(f"Collision detected for pair {k}: {first_name} <-> {second_name}")
             except Exception as e:
-                first_name, second_name = self._pair_geometry_names(self.collision_model, k)
+                first_name, second_name = self._pair_geometry_names(k)
                 print(
                     "Error occurred while computing collision for pair "
                     f"{k} ({first_name} <-> {second_name}): {e}"
@@ -187,8 +187,11 @@ if __name__ == "__main__":
     ct.add_collision_pairs(collision_pairs)
 
     q = np.zeros(model.nq)
-    q[ct._joint_id_idx(ct.model, "J14_SHOULDER_ROLL_L")] = 0.5
-    q[ct._joint_id_idx(ct.model, "J15_SHOULDER_YAW_L")] = -1.2
-    q[ct._joint_id_idx(ct.model, "J16_ELBOW_PITCH_L")] = -1
+    # q[ct._joint_id_idx(ct.model, "J14_SHOULDER_ROLL_L")] = 0.5
+    # q[ct._joint_id_idx(ct.model, "J15_SHOULDER_YAW_L")] = -1.2
+    # q[ct._joint_id_idx(ct.model, "J16_ELBOW_PITCH_L")] = -1
+    q[14] = 0.5
+    q[15] = -1.2
+    q[16] = -1
 
     ct.check_collisions(q, visualize=True)
