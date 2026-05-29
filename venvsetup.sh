@@ -1,11 +1,13 @@
 #!/bin/bash
 
-mkdir -p ~/venv/venv_indentification
+mkdir -p ~/venv/venv_identification
 
-python3 -m venv ~/venv/venv_indentification --system-site-packages --symlinks
+python3 -m venv ~/venv/venv_identification --system-site-packages --symlinks
 
-source ~/venv/venv_indentification/bin/activate
+source ~/venv/venv_identification/bin/activate
 
-python3 -m pip install -r requirements.txt
+script_dir="$(cd "$(dirname "$0")" && pwd)"
 
-echo "venv_indentification install done. Do <source ~/venv/venv_indentification/bin/activate>"
+python3 -m pip install -r "$script_dir/requirements.txt"
+
+echo "venv_identification install done. Do <source ~/venv/venv_identification/bin/activate>"
