@@ -54,13 +54,14 @@ class TargetLimbRegressor:
             )
         
         self.urdf_path = Path(urdf_path).resolve()
-        print(f"\033[91mUsing URDF path: {self.urdf_path}\033[0m") if print_info else None
+        print(f"\033[93mUsing URDF path: {self.urdf_path}\033[0m") if print_info else None
         self.group_to_identify = list(VALID_LIMB_GROUPS[group_to_identify])
 
         self.model = self._model_from_urdf(self.urdf_path)
         self.data = self.model.createData()
         self.urdf_dynamics = self._load_urdf_joint_dynamics(self.urdf_path)
         self.all_joint_infos, self.target_joint_infos = self.collect_target_limb_info()
+        self.dof = len(self.group_to_identify)
 
         self.limits = {
             "q_lower": self.model.lowerPositionLimit[self.group_to_identify],
@@ -181,7 +182,7 @@ class TargetLimbRegressor:
 
         return all_infos, target_infos
     
-    def state_size_check_and_form(self, q: list, v: list, a: list):
+    def state_size_check_and_form(self, q: list | np.ndarray, v: list | np.ndarray, a: list | np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         n = len(self.group_to_identify)
         if len(q) != n:
             raise ValueError(f"Expected q of length {n}, got {len(q)}")
@@ -252,10 +253,10 @@ class TargetLimbRegressor:
         return Y_aug, Y_target_inertial, Y_target_friction, tau_friction
 
     def compute_regressor(self, 
-                          q:list=None, 
-                          v:list=None, 
-                          a:list=None, 
-                          print_info=False
+                          q: list | np.ndarray | None = None, 
+                          v: list | np.ndarray | None = None, 
+                          a: list | np.ndarray | None = None, 
+                          print_info: bool = False
                           ):
 
         if q is None or v is None or a is None:
@@ -423,7 +424,7 @@ def main():
         print_info=True
     )
     
-    regressor.compute_regressor(
+    Y_aug, tau_aug, q_excess, v_excess, tau_excess = regressor.compute_regressor(
         q=[-1.6, 1.5, 0.0, 0.0, 0.0],
         v=[0.5, 0.4, 0.3, 0.2, 0.1],
         a=[10.0, 8.0, 5.0, 3.0, 1.0],
