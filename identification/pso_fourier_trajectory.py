@@ -96,7 +96,8 @@ class PSOFourierTrajectory:
         self.t_array     = np.linspace(0, TRAJ_PERIOD, int(TRAJ_PERIOD * SAMPLE_RATE), endpoint=False)
         self.n_harmonics = N_HARMONICS
 
-        self._build_coeff_bounds()
+        self.lb, self.ub = self._build_coeff_bounds()
+        self._reset_iter_log_state()
         self.plot_trajectory = plot_trajectory
         np.random.seed(RNG_SEED)
 
@@ -108,8 +109,40 @@ class PSOFourierTrajectory:
             ub[i * (self.n_harmonics * 2 + 2) : (i + 1) * (self.n_harmonics * 2 + 2) - 1] *= self.q_upper[i] - Q_LIMIT_BUFFER
             lb[(i + 1) * (self.n_harmonics * 2 + 2) - 1] = -TRAJ_PERIOD
             ub[(i + 1) * (self.n_harmonics * 2 + 2) - 1] = TRAJ_PERIOD
-        self.lb, self.ub = lb, ub
-        return
+        return lb, ub
+
+    def _reset_iter_log_state(self):
+        self._iter_eval_counter = 0
+        self._iter_best_objective = np.inf
+        self._iter_best_info = np.nan
+        self._iter_best_info_eff = np.nan
+        self._iter_best_penalty = np.nan
+        self._iter_best_weighted_penalty = np.nan
+        self._iter_best_max_violation = np.nan
+        self._iter_best_rank = -1
+        self._iter_best_sval_count = 0
+        self._iter_best_sigma_r = np.nan
+        self._iter_best_kappa_eff = np.nan
+        self._iter_best_q_over_max = np.nan
+        self._iter_best_v_over_max = np.nan
+        self._iter_best_tau_over_max = np.nan
+
+    def _effective_identifiability_metrics(self, svals):
+        sigma_max = float(svals[0])
+        rank_tol = max(RANK_ABS_TOL, RANK_REL_TOL * sigma_max)
+        rank = int(np.sum(svals > rank_tol))
+        if rank > 0:
+            sigma_r = float(svals[rank - 1])
+            kappa_eff = np.inf if sigma_r <= 1e-12 else sigma_max / sigma_r
+            info_eff = float(np.sum(np.log(svals[:rank] ** 2 + REG_EPS)))
+        else:
+            sigma_r = 0.0
+            kappa_eff = np.inf
+            info_eff = float("-inf")
+        return rank, sigma_r, kappa_eff, info_eff
+    
+    def _compute_cost(self, Y_aug, q_excess_normalized, v_excess_normalized, tau_excess_normalized) -> float:
+        pass
 
     def generate_trajectory(self, coeffs: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -151,7 +184,23 @@ class PSOFourierTrajectory:
             )
         return q_traj, v_traj, a_traj
     
-if __name__ == "__main__":
+    def fitness_function(self, coeffs: np.ndarray) -> float:
+        q_traj, v_traj, a_traj = self.generate_trajectory(coeffs)
+        total_cost = 0.0
+        for t in range(len(self.t_array)):
+            (Y_aug, tau_aug, 
+             q_excess, v_excess, tau_excess, 
+             q_excess_normalized, v_excess_normalized, tau_excess_normalized) = self.regressor.compute_regressor(
+                q=q_traj[:, t],
+                v=v_traj[:, t],
+                a=a_traj[:, t],
+                print_info=False
+            )
+            cost = self._compute_cost(Y_aug, q_excess_normalized, v_excess_normalized, tau_excess_normalized)
+            total_cost += cost
+        return total_cost / len(self.t_array)
+    
+def main():
     regressor = TargetLimbRegressor(
         urdf_path=URDF_PATH,
         group_to_identify=GROUP_TO_IDENTIFY,
@@ -169,3 +218,6 @@ if __name__ == "__main__":
         plt.title(f"Joint {i}")
     plt.tight_layout()
     plt.show()
+    
+if __name__ == "__main__":
+    main()
