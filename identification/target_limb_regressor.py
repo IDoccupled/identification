@@ -308,22 +308,39 @@ class TargetLimbRegressor:
             elif q_i > q_upper:
                 dq = q_i - q_upper
                 q_excess += dq * dq
+            if q_upper > q_lower: 
+                q_excess_normalized = q_excess / (q_upper - q_lower) 
+            else: 
+                raise ValueError(f"Invalid position limits for joint {joint_id}: q_lower={q_lower}, q_upper={q_upper}")
                 
             av = v_i if v_i >= 0.0 else -v_i
             dv = av - v_limit
             if dv > 0.0:
                 v_excess += dv * dv
-                
+            if v_limit > 0:
+                v_excess_normalized = v_excess / v_limit
+            else:
+                raise ValueError(f"Invalid velocity limit for joint {joint_id}: v_limit={v_limit}")
+
             at = tau_i if tau_i >= 0.0 else -tau_i
             dt = at - tau_limit
             if dt > 0.0:
                 tau_excess += dt
-                
+            if tau_limit > 0:
+                tau_excess_normalized = tau_excess / tau_limit
+            else:
+                raise ValueError(f"Invalid torque limit for joint {joint_id}: tau_limit={tau_limit}")
+
         self.q_excess = q_excess
         self.v_excess = v_excess
         self.tau_excess = tau_excess
+        self.q_excess_normalized = q_excess_normalized
+        self.v_excess_normalized = v_excess_normalized
+        self.tau_excess_normalized = tau_excess_normalized
 
-        return self.Y_aug, self.tau_aug, self.q_excess, self.v_excess, self.tau_excess
+        return (self.Y_aug, self.tau_aug, 
+                self.q_excess, self.v_excess, self.tau_excess, 
+                self.q_excess_normalized, self.v_excess_normalized, self.tau_excess_normalized)
 
     def print_joint_info(self, selected_group=True):
         print("\n" + f"\033[92m{f'Target' if selected_group else 'All'} limb joint parameters\033[0m".center(60, "="))
@@ -424,14 +441,19 @@ def main():
         print_info=True
     )
     
-    Y_aug, tau_aug, q_excess, v_excess, tau_excess = regressor.compute_regressor(
+    (Y_aug, tau_aug, 
+     q_excess, v_excess, tau_excess, 
+     q_excess_normalized, v_excess_normalized, tau_excess_normalized) = regressor.compute_regressor(
         q=[-1.6, 1.5, 0.0, 0.0, 0.0],
         v=[0.5, 0.4, 0.3, 0.2, 0.1],
         a=[10.0, 8.0, 5.0, 3.0, 1.0],
         print_info=True,
         )
-    
     regressor.print_info()
+    print("\n" + f"\033[92mRegressor computation complete.\033[0m".center(60, "="))
+    print(f"q_excess: {q_excess}, v_excess: {v_excess}, tau_excess: {tau_excess}")
+    print(f"q_excess_normalized: {q_excess_normalized}, v_excess_normalized: {v_excess_normalized}, tau_excess_normalized: {tau_excess_normalized}")
+    print(Y_aug)
 
 
 if __name__ == "__main__":
