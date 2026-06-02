@@ -162,7 +162,7 @@ class CollisionTest:
             while True:
                 viz.display(q)
 
-if __name__ == "__main__":
+def main():
 
     model = pin.buildModelFromUrdf(str(URDF_PATH))
     
@@ -195,3 +195,6 @@ if __name__ == "__main__":
     q[16] = -1
 
     ct.check_collisions(q, visualize=True)
+
+if __name__ == "__main__":
+    main()
