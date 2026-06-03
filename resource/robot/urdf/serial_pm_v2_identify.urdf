@@ -493,7 +493,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_SHOULDER_PITCH_L"/>
         <axis xyz="0 0.99803 0.062791"/>
         <limit lower="-2.9671" upper="2.7925" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics damping="0.07" friction="0.29"/>
     </joint>
     <link name="LINK_SHOULDER_ROLL_L">
         <inertial>

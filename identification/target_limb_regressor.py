@@ -78,6 +78,18 @@ class TargetLimbRegressor:
 
         np.random.seed(int(RNG_SEED))
 
+        # Print all joints and links info from model:
+        if False:
+            print(f"\n\033[92mModel joints and links info:\033[0m")
+            for i in range(self.model.njoints):
+                joint = self.model.joints[i]
+                inertia = self.model.inertias[i]
+                print(
+                    f"joint_id = {i} name = {self.model.names[i]} "
+                    f"idx_q = {joint.idx_q} nq = {joint.nq} "
+                    f"idx_v = {joint.idx_v} nv = {joint.nv} "
+                    f"inertia = {inertia.toDynamicParameters()}"
+                )
     @staticmethod
     def _fmt_array(arr: np.ndarray) -> str:
         arr = np.asarray(arr, dtype=float).reshape(-1)
@@ -244,13 +256,21 @@ class TargetLimbRegressor:
                 self.target_joint_infos[idx]['friction']
             ])
 
-        tau_friction = Y_target_friction @ np.hstack(friction_params_from_urdf)
+        pi_inertia = np.hstack([self.model.inertias[joint_id+1].toDynamicParameters() for joint_id in self.group_to_identify])
+        # +1 because universal joint took joint_id = 0
+        pi_friction = np.hstack(friction_params_from_urdf)
+        pi_aug = np.hstack([pi_inertia, pi_friction])
 
-        Y_target_inertial = np.hstack(inertial_blocks)
-        
-        Y_aug = np.hstack([Y_target_inertial, Y_target_friction])
+        Y_target_inertial = np.hstack(inertial_blocks)        
+        Y_aug = np.hstack([Y_target_inertial, Y_target_friction])  
 
-        return Y_aug, Y_target_inertial, Y_target_friction, tau_friction
+        tau_inertia = Y_target_inertial @ pi_inertia
+        tau_friction = Y_target_friction @ pi_friction
+        tau_aug = tau_inertia + tau_friction
+
+        return (Y_aug, Y_target_inertial, Y_target_friction, 
+                tau_aug, tau_inertia, tau_friction, 
+                pi_inertia, pi_friction, pi_aug)
 
     def compute_regressor(self, 
                           q: list | np.ndarray | None = None, 
@@ -278,15 +298,16 @@ class TargetLimbRegressor:
             self.Y_aug,
             self.Y_target_inertial,
             self.Y_target_friction,
-            self.tau_friction
+            self.tau_aug,
+            self.tau_inertia,
+            self.tau_friction,
+            self.pi_inertia,
+            self.pi_friction,
+            self.pi_aug
         ) = self.build_augmented_target_regressor(
             Y_target_limb=Y_target_limb,
             v_target_limb=v_target_limb,
         )
-
-        tau_inertia = pin.rnea(self.model, self.data, q, v, a)[self.group_to_identify]
-
-        self.tau_aug = tau_inertia + self.tau_friction
         
         q_excess = 0.0
         v_excess = 0.0
@@ -339,8 +360,10 @@ class TargetLimbRegressor:
         self.tau_excess_normalized = tau_excess_normalized
 
         return (self.Y_aug, self.tau_aug, 
+                self.pi_aug, self.pi_inertia, self.pi_friction,
                 self.q_excess, self.v_excess, self.tau_excess, 
-                self.q_excess_normalized, self.v_excess_normalized, self.tau_excess_normalized)
+                self.q_excess_normalized, self.v_excess_normalized, self.tau_excess_normalized
+                )
 
     def print_joint_info(self, selected_group=True):
         print("\n" + f"\033[92m{f'Target' if selected_group else 'All'} limb joint parameters\033[0m".center(60, "="))
@@ -442,8 +465,10 @@ def main():
     )
     
     (Y_aug, tau_aug, 
+     pi_aug, pi_inertia, pi_friction,
      q_excess, v_excess, tau_excess, 
-     q_excess_normalized, v_excess_normalized, tau_excess_normalized) = regressor.compute_regressor(
+     q_excess_normalized, v_excess_normalized, tau_excess_normalized
+     ) = regressor.compute_regressor(
         q=[-1.6, 1.5, 0.0, 0.0, 0.0],
         v=[0.5, 0.4, 0.3, 0.2, 0.1],
         a=[10.0, 8.0, 5.0, 3.0, 1.0],
@@ -453,7 +478,6 @@ def main():
     print("\n" + f"\033[92mRegressor computation complete.\033[0m".center(60, "="))
     print(f"q_excess: {q_excess}, v_excess: {v_excess}, tau_excess: {tau_excess}")
     print(f"q_excess_normalized: {q_excess_normalized}, v_excess_normalized: {v_excess_normalized}, tau_excess_normalized: {tau_excess_normalized}")
-    print(Y_aug)
 
 
 if __name__ == "__main__":
