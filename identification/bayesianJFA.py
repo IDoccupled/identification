@@ -35,7 +35,7 @@ class BayesianJFA:
         psi_x = np.ones(d) * 0.1                # noise var for x
         Wz = np.random.randn(d) * 0.1           # wz (d,)
         Wx = np.random.randn(d) * 0.1           # wx (d,)
-        alpha = np.ones(d) * 10.0               # precision
+        alpha = np.ones(d) * 1.0               # precision
 
         # Hyperparameters for Gamma prior
         a_alpha = np.ones(d) * self.a_alpha0
