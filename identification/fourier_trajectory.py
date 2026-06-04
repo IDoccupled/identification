@@ -74,7 +74,7 @@ PSO_C2   = 1.5
 RNG_SEED = 114
 
 
-class PSOFourierTrajectory:
+class FourierTrajectory:
     def __init__(
             self,
             regressor: TargetLimbRegressor = TargetLimbRegressor(
@@ -144,7 +144,7 @@ class PSOFourierTrajectory:
     def _compute_cost(self, Y_aug, q_excess_normalized, v_excess_normalized, tau_excess_normalized) -> float:
         pass
 
-    def generate_trajectory(self, coeffs: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def generate_trajectory(self, coeffs: np.ndarray):
         """
         Generate joint trajectories (q, v, a) from Fourier coefficients.
 
@@ -205,9 +205,10 @@ def main():
         urdf_path=URDF_PATH,
         group_to_identify=GROUP_TO_IDENTIFY,
     )
-    traj, _, _ = PSOFourierTrajectory(regressor=regressor).generate_trajectory(
+    traj, _, _ = FourierTrajectory(regressor=regressor).generate_trajectory(
         coeffs=np.random.uniform(-0.5, 0.5, size=(regressor.dof * (N_HARMONICS * 2 + 2)))
     )
+    print("生成的轨迹形状:", traj.shape)
 
     import matplotlib.pyplot as plt
 
