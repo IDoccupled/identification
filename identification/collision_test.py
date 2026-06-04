@@ -58,10 +58,10 @@ class CollisionTest:
 
     def __init__(
             self, 
+            model: pin.Model = None,
             urdf_path: Path = URDF_PATH,
             pkg_dir: Path = PKG_DIR,
-            model: pin.Model = None,
-            visualize: bool = False
+            performance:bool=True
             ):
         
         if not urdf_path.is_file():
@@ -91,7 +91,8 @@ class CollisionTest:
         for geom in self.collision_model.geometryObjects:
             print(f"  - {geom.name}, parentJoint: {geom.parentJoint}, parentFrame: {geom.parentFrame}")
 
-        if visualize:
+        self.performance = performance
+        if not self.performance:
             print(f'\033[92mBuilding visual model...\033[0m')
             self.visual_model = pin.buildGeomFromUrdf(
                 self.model,
@@ -114,23 +115,20 @@ class CollisionTest:
 
         self.collision_data = pin.GeometryData(self.collision_model)
 
-    def check_collisions(self, q: np.ndarray, visualize: bool = False):
+    def check_collisions(self, q: np.ndarray, 
+                         printinfo:bool=False):
 
         if not self.pair_added:
             raise Exception('Add collision pairs before checking collisions')
-        
-        print(f'\033[92mCollision computation at configuration:\033[0m')
-        print(q)
+
+        if printinfo:
+            print(f'\033[92mCollision computation at configuration:\033[0m')
+            print(q)
+
+        collided = False
 
         pin.forwardKinematics(self.model, self.data, q)
         pin.updateFramePlacements(self.model, self.data)
-
-        if visualize:
-            pin.updateGeometryPlacements(self.model, 
-                                         self.data,
-                                         self.visual_model, 
-                                         self.visual_data,
-                                         q)
         
         pin.updateGeometryPlacements(self.model, 
                                      self.data,
@@ -139,28 +137,38 @@ class CollisionTest:
                                      q)
         start_time = time.time()
         
-        print('\n\033[92mComputing collisions...\033[0m')
+        if printinfo:
+            print('\n\033[92mComputing collisions...\033[0m')
         for k in range(len(self.collision_model.collisionPairs)):
             try:
                 pin.computeCollision(self.collision_model, self.collision_data, k)
                 result = self.collision_data.collisionResults[k]
                 if result.isCollision():
                     first_name, second_name = self._pair_geometry_names(k)
-                    print(f"Collision detected for pair {k}: {first_name} <-> {second_name}")
+                    print(f"Collision detected for pair {k}: {first_name} <-> {second_name}") if printinfo else None
+                    collided = True
+
+                    if self.performance:
+                        return collided
+                
             except Exception as e:
                 first_name, second_name = self._pair_geometry_names(k)
-                print(
-                    "Error occurred while computing collision for pair "
-                    f"{k} ({first_name} <-> {second_name}): {e}"
-                )
-        print(f"Time taken: {(time.time() - start_time) * 1000:.2f} ms")
+                raise RuntimeError(f"Error computing collision for pair {k} ({first_name} <-> {second_name}): {e}")
+        print(f"Time taken: {(time.time() - start_time) * 1000:.2f} ms") if printinfo else None
 
-        if visualize:
+        if printinfo:
+            pin.updateGeometryPlacements(self.model, 
+                                         self.data,
+                                         self.visual_model, 
+                                         self.visual_data,
+                                         q)
             viz = MeshcatVisualizer(self.model, self.collision_model, self.visual_model) 
             viz.initViewer()        
             viz.loadViewerModel()        
             while True:
                 viz.display(q)
+
+        return collided
 
 def main():
 
@@ -170,7 +178,7 @@ def main():
         model=model,
         urdf_path=URDF_PATH,
         pkg_dir=PKG_DIR,
-        visualize=True
+        performance=False
     )
 
     collision_pairs = [
@@ -194,7 +202,7 @@ def main():
     q[15] = -1.2
     q[16] = -1
 
-    ct.check_collisions(q, visualize=True)
+    ct.check_collisions(q, printinfo=True)
 
 if __name__ == "__main__":
     main()
