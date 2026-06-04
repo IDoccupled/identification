@@ -8,6 +8,8 @@ import pinocchio as pin
 
 from ament_index_python.packages import get_package_share_directory
 
+from identification.collision_test import CollisionTest
+
 LEFT_LEG_Q_INDICES  = [0, 1, 2, 3, 4, 5]
 RIGHT_LEG_Q_INDICES = [6, 7, 8, 9, 10, 11]
 WAIST_Q_INDICES     = [12]
@@ -26,6 +28,17 @@ VALID_LIMB_GROUPS = {
 
 GROUP_TO_IDENTIFY = 'left_arm' 
 
+COLLISION_PAIRS = [
+    ("LINK_ELBOW_YAW_L_0", "LINK_BASE_0"),
+    ("LINK_ELBOW_YAW_L_0", "LINK_TORSO_YAW_0"),
+    ("LINK_ELBOW_YAW_L_0", "LINK_HEAD_YAW_0"),
+    ("LINK_ELBOW_YAW_L_0", "LINK_HIP_PITCH_L_0"),
+    ("LINK_ELBOW_YAW_L_0", "LINK_HIP_ROLL_L_0"),
+    ("LINK_ELBOW_YAW_L_0", "LINK_HIP_YAW_L_0"),
+    ("LINK_ELBOW_PITCH_L_0", "LINK_TORSO_YAW_0"),
+    ("LINK_SHOULDER_YAW_L_0", "LINK_TORSO_YAW_0"),
+]
+
 URDF_PATH = (
     Path(get_package_share_directory('identification'))
     / "resource"
@@ -33,6 +46,7 @@ URDF_PATH = (
     / "urdf"
     / "serial_pm_v2_identify.urdf"
 ).resolve()
+PKG_DIR = Path(get_package_share_directory('identification')).resolve()
 
 RNG_SEED = 114
 
@@ -53,13 +67,13 @@ class TargetLimbRegressor:
                 f"Must be one of: {list(VALID_LIMB_GROUPS.keys())}"
             )
         
-        self.urdf_path = Path(urdf_path).resolve()
-        print(f"\033[93mUsing URDF path: {self.urdf_path}\033[0m") if print_info else None
+        urdf_path = Path(urdf_path).resolve()
+        print(f"\033[93mUsing URDF path: {urdf_path}\033[0m") if print_info else None
         self.group_to_identify = list(VALID_LIMB_GROUPS[group_to_identify])
 
-        self.model = self._model_from_urdf(self.urdf_path)
+        self.model = self._model_from_urdf(urdf_path)
         self.data = self.model.createData()
-        self.urdf_dynamics = self._load_urdf_joint_dynamics(self.urdf_path)
+        self.urdf_dynamics = self._load_urdf_joint_dynamics(urdf_path)
         self.all_joint_infos, self.target_joint_infos = self.collect_target_limb_info()
         self.dof = len(self.group_to_identify)
 
@@ -78,18 +92,14 @@ class TargetLimbRegressor:
 
         np.random.seed(int(RNG_SEED))
 
-        # Print all joints and links info from model:
-        if False:
-            print(f"\n\033[92mModel joints and links info:\033[0m")
-            for i in range(self.model.njoints):
-                joint = self.model.joints[i]
-                inertia = self.model.inertias[i]
-                print(
-                    f"joint_id = {i} name = {self.model.names[i]} "
-                    f"idx_q = {joint.idx_q} nq = {joint.nq} "
-                    f"idx_v = {joint.idx_v} nv = {joint.nv} "
-                    f"inertia = {inertia.toDynamicParameters()}"
-                )
+        self.ct = CollisionTest(
+            model=self.model,
+            urdf_path=URDF_PATH,
+            pkg_dir=PKG_DIR,
+            performance=True
+        )
+        self.ct.add_collision_pairs(COLLISION_PAIRS)
+        
     @staticmethod
     def _fmt_array(arr: np.ndarray) -> str:
         arr = np.asarray(arr, dtype=float).reshape(-1)
@@ -359,10 +369,13 @@ class TargetLimbRegressor:
         self.v_excess_normalized = v_excess_normalized
         self.tau_excess_normalized = tau_excess_normalized
 
+        self.collided = self.ct.check_collisions(q)
+
         return (self.Y_aug, self.tau_aug, 
                 self.pi_aug, self.pi_inertia, self.pi_friction,
                 self.q_excess, self.v_excess, self.tau_excess, 
-                self.q_excess_normalized, self.v_excess_normalized, self.tau_excess_normalized
+                self.q_excess_normalized, self.v_excess_normalized, self.tau_excess_normalized,
+                self.collided
                 )
 
     def print_joint_info(self, selected_group=True):
@@ -390,11 +403,16 @@ class TargetLimbRegressor:
                    excess = False
                    ):
         
+        print("\n" + f"\033[92mRegressor and state info for target limb\033[0m".center(80, "="))
         print(f'Selected group to identify: {self.group_to_identify}')
+        if self.collided:
+            print(f"\033[91mCollision detected for the given state!\033[0m")
+        else:
+            print(f"\033[92mNo collision detected for the given state.\033[0m")
         
-        print("\n" + f"\033[94mRegressor Infos\033[0m".center(80, "-"))
+        print(f"\033[94mRegressor Infos\033[0m".center(80, "="))
         if aug:
-            print(f"\033[93mAugmented regressor (inertia + friction)\033[0m".center(80, " "))
+            print(f"\033[93mAugmented regressor (inertia + friction)\033[0m".center(80, "-"))
             print(f"Shape: {self.Y_aug.shape}")
             for i in range(self.Y_aug.shape[0]):
                 print(
@@ -403,7 +421,7 @@ class TargetLimbRegressor:
             )
 
         if inertial:
-            print(f"\033[93mInertia-only regressor\033[0m".center(80, " "))
+            print(f"\033[93mInertia-only regressor\033[0m".center(80, "-"))
             print(f"Shape: {self.Y_target_inertial.shape}")
             for i in range(self.Y_target_inertial.shape[0]):
                 print(
@@ -412,7 +430,7 @@ class TargetLimbRegressor:
                 )
 
         if friction:
-            print(f"\033[93mFriction-only regressor\033[0m".center(80, " "))
+            print(f"\033[93mFriction-only regressor\033[0m".center(80, "-"))
             print(f"Shape: {self.Y_target_friction.shape}")
             for i in range(self.Y_target_friction.shape[0]):
                 print(
@@ -421,7 +439,8 @@ class TargetLimbRegressor:
                 )
 
         if computed_torques:
-            print(f"\033[95mComputed torques for target limb\033[0m".center(60, "="))
+            print(f"\033[95mComputed torques for target limb\033[0m".center(80, "*"))
+            print(f"Torques:{self._fmt_array(self.tau_aug)}")
         for i in range(len(self.group_to_identify)):
             print(
                 f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
@@ -431,7 +450,7 @@ class TargetLimbRegressor:
             )
 
         if excess:
-            print("\n" + f"\033[92mExcess state/torque beyond limits\033[0m".center(60, "="))
+            print("\n" + f"\033[92mExcess state/torque beyond limits\033[0m".center(80, "*"))
             print(f"q excess: {self.q_excess:.2g}")
             print(f"v excess: {self.v_excess:.2g}")
             print(f"tau excess: {self.tau_excess:.2g}")
@@ -467,18 +486,15 @@ def main():
     (Y_aug, tau_aug, 
      pi_aug, pi_inertia, pi_friction,
      q_excess, v_excess, tau_excess, 
-     q_excess_normalized, v_excess_normalized, tau_excess_normalized
+     q_excess_normalized, v_excess_normalized, tau_excess_normalized,
+     collided
      ) = regressor.compute_regressor(
         q=[-1.6, 1.5, 0.0, 0.0, 0.0],
         v=[0.5, 0.4, 0.3, 0.2, 0.1],
         a=[10.0, 8.0, 5.0, 3.0, 1.0],
         print_info=True,
         )
-    regressor.print_info()
-    print("\n" + f"\033[92mRegressor computation complete.\033[0m".center(60, "="))
-    print(f"q_excess: {q_excess}, v_excess: {v_excess}, tau_excess: {tau_excess}")
-    print(f"q_excess_normalized: {q_excess_normalized}, v_excess_normalized: {v_excess_normalized}, tau_excess_normalized: {tau_excess_normalized}")
-
+    regressor.print_info(computed_torques=True, excess=True)
 
 if __name__ == "__main__":
     main()
