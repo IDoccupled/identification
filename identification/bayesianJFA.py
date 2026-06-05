@@ -1,189 +1,178 @@
 import numpy as np
-from scipy.linalg import inv
+
+def format_array(value):
+    return np.array2string(np.asarray(value), precision=3, separator=', ', max_line_width=10**9)
 
 class BayesianJFA:
-    """
-    Bayesian Joint Factor Analysis for noisy input/output regression.
-    Implements the EM algorithm described in Ting et al. (2006).
-    Assumes a single output variable y.
-    """
-
-    def __init__(self, d, max_iter=100, tol=1e-4, a_alpha0=1e-6, b_alpha0=1e-6):
+    def __init__(self, d, max_iter=100000, tol=1e-4):
         """
-        d: number of input dimensions (features)
-        max_iter: maximum EM iterations
-        tol: tolerance for log-likelihood change
-        a_alpha0, b_alpha0: Gamma prior hyperparameters for alpha_m
+        d: 输入 X 的维度（即动力学方程中回归向量的特征数）
         """
         self.d = d
         self.max_iter = max_iter
-        self.tol = tol
-        self.a_alpha0 = a_alpha0
-        self.b_alpha0 = b_alpha0
+        self.tol = tol              
+        
+        # 初始化噪声方差 (Variances of noise)
+        self.psi_x = np.ones(d) * 0.4
+        self.psi_z = np.ones(d) * 0.4
+        self.psi_y = 0.2
+        
+        # 初始化贝叶斯精度超参数 alpha (用于维度自动筛选)
+        self.alpha = np.ones(d) * 1.0
 
-    def fit(self, X, y):
-        """
-        X: (N, d) noisy input matrix
-        y: (N, 1) noisy output vector
-        """
+    def fit(self, X, Y, 
+            w_x_init=None, 
+            w_z_init=None):
+        
         N, d = X.shape
-        assert d == self.d
+        o = np.column_stack((X, Y)) # 联合观测矩阵 [X, Y], 形状为 (N, d+1)
 
-        # ----- 1. Initialization -----
-        psi_y = np.var(y) * 0.5                 # output noise variance
-        psi_z = np.ones(d) * 0.1                # noise var for z
-        psi_x = np.ones(d) * 0.1                # noise var for x
-        Wz = np.random.randn(d) * 0.1           # wz (d,)
-        Wx = np.random.randn(d) * 0.1           # wx (d,)
-        alpha = np.ones(d) * 1.0               # precision
-
-        # Hyperparameters for Gamma prior
-        a_alpha = np.ones(d) * self.a_alpha0
-        b_alpha = np.ones(d) * self.b_alpha0
-
-        # Storage for lower bound (optional)
-        self.elbo_ = []
-
-        for iteration in range(self.max_iter):
-            # ----- 2. E-step: compute posterior statistics of Z and T -----
-            # Build diagonal matrices
-            Psi_z = np.diag(psi_z)
-            Psi_x = np.diag(psi_x)
-            Wx_diag = np.diag(Wx)
-            Wz_diag = np.diag(Wz)
-
-            # K matrix: I + Wx^T Psi_x^{-1} Wx + Wz^T Psi_z^{-1} Wz
-            K = np.eye(d) + Wx_diag @ inv(Psi_x) @ Wx_diag + Wz_diag @ inv(Psi_z) @ Wz_diag
-
-            # M matrix: Psi_z + Wz (I + ... )^{-1} Wz^T
-            # Actually according to paper: M = Psi_z + Wz * K^{-1} * Wz^T
-            # But careful: Wz is diagonal, so M is diagonal
-            M_inv = inv(Psi_z + Wz_diag @ inv(K) @ Wz_diag)
-            # But easier: compute Sigma_zz directly from paper Eq.(1)
-            # Sigma_zz = M - (M 1 1^T M) / (psi_y + 1^T M 1)
-            M = Psi_z + Wz_diag @ inv(K) @ Wz_diag
-            one = np.ones(d)
-            denom = psi_y + one @ M @ one
-            Sigma_zz = M - np.outer(M @ one, M @ one) / denom
-
-            # Sigma_zt = - Sigma_zz * Wz * inv(Psi_z) * inv(K)
-            Sigma_zt = - Sigma_zz @ Wz_diag @ inv(Psi_z) @ inv(K)
-
-            # Sigma_tt = inv(K) + inv(K) Wz^T inv(Psi_z) Sigma_zz inv(Psi_z) Wz inv(K)
-            tmp = inv(K) @ Wz_diag @ inv(Psi_z)
-            Sigma_tt = inv(K) + tmp @ Sigma_zz @ tmp.T
-
-            # E-step expectations for each sample
-            z_mean = np.zeros((N, d))
-            t_mean = np.zeros((N, d))
-            zz = np.zeros((N, d))   # diag of <z_i z_i^T>
-            tt = np.zeros((N, d))
-            zt = np.zeros((N, d))
-
-            for i in range(N):
-                xi = X[i]
-                yi = y[i]
-
-                # <z_i> = (yi/psi_y) * 1^T Sigma_zz + xi^T Wx^T inv(Psi_x) Sigma_tz
-                # where Sigma_tz = Sigma_zt^T
-                term1 = (yi / psi_y) * (one @ Sigma_zz)
-                term2 = xi @ Wx_diag @ inv(Psi_x) @ Sigma_zt.T
-                z_mean[i] = term1 + term2
-
-                # <t_i> = (yi/psi_y) * 1^T Sigma_zz Wz^T inv(Psi_z) inv(K) + xi^T Wx^T inv(Psi_x) Sigma_tt
-                term1_t = (yi / psi_y) * (one @ Sigma_zz @ Wz_diag @ inv(Psi_z) @ inv(K))
-                term2_t = xi @ Wx_diag @ inv(Psi_x) @ Sigma_tt
-                t_mean[i] = term1_t + term2_t
-
-                # variances (diagonal only, for simplicity)
-                zz[i] = np.diag(Sigma_zz) + z_mean[i]**2
-                tt[i] = np.diag(Sigma_tt) + t_mean[i]**2
-                zt[i] = np.diag(Sigma_zt) + z_mean[i] * t_mean[i]
-
-            # ----- 3. M-step: update parameters -----
-            # Update psi_y
-            resid_y = y**2 - 2*y*(z_mean @ one) + (zz @ one)
-            psi_y = np.mean(resid_y)
-
-            # Update psi_z
-            wz2 = Wz**2
-            psi_z = np.mean(zz - 2*Wz*zt + wz2*tt, axis=0)
-
-            # Update psi_x
-            wx2 = Wx**2
-            psi_x = np.mean(X**2 - 2*X*t_mean + wx2*tt, axis=0)
-
-            # Update Wz (posterior mean)
+        self.w_x = np.ones(d) if w_x_init is None else w_x_init
+        self.w_z = np.ones(d) if w_z_init is None else w_z_init
+        
+        for it in range(self.max_iter):
+            # =========================================================
+            # 一、 E步 (Expectation Step): 利用当前参数推导隐变量的后验分布
+            # =========================================================
+            # 论文中隐变量组合向量 h = [t^T, z^T]^T, 维度为 2d
+            # 观测变量组合向量 o_i = [x_i^T, y_i]^T, 维度为 d+1
+            
+            # 1. 构造观测变量的联合共现协方差矩阵 Sigma_oo (维度: (d+1) x (d+1))
+            Sigma_oo = np.zeros((d + 1, d + 1))
+            Sigma_oo[0:d, 0:d] = np.diag(self.w_x**2 + self.psi_x)
+            cross_term = self.w_x * self.w_z
+            Sigma_oo[0:d, d] = cross_term
+            Sigma_oo[d, 0:d] = cross_term
+            Sigma_oo[d, d] = np.sum(self.w_z**2 + self.psi_z) + self.psi_y
+            
+            # 2. 构造隐变量与观测变量的互协方差矩阵 Sigma_ho (维度: 2d x (d+1))
+            Sigma_ho = np.zeros((2 * d, d + 1))
+            Sigma_ho[0:d, 0:d] = np.diag(self.w_x)
+            Sigma_ho[0:d, d] = self.w_z
+            Sigma_ho[d:2*d, 0:d] = np.diag(cross_term)
+            Sigma_ho[d:2*d, d] = self.w_z**2 + self.psi_z
+            
+            # 3. 构造隐变量自身的先验协方差矩阵 Sigma_hh (维度: 2d x 2d)
+            Sigma_hh = np.zeros((2 * d, 2 * d))
+            Sigma_hh[0:d, 0:d] = np.eye(d)
+            Sigma_hh[d:2*d, d:2*d] = np.diag(self.w_z**2 + self.psi_z)
+            Sigma_hh[0:d, d:2*d] = np.diag(self.w_z)
+            Sigma_hh[d:2*d, 0:d] = np.diag(self.w_z)
+            
+            # 4. 根据多元高斯条件分布公式求取后验
+            Sigma_oo_inv = np.linalg.inv(Sigma_oo)
+            
+            # 隐变量后验协方差 Cov(h|o)
+            Cov_h = Sigma_hh - Sigma_ho @ Sigma_oo_inv @ Sigma_ho.T
+            Cov_tt = Cov_h[0:d, 0:d]
+            Cov_zz = Cov_h[d:2*d, d:2*d]
+            Cov_tz = Cov_h[0:d, d:2*d]
+            
+            # 批量计算所有样本的隐变量后验期望值 E[h|o] (维度: N x 2d)
+            E_h = (Sigma_ho @ Sigma_oo_inv @ o.T).T
+            E_t = E_h[:, 0:d]       # 理想输入 t 的期望
+            E_z = E_h[:, d:2*d]     # 中间解耦变量 z 的期望
+            
+            # 计算M步所需的二阶矩累加项
+            E_tt_sum = Cov_tt * N + E_t.T @ E_t
+            E_zz_sum = Cov_zz * N + E_z.T @ E_z
+            E_tz_sum = Cov_tz * N + E_t.T @ E_z
+            
+            # =========================================================
+            # 二、 M步 (Maximization Step): 极大化期望对数似然，更新模型参数
+            # =========================================================
+            old_w_z = self.w_z.copy()
+            
             for m in range(d):
-                denom = psi_z[m] * np.sum(tt[:, m]) + alpha[m]
-                sigma_wz = 1.0 / denom
-                Wz[m] = sigma_wz * psi_z[m] * np.sum(zt[:, m])
-
-            # Update Wx
-            for m in range(d):
-                denom = psi_x[m] * np.sum(tt[:, m]) + alpha[m]
-                sigma_wx = 1.0 / denom
-                Wx[m] = sigma_wx * psi_x[m] * np.sum(X[:, m] * t_mean[:, m])
-
-            # Update alpha (Gamma prior)
-            a_alpha = self.a_alpha0 + 1
-            b_alpha = self.b_alpha0 + 0.5*(Wz**2 + Wx**2)
-            alpha = a_alpha / b_alpha   # mean of Gamma
-
-            # Optional: compute log-likelihood lower bound (ELBO) for convergence
-            # (omitted for brevity, but you can implement it)
-
-            # Check convergence
-            if iteration > 0 and abs(old_elbo - current_elbo) < self.tol:
+                # 结合超参数 alpha 更新映射权重矩阵 w_x 和 w_z
+                self.w_x[m] = np.sum(X[:, m] * E_t[:, m]) / (E_tt_sum[m, m] + self.alpha[m] * self.psi_x[m])
+                self.w_z[m] = E_tz_sum[m, m] / (E_tt_sum[m, m] + self.alpha[m] * self.psi_z[m])
+                
+                # 更新各个维度的输入和内部输出噪声方差
+                self.psi_x[m] = (np.sum(X[:, m]**2) - 2 * self.w_x[m] * np.sum(X[:, m] * E_t[:, m]) + self.w_x[m]**2 * E_tt_sum[m, m]) / N
+                self.psi_z[m] = (E_zz_sum[m, m] - 2 * self.w_z[m] * E_tz_sum[m, m] + self.w_z[m]**2 * E_tt_sum[m, m]) / N
+                
+                # 更新贝叶斯超参数 alpha 
+                # 如果某个维度 m 的回归项无贡献，w_x 和 w_z 趋于 0，则 alpha 趋于无穷大（收缩压制冗余维度）
+                self.alpha[m] = 2.0 / (self.w_x[m]**2 + self.w_z[m]**2 + 1e-8)
+            
+            # 更新输出力矩总体噪声方差 psi_y
+            psi_y_sum = np.sum(Y**2) - 2 * np.sum(Y * np.sum(E_z, axis=1)) + N * np.sum(Cov_zz) + np.sum(np.sum(E_z, axis=1)**2)
+            self.psi_y = psi_y_sum / N
+            
+            # 检查收敛
+            if np.max(np.abs(self.w_z - old_w_z)) < self.tol:
+                print(f"EM 算法在第 {it} 次迭代收敛。")
                 break
-            old_elbo = current_elbo
 
-        self.Wz_ = Wz
-        self.Wx_ = Wx
-        self.psi_y_ = psi_y
-        self.psi_z_ = psi_z
-        self.psi_x_ = psi_x
-        self.alpha_ = alpha
-        return self
+    def get_b_true(self):
+        """
+        三、 参数变换: 对应论文中的公式 (4)
+        利用学到的隐空间映射 w_x, w_z 变换回针对物理无噪输入的真实回归系数 theta
+        """
+        d = self.d
+        W_z = np.diag(self.w_z)
+        W_x_inv = np.diag(1.0 / (self.w_x + 1e-8))
+        Psi_z_inv = np.diag(1.0 / (self.psi_z + 1e-8))
+        
+        ones = np.ones((d, 1))
+        C = (ones @ ones.T) / self.psi_y + Psi_z_inv
+        C_inv = np.linalg.inv(C)
+        
+        numerator = self.psi_y * (ones.T @ C_inv)
+        denominator = self.psi_y - (ones.T @ C_inv @ ones)
+        factor = numerator / denominator
+        
+        # 严格执行论文的公式(4): \hat{b}_true = 系数 * \Psi_z^-1 * W_z^T * W_x^-1
+        b_true = factor @ Psi_z_inv @ W_z.T @ W_x_inv
+        return b_true.flatten()
 
-    def predict_noiseless(self, X_test):
-        """
-        Predict output from noiseless input (t) using Eq.(4) in paper.
-        Here we use the estimated Wz directly because we want E[y|t] = sum(Wz * t).
-        But if you have only noisy X_test, you should first estimate t.
-        For simplicity, return X_test @ self.Wz_ (this is for noiseless input).
-        """
-        return X_test @ self.Wz_
-    
-def main():
-    # 生成随机数据 (N=1000, d=50, 其中只有前10维相关)
+# =========================================================
+# 验证脚本：模拟具有双向传感器噪声的机器人关节辨识
+# =========================================================
+if __name__ == "__main__":
     np.random.seed(42)
-    N, d_true, d_irrelevant = 1000, 10, 40
-    d = d_true + d_irrelevant
-
-    # 真实关系向量 (前10个非零)
-    Wz_true = np.zeros(d)
-    Wz_true[:d_true] = np.arange(1, d_true+1)
-
-    # 生成无噪声输入 t (N, d)
-    t = np.random.randn(N, d)
-    # 输出 (无噪声)
-    y_clean = t @ Wz_true
-
-    # 添加噪声: 输入噪声 SNR=5, 输出噪声 SNR=5
-    noise_input = np.random.randn(N, d) * (np.std(t, axis=0) / 5)
-    noise_output = np.random.randn(N) * (np.std(y_clean) / 5)
-
-    X = t + noise_input
-    y = y_clean + noise_output
-
-    # 使用贝叶斯JFA
-    model = BayesianJFA(d=d, max_iter=50)
-    model.fit(X, y)
-
-    # 估计的关系向量
-    print("Estimated Wz (first 15):", model.Wz_[:15])
-    print("True Wz (first 15):     ", Wz_true[:15])
-
-if __name__ == "__main__":    
-    main()
+    N = 10000  # 采集样本数
+    d = 15     # 回归矩阵未知参数维度
+    
+    # 1. 模拟物理本质：生成无噪声的理想状态 T
+    T_clean = np.random.normal(0, 1, (N, d))
+    
+    # 2. 设定真实的机械臂物理动力学参数 (即我们要辨识的目标)
+    theta_true = np.array([2.5, -1.2, 4.0, 3.0, -2.0, 1.5, -0.5, 2.0, 1.0, -1.0, 0.5, -0.8, 1.2, 0.9, -1.1])  # 真实的动力学参数
+    
+    # 3. 构造满足因果映射的真实数据
+    w_x_true = np.array([2.0, 1.5, 5.0, 3.0, 2.5, 1.0, 0.5, 4.0, 3.5, 2.0, 1.0, 0.8, 1.2, 0.9, 0.3]) 
+    w_z_true = theta_true * w_x_true      # 理论比值等于 theta_true
+    
+    X_clean = T_clean * w_x_true
+    Y_clean = np.sum(T_clean * w_z_true, axis=1)
+    
+    # 4. 模拟现实：给输入和输出同时加上传感器/差分噪声 (Errors-in-Variables)
+    X_noisy = X_clean + np.random.normal(0, 0.4, (N, d)) # 关节角度加速度等含有 0.2 噪声
+    Y_noisy = Y_clean + np.random.normal(0, 0.2, N)     # 力矩传感器含有 0.1 噪声
+    
+    # 5. 传统方法：普通最小二乘法 OLS 求解
+    theta_ols = np.linalg.inv(X_noisy.T @ X_noisy) @ X_noisy.T @ Y_noisy
+    
+    # 6. 本文方法：贝叶斯因子分析去噪回归求解
+    model = BayesianJFA(d=d, max_iter=100000, tol=1e-4)
+    model.fit(X_noisy, Y_noisy)
+    theta_bayes = model.get_b_true()
+    
+    # 7. 打印对比结果
+    print("================ 参数辨识结果 ==================")
+    print(f"真实的动力学参数 (True Theta):\n{format_array(theta_true)}")
+    print(f"传统普通最小二乘法 (OLS) 辨识结果:\n{format_array(theta_ols)}")
+    print(f"与真实参数的误差 (OLS Error):\n{format_array(theta_ols - theta_true)}")
+    print(f"论文贝叶斯去噪回归方法 辨识结果:\n{format_array(theta_bayes)}")
+    print(f"与真实参数的误差 (Bayesian Error):\n{format_array(theta_bayes - theta_true)}")
+    print("================================================")
+    print(f"贝叶斯超参数 (Alpha):\n{format_array(model.alpha)}")
+    print(f"输入噪声方差 (Psi_x):\n{format_array(model.psi_x)}")
+    print(f"内部解耦变量噪声方差 (Psi_z):\n{format_array(model.psi_z)}")
+    print(f"输出噪声方差 (Psi_y):\n{format_array(model.psi_y)}")
+    print(f"映射权重矩阵 (W_z):\n{format_array(model.w_z)}")
+    print(f"映射权重矩阵 (W_x):\n{format_array(model.w_x)}")
+    print(f"W_z/W_x:\n{format_array(model.w_z / (model.w_x + 1e-8))}")
+    print("================================================")
