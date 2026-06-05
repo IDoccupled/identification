@@ -77,14 +77,14 @@ RNG_SEED = 114
 class FourierTrajectory:
     def __init__(
             self,
-            regressor: TargetLimbRegressor = TargetLimbRegressor(
+            regressor: TargetLimbRegressor = None,
+            plot_trajectory: bool = False
+    ):
+        self.regressor = TargetLimbRegressor(
                 urdf_path=URDF_PATH,
                 group_to_identify=GROUP_TO_IDENTIFY,
                 print_info=False
-            ),
-            plot_trajectory: bool = False
-    ):
-        self.regressor = regressor
+            ) if regressor is None else regressor
 
         self.dim = len(self.regressor.group_to_identify)
         self.q_upper    = np.array(self.regressor.q_upper_limit) - Q_LIMIT_BUFFER
