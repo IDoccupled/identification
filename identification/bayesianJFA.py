@@ -120,7 +120,7 @@ class BayesianJFA:
             
             # 检查收敛
             if np.max(np.abs(self.w_z - old_w_z)) < self.tol:
-                print(f"EM 算法在第 {it} 次迭代收敛。")
+                print(f"EM 算法在第 {it} 次迭代收敛")
                 break
 
     def get_b_hat(self):
@@ -195,7 +195,14 @@ def main():
     np.random.seed(42)
     regressor = TargetLimbRegressor()
     N_HARMONICS = 5
-    q, v, a = FourierTrajectory(regressor=regressor).generate_trajectory(
+    fourier_traj = FourierTrajectory(regressor=regressor)
+
+
+    import time
+    start_time = time.time()
+
+
+    q, v, a = fourier_traj.generate_trajectory(
         coeffs=np.random.uniform(-0.5, 0.5, size=(regressor.dof * (N_HARMONICS * 2 + 2)))
     )
     X_true = np.empty((0, regressor.dof * 12))
@@ -235,9 +242,9 @@ def main():
     print("================ 参数辨识结果 ==================")
     print(f"真实的动力学参数 (True Theta):\n{format_array(theta_true)}")
     print(f"传统普通最小二乘法 (OLS) 辨识结果:\n{format_array(theta_ols)}")
-    print(f"与真实参数的误差 (OLS Error):\n{format_array(theta_ols - theta_true)}")
+    print(f"与真实参数的误差 (OLS Error) 百分比:\n{format_array((theta_ols - theta_true) / theta_true * 100)}%")
     print(f"论文贝叶斯去噪回归方法 辨识结果:\n{format_array(theta_bayes)}")
-    print(f"与真实参数的误差 (Bayesian Error):\n{format_array(theta_bayes - theta_true)}")
+    print(f"与真实参数的误差 (Bayesian Error) 百分比:\n{format_array((theta_bayes - theta_true) / theta_true * 100)}%")
     print("================================================")
     print(f"贝叶斯超参数 (Alpha):\n{format_array(model.alpha)}")
     print(f"输入噪声方差 (Psi_x):\n{format_array(model.psi_x)}")
@@ -247,6 +254,11 @@ def main():
     print(f"映射权重矩阵 (W_x):\n{format_array(model.w_x)}")
     print(f"W_z/W_x:\n{format_array(model.w_z / (model.w_x + 1e-8))}")
     print("================================================")
+
+    print("耗时: {:.2f} 秒".format(time.time() - start_time))
+
+    # =========================================================
+    
 
 
 if __name__ == "__main__":
