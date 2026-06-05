@@ -118,7 +118,7 @@ class CollisionTest:
 
         self.collision_data = pin.GeometryData(self.collision_model)
 
-    def check_collisions(self, q: np.ndarray):
+    def check_collisions(self, q: np.ndarray, print_time: bool = False):
 
         if not self.pair_added:
             raise Exception('Add collision pairs before checking collisions')
@@ -156,7 +156,7 @@ class CollisionTest:
             except Exception as e:
                 first_name, second_name = self._pair_geometry_names(k)
                 raise RuntimeError(f"Error computing collision for pair {k} ({first_name} <-> {second_name}): {e}")
-        print(f"Time taken: {(time.time() - start_time) * 1000:.2f} ms") if self.performance else None
+        print(f"Time taken: {(time.time() - start_time) * 1000:.2f} ms") if print_time else None
 
         if not self.performance:
             pin.updateGeometryPlacements(self.model, 
@@ -187,7 +187,7 @@ def main():
         model=model,
         urdf_path=URDF_PATH,
         pkg_dir=PKG_DIR,
-        performance=0
+        performance=False
     )
 
     collision_pairs = [
@@ -211,7 +211,7 @@ def main():
     q[15] = -1.2
     q[16] = -1
 
-    ct.check_collisions(q)
+    ct.check_collisions(q, print_time=True)
 
 if __name__ == "__main__":
     main()
