@@ -69,14 +69,16 @@ class CollisionTest:
         if not pkg_dir.is_dir():
             raise NotADirectoryError(f"\033[91mPackage directory not found at {pkg_dir}\033[0m")
         
+        self.performance = performance
+        
         if model:
             self.model = model
-            print(f'\033[92mUsing provided model:\033[0m')
+            print(f'\033[92mUsing provided pinocchio model...\033[0m')
         else:
             self.model = pin.buildModelFromUrdf(str(urdf_path))
-            print(f'\033[92mBuilding model from URDF at {urdf_path}:\033[0m')
+            print(f'\033[92mBuilding model from URDF at {urdf_path}...\033[0m')
         
-        print(self.model)
+        print(self.model) if not self.performance else None
 
         self.data = self.model.createData()
 
@@ -87,12 +89,13 @@ class CollisionTest:
             pin.GeometryType.COLLISION,
             package_dirs=[str(pkg_dir)],
         )
-        print(f'\033[92mCollision model built:\033[0m')
-        for geom in self.collision_model.geometryObjects:
-            print(f"  - {geom.name}, parentJoint: {geom.parentJoint}, parentFrame: {geom.parentFrame}")
+        print(f'\033[92mCollision model built.\033[0m')
 
-        self.performance = performance
         if not self.performance:
+
+            for geom in self.collision_model.geometryObjects:
+                print(f"  - {geom.name}, parentJoint: {geom.parentJoint}, parentFrame: {geom.parentFrame}")
+
             print(f'\033[92mBuilding visual model...\033[0m')
             self.visual_model = pin.buildGeomFromUrdf(
                 self.model,
@@ -115,13 +118,12 @@ class CollisionTest:
 
         self.collision_data = pin.GeometryData(self.collision_model)
 
-    def check_collisions(self, q: np.ndarray, 
-                         printinfo:bool=False):
+    def check_collisions(self, q: np.ndarray):
 
         if not self.pair_added:
             raise Exception('Add collision pairs before checking collisions')
 
-        if printinfo:
+        if not self.performance:
             print(f'\033[92mCollision computation at configuration:\033[0m')
             print(q)
 
@@ -137,7 +139,7 @@ class CollisionTest:
                                      q)
         start_time = time.time()
         
-        if printinfo:
+        if not self.performance:
             print('\n\033[92mComputing collisions...\033[0m')
         for k in range(len(self.collision_model.collisionPairs)):
             try:
@@ -145,7 +147,7 @@ class CollisionTest:
                 result = self.collision_data.collisionResults[k]
                 if result.isCollision():
                     first_name, second_name = self._pair_geometry_names(k)
-                    print(f"Collision detected for pair {k}: {first_name} <-> {second_name}") if printinfo else None
+                    print(f"Collision detected for pair {k}: {first_name} <-> {second_name}") if not self.performance else None
                     collided = True
 
                     if self.performance:
@@ -154,9 +156,9 @@ class CollisionTest:
             except Exception as e:
                 first_name, second_name = self._pair_geometry_names(k)
                 raise RuntimeError(f"Error computing collision for pair {k} ({first_name} <-> {second_name}): {e}")
-        print(f"Time taken: {(time.time() - start_time) * 1000:.2f} ms") if printinfo else None
+        print(f"Time taken: {(time.time() - start_time) * 1000:.2f} ms") if self.performance else None
 
-        if printinfo:
+        if not self.performance:
             pin.updateGeometryPlacements(self.model, 
                                          self.data,
                                          self.visual_model, 
@@ -164,9 +166,16 @@ class CollisionTest:
                                          q)
             viz = MeshcatVisualizer(self.model, self.collision_model, self.visual_model) 
             viz.initViewer()        
-            viz.loadViewerModel()        
-            while True:
-                viz.display(q)
+            viz.loadViewerModel()  
+            printed = False
+            try:      
+                while True:
+                    viz.display(q)
+                    if not printed:
+                        print("Press Ctrl+C to stop visualization...")
+                        printed = True
+            except KeyboardInterrupt:
+                print("Visualization stopped by user.")
 
         return collided
 
@@ -178,7 +187,7 @@ def main():
         model=model,
         urdf_path=URDF_PATH,
         pkg_dir=PKG_DIR,
-        performance=False
+        performance=0
     )
 
     collision_pairs = [
@@ -202,7 +211,7 @@ def main():
     q[15] = -1.2
     q[16] = -1
 
-    ct.check_collisions(q, printinfo=True)
+    ct.check_collisions(q)
 
 if __name__ == "__main__":
     main()
