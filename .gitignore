@@ -13,6 +13,7 @@ catkin_ws/log/
 src/**/build/
 src/**/install/
 src/**/log/
+.venv/
 
 ## Generated files
 *.bag

@@ -19,6 +19,21 @@ def format_array(value, per_line=5):
     body = ',\n  '.join(groups)
     return '[\n  ' + body + '\n]'
 
+def safe_percent_error(estimate, truth, min_abs_truth=1e-2):
+    """Relative error with denominator floor to avoid exploding percentages near zero."""
+    denom = np.maximum(np.abs(truth), float(min_abs_truth))
+    return (estimate - truth) / denom * 100.0
+
+def identifiable_projection_matrix(X, tol_ratio=1e-10):
+    """Projector onto row-space(X), i.e. the identifiable parameter subspace."""
+    _, s, vt = np.linalg.svd(X, full_matrices=False)
+    if s.size == 0:
+        return np.zeros((X.shape[1], X.shape[1])), 0
+    tol = s[0] * tol_ratio
+    rank = int(np.sum(s > tol))
+    v_r = vt[:rank, :].T
+    return v_r @ v_r.T, rank
+
 class BayesianJFA:
     def __init__(self, max_iter=100000, tol=1e-4):
         """
@@ -26,9 +41,6 @@ class BayesianJFA:
         """
         self.max_iter = max_iter
         self.tol = tol
-        # Gamma(a0, b0) 作为 alpha 的先验超参数
-        self.alpha_a0 = 1.0
-        self.alpha_b0 = 1e-6
 
     def fit(self, X, Y, 
             w_x_init=None, 
@@ -36,90 +48,126 @@ class BayesianJFA:
             psi_x_init=None,
             psi_z_init=None,
             psi_y_init=None):
-        X = np.asarray(X, dtype=float)
-        Y = np.asarray(Y, dtype=float).reshape(-1)
-
         N, self.d = X.shape
+        o = np.column_stack((X, Y))
 
-        self.w_x = np.ones(self.d, dtype=float) if w_x_init is None else np.asarray(w_x_init, dtype=float).copy()
-        self.w_z = np.ones(self.d, dtype=float) if w_z_init is None else np.asarray(w_z_init, dtype=float).copy()
+        # 使用 OLS 作为默认热启动，可避免无信息初始化导致的零解坍塌
+        theta_ols = np.linalg.lstsq(X, Y, rcond=None)[0]
 
-        self.psi_x = np.ones(self.d, dtype=float) * 0.4 if psi_x_init is None else np.asarray(psi_x_init, dtype=float).copy()
-        self.psi_z = np.ones(self.d, dtype=float) * 0.4 if psi_z_init is None else np.asarray(psi_z_init, dtype=float).copy()
-        self.psi_y = float(0.2 if psi_y_init is None else psi_y_init)
+        self.w_x = np.ones(self.d) if w_x_init is None else np.asarray(w_x_init, dtype=float).copy()
+        self.w_z = theta_ols.copy() if w_z_init is None else np.asarray(w_z_init, dtype=float).copy()
 
-        self.alpha = np.ones(self.d, dtype=float)
-        self.var_w_x = np.zeros(self.d, dtype=float)
-        self.var_w_z = np.zeros(self.d, dtype=float)
+        # 初始化噪声方差
+        self.psi_x = np.ones(self.d) * 0.4 if psi_x_init is None else psi_x_init
+        self.psi_z = np.ones(self.d) * 0.4 if psi_z_init is None else psi_z_init
+        self.psi_y = 0.2 if psi_y_init is None else psi_y_init
+
+        # 初始化贝叶斯精度超参数 alpha
+        self.alpha = np.ones(self.d) * 1.0
 
         eps = 1e-10
-        identity = np.eye(self.d)
-        previous_theta = None
 
         for it in range(self.max_iter):
-            psi_x_safe = np.maximum(self.psi_x, eps)
-            psi_y_safe = float(max(self.psi_y, eps))
+            # =========================================================
+            # 一、 E步: 利用当前参数推导隐变量后验
+            # =========================================================
+            Sigma_oo = np.zeros((self.d + 1, self.d + 1))
+            Sigma_oo[0:self.d, 0:self.d] = np.diag(self.w_x**2 + self.psi_x)
+            cross_term = self.w_x * self.w_z
+            Sigma_oo[0:self.d, self.d] = cross_term
+            Sigma_oo[self.d, 0:self.d] = cross_term
+            Sigma_oo[self.d, self.d] = np.sum(self.w_z**2 + self.psi_z) + self.psi_y
 
-            # E-step: posterior of the latent clean input t_i under
-            # x_i = diag(w_x) t_i + eps_x, y_i = w_z^T t_i + eps_y.
-            posterior_precision = (
-                identity
-                + np.diag((self.w_x ** 2) / psi_x_safe)
-                + np.outer(self.w_z, self.w_z) / psi_y_safe
-            )
-            posterior_cov = np.linalg.inv(posterior_precision)
+            Sigma_ho = np.zeros((2 * self.d, self.d + 1))
+            Sigma_ho[0:self.d, 0:self.d] = np.diag(self.w_x)
+            Sigma_ho[0:self.d, self.d] = self.w_z
+            Sigma_ho[self.d:2*self.d, 0:self.d] = np.diag(cross_term)
+            Sigma_ho[self.d:2*self.d, self.d] = self.w_z**2 + self.psi_z
 
-            x_weight = self.w_x / psi_x_safe
-            y_weight = self.w_z / psi_y_safe
-            latent_mean = X * x_weight[None, :]
-            latent_mean = latent_mean @ posterior_cov
-            latent_mean += np.outer(Y / psi_y_safe, posterior_cov @ self.w_z)
+            Sigma_hh = np.zeros((2 * self.d, 2 * self.d))
+            Sigma_hh[0:self.d, 0:self.d] = np.eye(self.d)
+            Sigma_hh[self.d:2*self.d, self.d:2*self.d] = np.diag(self.w_z**2 + self.psi_z)
+            Sigma_hh[0:self.d, self.d:2*self.d] = np.diag(self.w_z)
+            Sigma_hh[self.d:2*self.d, 0:self.d] = np.diag(self.w_z)
 
-            latent_second_moment = N * posterior_cov + latent_mean.T @ latent_mean
+            Sigma_oo_inv = np.linalg.inv(Sigma_oo)
+            Cov_h = Sigma_hh - Sigma_ho @ Sigma_oo_inv @ Sigma_ho.T
+            Cov_tt = Cov_h[0:self.d, 0:self.d]
+            Cov_zz = Cov_h[self.d:2*self.d, self.d:2*self.d]
+            Cov_tz = Cov_h[0:self.d, self.d:2*self.d]
 
-            # M-step: update w_x, w_z, and the noise variances.
-            previous_theta = self.w_z / (self.w_x + eps) if previous_theta is None else previous_theta
+            E_h = (Sigma_ho @ Sigma_oo_inv @ o.T).T
+            E_t = E_h[:, 0:self.d]
+            E_z = E_h[:, self.d:2*self.d]
 
-            self.w_x = np.sum(X * latent_mean, axis=0) / (
-                np.sum(latent_mean ** 2, axis=0) + N * np.diag(posterior_cov) + eps
-            )
+            E_tt_sum = Cov_tt * N + E_t.T @ E_t
+            E_zz_sum = Cov_zz * N + E_z.T @ E_z
+            E_tz_sum = Cov_tz * N + E_t.T @ E_z
 
-            rhs_wz = latent_mean.T @ Y
-            ridge = np.diag(np.clip(self.alpha, 1e-6, 1e3) * 1e-4)
-            self.w_z = np.linalg.solve(latent_second_moment + ridge + eps * identity, rhs_wz)
+            # =========================================================
+            # 二、 M步: 更新 w_x, w_z, psi_x, psi_z, psi_y, alpha
+            # =========================================================
+            old_w_z = self.w_z.copy()
 
             for m in range(self.d):
-                self.psi_x[m] = np.mean(
-                    (X[:, m] - self.w_x[m] * latent_mean[:, m]) ** 2
-                    + (self.w_x[m] ** 2) * posterior_cov[m, m]
-                )
+                ett = E_tt_sum[m, m]
+                etz = E_tz_sum[m, m]
+                xet = np.sum(X[:, m] * E_t[:, m])
 
-            y_residual = Y - latent_mean @ self.w_z
-            self.psi_y = float(np.mean(y_residual ** 2 + self.w_z.T @ posterior_cov @ self.w_z))
+                self.w_x[m] = xet / (ett + self.alpha[m] * self.psi_x[m] + eps)
+                self.w_z[m] = etz / (ett + self.alpha[m] * self.psi_z[m] + eps)
 
-            # 轻量 ARD，只用于报告和微弱收缩，不主导优化。
-            self.alpha = np.clip(1.0 / (self.w_x ** 2 + self.w_z ** 2 + eps), 1e-6, 1e6)
+                self.psi_x[m] = (
+                    np.sum(X[:, m]**2)
+                    - 2.0 * self.w_x[m] * xet
+                    + self.w_x[m]**2 * ett
+                ) / N
 
-            # 兼容旧接口：保留一些近似方差量。
-            self.var_w_x = np.full(self.d, float(np.mean(np.diag(posterior_cov))))
-            self.var_w_z = np.full(self.d, float(np.mean(np.diag(posterior_cov))))
-            self.psi_z = np.maximum(self.psi_x.copy(), eps)
+                self.psi_z[m] = (
+                    E_zz_sum[m, m]
+                    - 2.0 * self.w_z[m] * etz
+                    + self.w_z[m]**2 * ett
+                ) / N
 
-            theta = self.w_z / (self.w_x + eps)
-            if previous_theta is not None and np.max(np.abs(theta - previous_theta)) < self.tol:
+                self.alpha[m] = 2.0 / (self.w_x[m]**2 + self.w_z[m]**2 + eps)
+
+            psi_y_sum = (
+                np.sum(Y**2)
+                - 2.0 * np.sum(Y * np.sum(E_z, axis=1))
+                + N * np.sum(Cov_zz)
+                + np.sum(np.sum(E_z, axis=1)**2)
+            )
+            self.psi_y = psi_y_sum / N
+
+            # 数值稳定性保护
+            self.psi_x = np.maximum(self.psi_x, eps)
+            self.psi_z = np.maximum(self.psi_z, eps)
+            self.psi_y = float(max(self.psi_y, eps))
+
+            if np.max(np.abs(self.w_z - old_w_z)) < self.tol:
                 print(f"EM 算法在第 {it} 次迭代收敛")
                 break
-            previous_theta = theta.copy()
 
     def get_b_hat(self):
         """
         三、 参数变换: 对应论文中的公式 (4)
-        利用学到的隐空间映射 w_x, w_z 变换回针对物理无噪输入的真实回归系数 theta。
-
-        在当前实现里，theta 直接取 noiseless input 下的比值 w_z / w_x，
-        这与论文里由隐变量参数回推回回归系数的思想一致。
+        利用学到的隐空间映射 w_x, w_z 变换回针对物理无噪输入的真实回归系数 theta
         """
-        return self.w_z / (self.w_x + 1e-8)
+        W_z = np.diag(self.w_z)
+        W_x_inv = np.diag(1.0 / (self.w_x + 1e-8))
+        Psi_z_inv = np.diag(1.0 / (self.psi_z + 1e-8))
+        
+        ones = np.ones((self.d, 1))
+        C = (ones @ ones.T) / self.psi_y + Psi_z_inv
+        C_inv = np.linalg.inv(C)
+        
+        numerator = self.psi_y * (ones.T @ C_inv)
+        denominator = self.psi_y - (ones.T @ C_inv @ ones)
+        factor = numerator / denominator
+        
+        # 严格执行论文的公式(4): \hat{b}_true = 系数 * \Psi_z^-1 * W_z^T * W_x^-1
+        b_true = factor @ Psi_z_inv @ W_z.T @ W_x_inv
+        return b_true.flatten()
     
 def test():
     np.random.seed(42)
@@ -140,11 +188,11 @@ def test():
     Y_clean = np.sum(T_clean * w_z_true, axis=1)
     
     # 4. 模拟现实：给输入和输出同时加上传感器/差分噪声 (Errors-in-Variables)
-    X_noisy = X_clean + np.random.normal(0, 0.4, (N, d)) # 关节角度加速度等含有 0.2 噪声
-    Y_noisy = Y_clean + np.random.normal(0, 0.2, N)     # 力矩传感器含有 0.1 噪声
+    X_noisy = X_clean + np.random.normal(0, 0.2, (N, d)) # 关节角度加速度等含有 0.2 噪声
+    Y_noisy = Y_clean + np.random.normal(0, 0.1, N)     # 力矩传感器含有 0.1 噪声
     
     # 5. 传统方法：普通最小二乘法 OLS 求解
-    theta_ols = np.linalg.inv(X_noisy.T @ X_noisy) @ X_noisy.T @ Y_noisy
+    theta_ols = np.linalg.lstsq(X_noisy, Y_noisy, rcond=None)[0]
     
     # 6. 本文方法：贝叶斯因子分析去噪回归求解
     model = BayesianJFA(max_iter=100000, tol=1e-4)
@@ -198,9 +246,15 @@ def main():
         X_true = np.vstack((X_true, Y_aug))
         Y_true = np.hstack((Y_true, tau_aug))
         theta_true = pi_aug
+
+    # 60 维参数中并非都可辨识：后续比较应在 row-space(X) 中进行
+    proj_ident, rank_x = identifiable_projection_matrix(X_true)
+    theta_true_ident = proj_ident @ theta_true
+
     print("X_true shape:", X_true.shape)
     print("Y_true shape:", Y_true.shape)
     print("theta_true Shape:", theta_true.shape)
+    print(f"X_true rank: {rank_x}/{X_true.shape[1]}")
 
     print(f"生成矩阵耗时: {time.time() - start_time:.2f} 秒")
 
@@ -208,22 +262,30 @@ def main():
     X_noisy = X_true + np.random.normal(0, 0.1, (N, d))
     Y_noisy = Y_true + np.random.normal(0, 0.2, N)
 
-    theta_ols = np.linalg.inv(X_noisy.T @ X_noisy) @ X_noisy.T @ Y_noisy
+    theta_ols = np.linalg.lstsq(X_noisy, Y_noisy, rcond=None)[0]
     model = BayesianJFA(max_iter=100000, tol=1e-4)
     model.fit(X_noisy, Y_noisy,
               w_x_init=np.ones(d),
-              w_z_init=theta_true.copy(),
+              # OLS 热启动比直接用 pi_aug 更稳定，能显著降低收缩到零解的概率
+              w_z_init=theta_ols.copy(),
               psi_x_init=np.ones(d) * 0.1,
               psi_z_init=np.ones(d) * 0.1,
               psi_y_init=0.2)
     theta_bayes = model.get_b_hat()
 
+    theta_ols_ident = proj_ident @ theta_ols
+    theta_bayes_ident = proj_ident @ theta_bayes
+    rmse_ols = np.sqrt(np.mean((Y_noisy - X_noisy @ theta_ols)**2))
+    rmse_bayes = np.sqrt(np.mean((Y_noisy - X_noisy @ theta_bayes)**2))
+
     print("================ 参数辨识结果 ==================")
-    print(f"真实的动力学参数 (True Theta):\n{format_array(theta_true)}")
-    print(f"传统普通最小二乘法 (OLS) 辨识结果:\n{format_array(theta_ols)}")
-    print(f"与真实参数的误差 (OLS Error) 百分比:\n{format_array((theta_ols - theta_true) / theta_true * 100)}%")
-    print(f"论文贝叶斯去噪回归方法 辨识结果:\n{format_array(theta_bayes)}")
-    print(f"与真实参数的误差 (Bayesian Error) 百分比:\n{format_array((theta_bayes - theta_true) / theta_true * 100)}%")
+    print(f"真实参数的可辨识分量 P@theta_true:\n{format_array(theta_true_ident)}")
+    print(f"OLS 在可辨识子空间的结果 P@theta_ols:\n{format_array(theta_ols_ident)}")
+    print(f"Bayesian 在可辨识子空间的结果 P@theta_bayes:\n{format_array(theta_bayes_ident)}")
+    print(f"OLS 安全相对误差(对 P@theta_true):\n{format_array(safe_percent_error(theta_ols_ident, theta_true_ident))}%")
+    print(f"Bayesian 安全相对误差(对 P@theta_true):\n{format_array(safe_percent_error(theta_bayes_ident, theta_true_ident))}%")
+    print(f"OLS 力矩拟合 RMSE: {rmse_ols:.6f}")
+    print(f"Bayesian 力矩拟合 RMSE: {rmse_bayes:.6f}")
     print("================================================")
     print(f"贝叶斯超参数 (Alpha):\n{format_array(model.alpha)}")
     print(f"输入噪声方差 (Psi_x):\n{format_array(model.psi_x)}")
@@ -241,5 +303,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    test()
+    main()
+    # test()
