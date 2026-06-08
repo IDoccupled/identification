@@ -12,10 +12,10 @@ except Exception:
     TargetLimbRegressor = None
 
 SEED = 42
-APPLY_PHYSICAL = True
+APPLY_PHYSICAL = False
 MAX_ITER = 100000
 TOL = 1e-5
-VERBOSE = True
+VERBOSE = False
 INPUT_SNR = 2.0
 OUTPUT_SNR = 5.0
 N_TRIALS = 3
