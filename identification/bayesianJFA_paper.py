@@ -153,7 +153,7 @@ class VariationalBayesianJFA:
             Psi_x_inv = np.diag(1.0 / psi_x_safe)
 
             # Eq. (19), Eq. (20), Eq. (18)
-            Sigma_zt = -Sigma_zz @ Wz @ Psi_z_inv @ K_inv
+            Sigma_zt = Sigma_zz @ Wz @ Psi_z_inv @ K_inv
             Sigma_tz = Sigma_zt.T
             Sigma_tt = K_inv + K_inv @ Wz @ Psi_z_inv @ Sigma_zz @ Psi_z_inv @ Wz @ K_inv
 
@@ -477,7 +477,7 @@ def run_synthetic_demo(seed=42, apply_physical=True, max_iter=100000, tol=1e-5, 
         dtype=float,
     )
 
-    w_x_true = np.array([2.0, 1.5, 5.0, 3.0, 2.5, 1.0, 0.5, 4.0, 3.5, 2.0, 1.0, 0.8, 1.2, 0.9, 0.3], dtype=float)
+    w_x_true = np.array([2.0, 1.5, 5.0, 3.0, 2.5, 1.0, 0.5, 4.0, 3.5, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=float)
     w_z_true = theta_true * w_x_true
 
     X_clean = T_clean * w_x_true
@@ -642,7 +642,7 @@ def main():
     if args.demo == "synthetic":
         run_synthetic_demo(
             seed=args.seed,
-            apply_physical=not args.no_physical,
+            apply_physical= False,
             max_iter=args.max_iter,
             tol=args.tol,
             verbose=not args.quiet,
