@@ -11,6 +11,16 @@ except Exception:
     FourierTrajectory = None
     TargetLimbRegressor = None
 
+SEED = 42
+APPLY_PHYSICAL = True
+MAX_ITER = 100000
+TOL = 1e-5
+VERBOSE = True
+INPUT_SNR = 2.0
+OUTPUT_SNR = 5.0
+N_TRIALS = 3
+N_TRAIN = 1000
+N_TEST = 1000
 
 def format_array(value, per_line=5):
     arr = np.asarray(value).ravel()
@@ -466,7 +476,13 @@ class RBDPhysicalConsistencyProjector:
         return theta_out, out_info
 
 
-def run_synthetic_demo(seed=42, apply_physical=True, max_iter=100000, tol=1e-5, verbose=True):
+def run_synthetic_demo(
+        seed=SEED, 
+        apply_physical=APPLY_PHYSICAL, 
+        max_iter=MAX_ITER, 
+        tol=TOL, 
+        verbose=VERBOSE):
+    
     np.random.seed(seed)
     N = 10000
     d = 15
@@ -516,6 +532,146 @@ def run_synthetic_demo(seed=42, apply_physical=True, max_iter=100000, tol=1e-5, 
     print(f"OLS torque RMSE: {rmse_ols:.6f}")
     print(f"VB-JFA torque RMSE: {rmse_bayes:.6f}")
     print("==========================================================")
+
+
+def run_synthetic_demo_paper(
+    seed=SEED,
+    input_snr=INPUT_SNR,
+    output_snr=OUTPUT_SNR,
+    n_trials=N_TRIALS,
+    n_train=N_TRAIN,
+    n_test=N_TEST,
+    max_iter=MAX_ITER,
+    tol=TOL,
+    verbose=VERBOSE,
+):
+    """
+    Section 5.1 synthetic evaluation (paper-aligned).
+
+    Setup:
+      - 100 total input dimensions, 10 relevant.
+      - True regression vector β_true = [1, 2, ..., 10] (relevant dims only).
+      - Output noise SNR = 5 (default), input noise SNR = 2 (default, strongly noisy).
+      - Four (redundant r, irrelevant u) scenarios:
+          (r=90, u=0), (r=0, u=90), (r=30, u=60), (r=60, u=30).
+      - Redundant dims: random convex combinations of the 10 noisy relevant dims.
+      - Irrelevant dims: Normal(0, 1).
+      - Averaged over n_trials independent trials.
+      - Test data is noiseless.
+    Metric: nMSE = mean((y_pred - y_true)^2) / mean(y_true^2) on clean test data.
+    Comparison: OLS vs Bayesian VB-JFA (no physical projection needed for synthetic).
+    """
+    n_relevant = 10
+    n_total = 100
+    scenarios = [(90, 0), (0, 90), (30, 60), (60, 30)]
+    beta_true_rel = np.arange(1, n_relevant + 1, dtype=float)  # [1, 2, ..., 10]
+
+    results = {}
+
+    for r, u in scenarios:
+        assert n_relevant + r + u == n_total, f"r={r} u={u} does not sum to {n_total - n_relevant}"
+        nmse_ols_trials = []
+        nmse_bayes_trials = []
+
+        for trial in range(n_trials):
+            rng = np.random.default_rng(seed + trial)
+
+            # --- random covariance for the 10 relevant dimensions ---
+            A = rng.standard_normal((n_relevant, n_relevant))
+            cov = A @ A.T / n_relevant + np.eye(n_relevant) * 0.1
+
+            # --- clean relevant inputs ---
+            T_rel_train = rng.multivariate_normal(np.zeros(n_relevant), cov, size=n_train)
+            T_rel_test  = rng.multivariate_normal(np.zeros(n_relevant), cov, size=n_test)
+
+            # --- clean outputs ---
+            Y_clean_train = T_rel_train @ beta_true_rel
+            Y_clean_test  = T_rel_test  @ beta_true_rel
+
+            # --- add input noise to the 10 relevant training dimensions ---
+            per_dim_var = np.var(T_rel_train, axis=0)
+            input_noise_std = np.sqrt(per_dim_var / float(input_snr))
+            X_rel_train = T_rel_train + rng.standard_normal((n_train, n_relevant)) * input_noise_std
+            X_rel_test  = T_rel_test.copy()  # noiseless test
+
+            # --- add output noise ---
+            output_noise_std = np.sqrt(float(np.var(Y_clean_train)) / float(output_snr))
+            Y_noisy_train = Y_clean_train + rng.standard_normal(n_train) * output_noise_std
+            Y_test = Y_clean_test.copy()  # noiseless test
+
+            # --- redundant dimensions: convex combos of the 10 noisy relevant dims ---
+            if r > 0:
+                weights = rng.uniform(0.0, 1.0, size=(r, n_relevant))
+                weights /= weights.sum(axis=1, keepdims=True)
+                X_red_train = X_rel_train @ weights.T  # (n_train, r)
+                X_red_test  = X_rel_test  @ weights.T
+            else:
+                X_red_train = np.empty((n_train, 0))
+                X_red_test  = np.empty((n_test,  0))
+
+            # --- irrelevant dimensions ---
+            if u > 0:
+                X_irr_train = rng.standard_normal((n_train, u))
+                X_irr_test  = rng.standard_normal((n_test,  u))
+            else:
+                X_irr_train = np.empty((n_train, 0))
+                X_irr_test  = np.empty((n_test,  0))
+
+            # --- assemble full 100-dim matrices ---
+            X_train = np.hstack([X_rel_train, X_red_train, X_irr_train])
+            X_test  = np.hstack([X_rel_test,  X_red_test,  X_irr_test ])
+
+            # --- OLS ---
+            beta_ols = np.linalg.lstsq(X_train, Y_noisy_train, rcond=None)[0]
+
+            # --- Bayesian VB-JFA ---
+            model = VariationalBayesianJFA(max_iter=max_iter, tol=tol, verbose=verbose)
+            model.fit(X_train, Y_noisy_train)
+            beta_bayes = model.get_beta_true()
+
+            # --- nMSE on noiseless test data ---
+            denom = float(np.mean(Y_test ** 2))
+            denom = max(denom, 1e-12)
+            nmse_ols   = float(np.mean((X_test @ beta_ols   - Y_test) ** 2)) / denom
+            nmse_bayes = float(np.mean((X_test @ beta_bayes - Y_test) ** 2)) / denom
+
+            nmse_ols_trials.append(nmse_ols)
+            nmse_bayes_trials.append(nmse_bayes)
+
+            if verbose:
+                print(
+                    f"  [{r=:2d},{u=:2d}] trial {trial+1:2d}/{n_trials}  "
+                    f"nMSE_OLS={nmse_ols:.4f}  nMSE_BAYES={nmse_bayes:.4f}"
+                )
+
+        results[(r, u)] = {
+            "ols":   (float(np.mean(nmse_ols_trials)),   float(np.std(nmse_ols_trials))),
+            "bayes": (float(np.mean(nmse_bayes_trials)), float(np.std(nmse_bayes_trials))),
+        }
+
+    # ------------------------------------------------------------------
+    # Print results table
+    # ------------------------------------------------------------------
+    sep = "=" * 72
+    print("\n" + sep)
+    print(f"  Section 5.1 — Synthetic Evaluation")
+    print(f"  input SNR={input_snr:.0f}, output SNR={output_snr:.0f}, "
+          f"n_train={n_train}, n_test={n_test}, n_trials={n_trials}")
+    print(sep)
+    print(f"  {'Scenario':>14}  {'OLS nMSE':>20}  {'BAYES nMSE':>20}  {'Improvement':>12}")
+    print("-" * 72)
+    for r, u in scenarios:
+        v = results[(r, u)]
+        ols_m,   ols_s   = v["ols"]
+        bay_m,   bay_s   = v["bayes"]
+        improvement = (ols_m - bay_m) / max(bay_m, 1e-12) * 100.0
+        label = f"r={r:2d}, u={u:2d}"
+        print(
+            f"  {label:>14}  {ols_m:8.4f} ± {ols_s:.4f}  "
+            f"{bay_m:8.4f} ± {bay_s:.4f}  {improvement:+10.1f}%"
+        )
+    print(sep + "\n")
+    return results
 
 
 def run_robot_demo(seed=42, apply_physical=True, max_iter=100000, tol=1e-5, verbose=True):
@@ -630,19 +786,55 @@ def run_robot_demo(seed=42, apply_physical=True, max_iter=100000, tol=1e-5, verb
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Paper-aligned Bayesian JFA with optional physical consistency projection")
-    parser.add_argument("--demo", choices=["synthetic", "robot"], default="synthetic")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--max-iter", type=int, default=100000)
-    parser.add_argument("--tol", type=float, default=1e-5)
+    parser = argparse.ArgumentParser(
+        description="Paper-aligned Bayesian JFA with optional physical consistency projection"
+    )
+    parser.add_argument(
+        "--demo",
+        choices=["synthetic", "paper_synthetic", "robot"],
+        default="paper_synthetic",
+        help=(
+            "synthetic: quick custom demo; "
+            "paper_synthetic: Section 5.1 setup (OLS vs BAYES, 4 scenarios, 10 trials); "
+            "robot: full robot demo"
+        ),
+    )
+    parser.add_argument("--seed", type=int, default=SEED, help="Random seed for reproducibility")
+    parser.add_argument("--max-iter", type=int, default=MAX_ITER)
+    parser.add_argument("--tol", type=float, default=TOL)
     parser.add_argument("--quiet", action="store_true", help="Reduce solver logs")
     parser.add_argument("--no-physical", action="store_true", help="Disable physical consistency projection")
+    # Section 5.1 specific options
+    parser.add_argument("--input-snr", type=float, default=INPUT_SNR,
+                        help=f"Input SNR for paper_synthetic demo (default {INPUT_SNR})")
+    parser.add_argument("--output-snr", type=float, default=OUTPUT_SNR,
+                        help=f"Output SNR for paper_synthetic demo (default {OUTPUT_SNR})")
+    parser.add_argument("--n-trials", type=int, default=N_TRIALS,
+                        help=f"Number of trials to average for paper_synthetic demo (default {N_TRIALS})")
+    parser.add_argument("--n-train", type=int, default=N_TRAIN,
+                        help=f"Training samples per trial for paper_synthetic demo (default {N_TRAIN})")
+    parser.add_argument("--n-test", type=int, default=N_TEST,
+                        help=f"Test samples per trial for paper_synthetic demo (default {N_TEST})")
     args = parser.parse_args()
+
+    if args.demo == "paper_synthetic":
+        run_synthetic_demo_paper(
+            seed=args.seed,
+            input_snr=args.input_snr,
+            output_snr=args.output_snr,
+            n_trials=args.n_trials,
+            n_train=args.n_train,
+            n_test=args.n_test,
+            max_iter=args.max_iter,
+            tol=args.tol,
+            verbose=not args.quiet,
+        )
+        return
 
     if args.demo == "synthetic":
         run_synthetic_demo(
             seed=args.seed,
-            apply_physical= False,
+            apply_physical=False,
             max_iter=args.max_iter,
             tol=args.tol,
             verbose=not args.quiet,
