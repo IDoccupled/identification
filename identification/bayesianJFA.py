@@ -60,15 +60,11 @@ class VariationalBayesianJFA:
 
     def __init__(
         self,
-        max_iter=100000,
-        tol=1e-5,
         alpha_a0=1e-6,
         alpha_b0=1e-6,
         eps=1e-10,
         verbose=True,
     ):
-        self.max_iter = int(max_iter)
-        self.tol = float(tol)
         self.alpha_a0 = float(alpha_a0)
         self.alpha_b0 = float(alpha_b0)
         self.eps = float(eps)
@@ -96,6 +92,9 @@ class VariationalBayesianJFA:
         psi_x_init=None,
         psi_z_init=None,
         psi_y_init=None,
+        max_iter=100000,
+        tol=1e-5,
+        cal_beta = False
     ):
         X = np.asarray(X, dtype=float)
         Y = np.asarray(Y, dtype=float).reshape(-1)
@@ -108,6 +107,9 @@ class VariationalBayesianJFA:
 
         N, d = X.shape
         self.d = d
+
+        self.max_iter = int(max_iter)
+        self.tol = float(tol)
 
         # Mild data-driven warm start. It improves numerical stability while
         # keeping the variational updates unchanged.
@@ -209,14 +211,25 @@ class VariationalBayesianJFA:
             self.psi_z = np.maximum(self.psi_z, self.eps)
             self.psi_y = float(max(self.psi_y, self.eps))
 
-            beta_now = self.get_beta_true()
-            if prev_beta is not None:
-                if np.max(np.abs(beta_now - prev_beta)) < self.tol:
-                    self.n_iter_ = it + 1
-                    if self.verbose:
-                        print(f"VB-EM converged at iteration {it}")
-                    break
-            prev_beta = beta_now
+            if cal_beta:
+                beta_now = self.get_beta_true()
+                if prev_beta is not None:
+                    if np.max(np.abs(beta_now - prev_beta)) < self.tol:
+                        self.n_iter_ = it + 1
+                        if self.verbose:
+                            print(f"VB-EM converged at iteration {it}")
+                        break
+                prev_beta = beta_now
+            else:
+                # Lightweight convergence: track alpha_b changes (ARD weights)
+                # instead of expensive get_beta_true().
+                if prev_beta is not None:
+                    if np.max(np.abs(self.alpha_b - prev_beta)) < self.tol:
+                        self.n_iter_ = it + 1
+                        if self.verbose:
+                            print(f"VB-EM converged (alpha) at iteration {it}")
+                        break
+                prev_beta = self.alpha_b.copy()
         else:
             self.n_iter_ = self.max_iter
             if self.verbose:
@@ -250,6 +263,31 @@ class VariationalBayesianJFA:
 
         beta_true = factor @ Psi_z_inv @ W_z.T @ W_x_inv
         return beta_true.flatten()
+
+    def get_alpha_mean(self):
+        """Return E[alpha_j] = alpha_a_j / alpha_b_j for each input dimension."""
+        if self.d is None:
+            raise RuntimeError("Model is not initialized")
+        return self.alpha_a / np.maximum(self.alpha_b, self.eps)
+
+    def get_active_mask(self, threshold=100.0):
+        """
+        Return a boolean mask: True for dimensions whose ARD alpha is below
+        *threshold*, meaning the parameter is "activated" (not pruned).
+
+        Typical regime:
+          - E[alpha_j] < 1e2  → strongly activated (identifiable)
+          - E[alpha_j] > 1e3 → pruned (not identifiable)
+          - 1e2~1e3          → intermediate (may be weakly excited)
+        """
+        if self.d is None:
+            raise RuntimeError("Model is not initialized")
+        alpha_mean = self.get_alpha_mean()
+        return alpha_mean < threshold
+
+    def count_small_alphas(self, threshold=100.0):
+        """Return the integer count of activated (non-pruned) dimensions."""
+        return int(np.sum(self.get_active_mask(threshold)))
 
     def get_theta_ratio(self):
         return self.w_z_mean / (self.w_x_mean + self.eps)
@@ -504,8 +542,8 @@ def run_synthetic_demo(
 
     theta_ols = np.linalg.lstsq(X_noisy, Y_noisy, rcond=None)[0]
 
-    model = VariationalBayesianJFA(max_iter=max_iter, tol=tol, verbose=verbose)
-    model.fit(X_noisy, Y_noisy)
+    model = VariationalBayesianJFA(verbose=verbose)
+    model.fit(X_noisy, Y_noisy, cal_beta=True, max_iter=max_iter, tol=tol)
     theta_bayes = model.get_beta_true()
 
     theta_phys = theta_bayes.copy()
@@ -561,6 +599,7 @@ def run_synthetic_demo_paper(
     Metric: nMSE = mean((y_pred - y_true)^2) / mean(y_true^2) on clean test data.
     Comparison: OLS vs Bayesian VB-JFA (no physical projection needed for synthetic).
     """
+    print("\nRunning Section 5.1 synthetic evaluation...")
     n_relevant = 10
     n_total = 100
     scenarios = [(90, 0), (0, 90), (30, 60), (60, 30)]
@@ -625,8 +664,8 @@ def run_synthetic_demo_paper(
             beta_ols = np.linalg.lstsq(X_train, Y_noisy_train, rcond=None)[0]
 
             # --- Bayesian VB-JFA ---
-            model = VariationalBayesianJFA(max_iter=max_iter, tol=tol, verbose=verbose)
-            model.fit(X_train, Y_noisy_train)
+            model = VariationalBayesianJFA(verbose=verbose)
+            model.fit(X_train, Y_noisy_train, cal_beta=True, max_iter=max_iter, tol=tol)
             beta_bayes = model.get_beta_true()
 
             # --- nMSE on noiseless test data ---
