@@ -27,7 +27,7 @@ class FourierTrajectory:
         """
         Generate joint trajectories (q, v, a) from Fourier coefficients.
 
-        :param coeffs: Flattened array of shape (dim * n_harmonics * 2,) containing [A1_1, B1_1, A2_1, B2_1, ..., A_N_1, B_N_1, q_1, t_1,
+        :param coeffs: Flattened array of shape (dim * (n_harmonics * 2 + 2 ),) containing [A1_1, B1_1, A2_1, B2_1, ..., A_N_1, B_N_1, q_1, t_1,
                                                                                  A1_2, B1_2, A2_2, B2_2, ..., A_N_2, B_N_2, q_2, t_2,
                                                                                  ...] for each joint.
         :return: Tuple of (q_traj, v_traj, a_traj), each of shape (len(t_array), dim)
