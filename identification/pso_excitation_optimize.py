@@ -5,6 +5,7 @@ from identification.target_limb_regressor import TargetLimbRegressor
 from identification.bayesianJFA import VariationalBayesianJFA
 
 from sko.PSO import PSO
+from sko.tools import set_run_mode
 from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 
@@ -51,17 +52,17 @@ RANK_ABS_TOL = 1e-10
 # ==============================
 # PSO parameters
 # ==============================
-POP_SIZE = 10
+POP_SIZE = 100
 MAX_ITER = 600
 PSO_W    = 0.7
 PSO_C1   = 1.5
 PSO_C2   = 1.5
 
 # Normalized penalty weights
-PENALTY_W_Q = 2.0
-PENALTY_W_V = 1.0
-PENALTY_W_TAU = 2.0
-PENALTY_W_MAX = 5.0
+PENALTY_W_Q = 20
+PENALTY_W_V = 10
+PENALTY_W_TAU = 20
+PENALTY_W_MAX = 50
 
 # Progressive penalty schedule: lambda(k) = lambda0 * (1 + alpha * progress)
 PENALTY_LAMBDA0 = 400.0
@@ -75,56 +76,149 @@ TAU_LIMIT_BUFFER = 0.1
 RNG_SEED = 114
 
 
-class PSOFourierTrajectory(FourierTrajectory):
-    def __init__(self, regressor=None, plot_trajectory=False):
-        super().__init__(regressor=regressor, plot_trajectory=plot_trajectory)
-        self._reset_iter_log_state()
+class PSOoptimizer:
+    def __init__(
+            self, 
+            fourier_traj: FourierTrajectory, 
+            regressor: TargetLimbRegressor,
+            jfa: VariationalBayesianJFA
+            ):
+        self.fourier_traj = fourier_traj
+        self.regressor = regressor
+        self.jfa = jfa
 
-    def _reset_iter_log_state(self):
-        self._iter_eval_counter = 0
-        self._iter_best_objective = np.inf
-        self._iter_best_info = np.nan
-        self._iter_best_info_eff = np.nan
-        self._iter_best_penalty = np.nan
-        self._iter_best_weighted_penalty = np.nan
-        self._iter_best_max_violation = np.nan
-        self._iter_best_rank = -1
-        self._iter_best_sval_count = 0
-        self._iter_best_sigma_r = np.nan
-        self._iter_best_kappa_eff = np.nan
-        self._iter_best_q_over_max = np.nan
-        self._iter_best_v_over_max = np.nan
-        self._iter_best_tau_over_max = np.nan
+        self.d = self.fourier_traj.dim * 12 # input dimension (12 * dof)
+        self.N = len(self.fourier_traj.t_array) # sample number
+        self.nq = self.regressor.dof
 
-    def _effective_identifiability_metrics(self, svals):
-        sigma_max = float(svals[0])
-        rank_tol = max(RANK_ABS_TOL, RANK_REL_TOL * sigma_max)
-        rank = int(np.sum(svals > rank_tol))
-        if rank > 0:
-            sigma_r = float(svals[rank - 1])
-            kappa_eff = np.inf if sigma_r <= 1e-12 else sigma_max / sigma_r
-            info_eff = float(np.sum(np.log(svals[:rank] ** 2 + REG_EPS)))
-        else:
-            sigma_r = 0.0
-            kappa_eff = np.inf
-            info_eff = float("-inf")
-        return rank, sigma_r, kappa_eff, info_eff
+        print(f'd={self.d}, N={self.N}, nq={self.nq}')
 
-    def _compute_cost(self, Y_aug, q_excess_normalized, v_excess_normalized, tau_excess_normalized) -> float:
-        pass
+        self.lb, self.ub = self._build_bounds()
+
+        np.random.seed(RNG_SEED)
+
+    def _build_bounds(self):
+        dim, harmonics = self.fourier_traj.dim, self.fourier_traj.n_harmonics
+        omega_f = self.fourier_traj.omega_f
+        n_coeffs_per_joint = harmonics * 2 + 2
+        total_coeffs = dim * n_coeffs_per_joint
+        lb = np.zeros(total_coeffs)
+        ub = np.zeros(total_coeffs)
+        for i in range(dim):
+            q_lo = self.regressor.q_lower_limit[i] + Q_LIMIT_BUFFER
+            q_hi = self.regressor.q_upper_limit[i] - Q_LIMIT_BUFFER
+            q_range = (q_hi - q_lo) / 2.0  # half-range for amplitude safety
+            # Amplitude bounds: scale by w_k because trajectory uses a_k/w_k, b_k/w_k
+            # Conservative: each harmonic gets 1/(2*N) of the half-range
+            for k in range(harmonics):
+                wk = omega_f * (k + 1)
+                amp_bound = wk * q_range / (2.0 * harmonics)
+                idx_a = i * n_coeffs_per_joint + k * 2
+                idx_b = i * n_coeffs_per_joint + k * 2 + 1
+                lb[idx_a] = -amp_bound
+                ub[idx_a] =  amp_bound
+                lb[idx_b] = -amp_bound
+                ub[idx_b] =  amp_bound
+            # q0 bounds: center of joint range
+            q_center = (self.regressor.q_lower_limit[i] + self.regressor.q_upper_limit[i]) / 2.0
+            lb[i * n_coeffs_per_joint + harmonics * 2] = q_center - q_range * 0.3
+            ub[i * n_coeffs_per_joint + harmonics * 2] = q_center + q_range * 0.3
+            # t0 bounds
+            lb[i * n_coeffs_per_joint + harmonics * 2 + 1] = 0.0
+            ub[i * n_coeffs_per_joint + harmonics * 2 + 1] = 1e-5
+        return lb, ub
+
+    def _compute_cost(self, X, Y) -> float:
+        """Evaluate excitation quality: higher = more inertial params activated."""
+        # Y_list is a list of (N, d) regressor matrices, one per sample
+        n_active = 0
+        n_weakly_activated = 0
+
+        for x, y in zip(X, Y):
+            self.jfa.fit(x, y, cal_beta=False, tol=1e-5)
+            n_active += self.jfa.count_small_alphas(threshold=100.0)
+            n_weakly_activated += self.jfa.count_small_alphas(threshold=1e4)
+
+        print(f"Active params: {n_active}, Weakly activated params: {n_weakly_activated}")
+            
+        return -float(n_active)
 
     def fitness_function(self, coeffs: np.ndarray) -> float:
-        q_traj, v_traj, a_traj = self.generate_trajectory(coeffs)
+        q_traj, v_traj, a_traj = self.fourier_traj.generate_trajectory(coeffs)
+        xim_list = [np.empty((0, self.d)) for _ in range(self.nq)]
+        yi_list = [np.empty((0,)) for _ in range(self.nq)]
         total_cost = 0.0
-        for t in range(len(self.t_array)):
-            (Y_aug, tau_aug,
-             q_excess, v_excess, tau_excess,
-             q_excess_normalized, v_excess_normalized, tau_excess_normalized) = self.regressor.compute_regressor(
+        collision_count = 0
+        collision_penalty = 0.0
+        for t in range(self.N):
+            (Y_aug, tau_aug, 
+             pi_aug, pi_inertia, pi_friction,
+             q_excess, v_excess, tau_excess, 
+             q_excess_normalized, v_excess_normalized, tau_excess_normalized,
+             collided) = self.regressor.compute_regressor(
                 q=q_traj[:, t],
                 v=v_traj[:, t],
                 a=a_traj[:, t],
-                print_info=False
             )
-            cost = self._compute_cost(Y_aug, q_excess_normalized, v_excess_normalized, tau_excess_normalized)
-            total_cost += cost
-        return total_cost / len(self.t_array)
+            if collided:
+                # Continuous collision penalty: accumulate based on normalized excess,
+                # so PSO can differentiate "mild" from "severe" collisions
+                collision_count += 1
+                collision_penalty += sum([
+                    PENALTY_W_MAX * q_excess_normalized,
+                    PENALTY_W_MAX * v_excess_normalized,
+                    PENALTY_W_MAX * tau_excess_normalized
+                ])
+                # Still skip regressor data for collided timesteps
+                continue
+            if q_excess_normalized or v_excess_normalized or tau_excess_normalized:
+                cost = sum([
+                    PENALTY_W_Q * q_excess_normalized,
+                    PENALTY_W_V * v_excess_normalized,
+                    PENALTY_W_TAU * tau_excess_normalized
+                ])
+                total_cost += cost
+            for i, yi in enumerate(Y_aug):
+                xim_list[i] = np.vstack((xim_list[i], yi))
+                yi_list[i] = np.hstack((yi_list[i], tau_aug[i]))
+        # Add collision penalty scaled by count (makes all-collision trajectories worse)
+        total_cost += collision_penalty + collision_count * PENALTY_W_MAX
+        cost = self._compute_cost(xim_list, yi_list)
+        total_cost += cost
+        print(total_cost)
+        return total_cost
+    
+def main():
+    regressor = TargetLimbRegressor(
+        urdf_path=URDF_PATH,
+        group_to_identify='left_arm',
+        print_info=True
+    )
+    fourier_traj = FourierTrajectory(dim=regressor.dof)
+    jfa = VariationalBayesianJFA(verbose=False)
+    optimizer = PSOoptimizer(fourier_traj, regressor, jfa)
+
+    # Wrap fitness function to enable parallel evaluation via multithreading.
+    # (multiprocessing would require pickling the optimizer, which may fail with
+    #  C++ bound objects; multithreading works because numpy/C++ code releases the GIL.)
+    def fitness_wrapper(x):
+        return optimizer.fitness_function(x)
+
+    set_run_mode(fitness_wrapper, 'multithreading')
+
+    pso = PSO(
+        func=fitness_wrapper,
+        dim=fourier_traj.dim * (fourier_traj.n_harmonics * 2 + 2),
+        pop=POP_SIZE,
+        max_iter=MAX_ITER,
+        w=PSO_W,
+        c1=PSO_C1,
+        c2=PSO_C2,
+        lb=optimizer.lb,
+        ub=optimizer.ub,
+        verbose=True
+    )
+    pso.run()
+
+if __name__ == "__main__":    
+    main()
