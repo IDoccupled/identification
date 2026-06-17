@@ -53,7 +53,7 @@ RANK_ABS_TOL = 1e-10
 # PSO parameters
 # ==============================
 POP_SIZE = 100
-MAX_ITER = 600
+MAX_ITER = 500
 PSO_W    = 0.7
 PSO_C1   = 1.5
 PSO_C2   = 1.5
@@ -63,6 +63,10 @@ PENALTY_W_Q = 20
 PENALTY_W_V = 10
 PENALTY_W_TAU = 20
 PENALTY_W_MAX = 50
+PENALTY_W_COLLISION = 1000
+
+REWARD_ACTIVE = 30.0
+REWARD_WEAKLY_ACTIVE = 20.0
 
 # Progressive penalty schedule: lambda(k) = lambda0 * (1 + alpha * progress)
 PENALTY_LAMBDA0 = 400.0
@@ -135,19 +139,20 @@ class PSOoptimizer:
         n_weakly_activated = 0
 
         for x, y in zip(X, Y):
-            self.jfa.fit(x, y, cal_beta=False, tol=1e-5)
+            self.jfa.fit(x, y, cal_beta=False, tol=1e-4)
             n_active += self.jfa.count_small_alphas(threshold=100.0)
             n_weakly_activated += self.jfa.count_small_alphas(threshold=1e4)
 
         print(f"Active params: {n_active}, Weakly activated params: {n_weakly_activated}")
             
-        return -float(n_active)
+        return -(REWARD_ACTIVE * n_active + REWARD_WEAKLY_ACTIVE * n_weakly_activated)
 
     def fitness_function(self, coeffs: np.ndarray) -> float:
         q_traj, v_traj, a_traj = self.fourier_traj.generate_trajectory(coeffs)
         xim_list = [np.empty((0, self.d)) for _ in range(self.nq)]
         yi_list = [np.empty((0,)) for _ in range(self.nq)]
         total_cost = 0.0
+        excitation_cost = 0.0
         collision_count = 0
         collision_penalty = 0.0
         for t in range(self.N):
@@ -177,15 +182,24 @@ class PSOoptimizer:
                     PENALTY_W_V * v_excess_normalized,
                     PENALTY_W_TAU * tau_excess_normalized
                 ])
+                excitation_cost += cost
                 total_cost += cost
             for i, yi in enumerate(Y_aug):
                 xim_list[i] = np.vstack((xim_list[i], yi))
                 yi_list[i] = np.hstack((yi_list[i], tau_aug[i]))
         # Add collision penalty scaled by count (makes all-collision trajectories worse)
-        total_cost += collision_penalty + collision_count * PENALTY_W_MAX
-        cost = self._compute_cost(xim_list, yi_list)
-        total_cost += cost
-        print(total_cost)
+        total_cost += collision_penalty + collision_count * PENALTY_W_COLLISION
+        if collision_count > 5:
+            print(f"Quit early due to excessive collisions {collision_count}/{self.N}. Cost:", total_cost)
+            print(f"coeffs: {coeffs}")
+            print("-" * 50)
+            return total_cost
+        compute_cost = self._compute_cost(xim_list, yi_list)
+        total_cost += compute_cost
+        print(f"Total cost: {total_cost} \n "
+              f"Collision penalty: {collision_penalty}, Collision count: {collision_count}, Excitation cost: {excitation_cost}, Compute cost: {compute_cost}")
+        print(f"coeffs: {coeffs}")
+        print("-" * 50)
         return total_cost
     
 def main():
