@@ -13,11 +13,20 @@ SAMPLE_RATE = 50.0
 
 
 class FourierTrajectory:
-    def __init__(self, dim: int):
+    def __init__(
+        self,
+        dim: int,
+        traj_period=TRAJ_PERIOD,
+        sample_rate=SAMPLE_RATE,
+        repeat: int = 1,
+    ):
 
-        self.omega_f = 2.0 * np.pi / TRAJ_PERIOD
+        self.omega_f = 2.0 * np.pi / traj_period
         self.t_array = np.linspace(
-            0, TRAJ_PERIOD, int(TRAJ_PERIOD * SAMPLE_RATE), endpoint=False
+            0,
+            traj_period * repeat,
+            int(traj_period * sample_rate * repeat),
+            endpoint=False,
         )
         self.n_harmonics = N_HARMONICS
         self.dim = dim
@@ -55,7 +64,9 @@ class FourierTrajectory:
 
 def main():
     dim = 5
-    q_traj, v_traj, a_traj = FourierTrajectory(dim=dim).generate_trajectory(
+    q_traj, v_traj, a_traj = FourierTrajectory(
+        dim=dim, repeat=2, sample_rate=200
+    ).generate_trajectory(
         # coeffs=np.random.uniform(-1, 1, size=(dim * (N_HARMONICS * 2 + 2)))
         # coeffs=np.array([-1.39936563e-01,  1.04214623e-01, -3.49319970e-01,  1.28787086e-01,
         #                 -2.14211605e-01, -5.05406571e-01,  5.34326003e-01, -4.32654466e-01,
@@ -195,6 +206,7 @@ def main():
         plt.subplot(q_traj.shape[0], 1, i + 1)
         plt.plot(q_traj[i, :])
         plt.title(f"Joint {i}")
+        plt.grid()
     plt.tight_layout()
     plt.show()
 
