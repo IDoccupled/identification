@@ -22,13 +22,17 @@ N_TRIALS = 3
 N_TRAIN = 1000
 N_TEST = 1000
 
+
 def format_array(value, per_line=5):
     arr = np.asarray(value).ravel()
     if arr.size == 0:
         return "[]"
 
     formatted = [f"{float(x):.3f}" for x in arr]
-    groups = [", ".join(formatted[i : i + per_line]) for i in range(0, len(formatted), per_line)]
+    groups = [
+        ", ".join(formatted[i : i + per_line])
+        for i in range(0, len(formatted), per_line)
+    ]
     if len(groups) == 1:
         return "[" + groups[0] + "]"
     body = ",\n  ".join(groups)
@@ -94,7 +98,7 @@ class VariationalBayesianJFA:
         psi_y_init=None,
         max_iter=100000,
         tol=1e-5,
-        cal_beta = False
+        cal_beta=False,
     ):
         X = np.asarray(X, dtype=float)
         Y = np.asarray(Y, dtype=float).reshape(-1)
@@ -116,14 +120,20 @@ class VariationalBayesianJFA:
         theta_ols = np.linalg.lstsq(X, Y, rcond=None)[0]
 
         self.w_x_mean = self._as_vector(w_x_init, d, 1.0)
-        self.w_z_mean = theta_ols.copy() if w_z_init is None else self._as_vector(w_z_init, d, 1.0)
+        self.w_z_mean = (
+            theta_ols.copy() if w_z_init is None else self._as_vector(w_z_init, d, 1.0)
+        )
 
         default_psi_x = np.maximum(np.var(X, axis=0) * 0.1, 1e-3)
         default_psi_z = np.maximum(np.var(X, axis=0) * 0.1, 1e-3)
         default_psi_y = float(max(np.var(Y) * 0.1, 1e-3))
 
-        self.psi_x = default_psi_x if psi_x_init is None else self._as_vector(psi_x_init, d, 0.1)
-        self.psi_z = default_psi_z if psi_z_init is None else self._as_vector(psi_z_init, d, 0.1)
+        self.psi_x = (
+            default_psi_x if psi_x_init is None else self._as_vector(psi_x_init, d, 0.1)
+        )
+        self.psi_z = (
+            default_psi_z if psi_z_init is None else self._as_vector(psi_z_init, d, 0.1)
+        )
         self.psi_y = default_psi_y if psi_y_init is None else float(psi_y_init)
 
         self.w_x_var = np.ones(d, dtype=float) * 1e-2
@@ -167,13 +177,19 @@ class VariationalBayesianJFA:
             # Eq. (19), Eq. (20), Eq. (18)
             Sigma_zt = Sigma_zz @ Wz @ Psi_z_inv @ K_inv
             Sigma_tz = Sigma_zt.T
-            Sigma_tt = K_inv + K_inv @ Wz @ Psi_z_inv @ Sigma_zz @ Psi_z_inv @ Wz @ K_inv
+            Sigma_tt = (
+                K_inv + K_inv @ Wz @ Psi_z_inv @ Sigma_zz @ Psi_z_inv @ Wz @ K_inv
+            )
 
             # Eq. (23), Eq. (24)
             const_z_row = one @ Sigma_zz
             const_t_row = one @ Sigma_zz @ Wz @ Psi_z_inv @ K_inv
-            E_z = (Y[:, None] / psi_y_safe) * const_z_row[None, :] + X @ Wx @ Psi_x_inv @ Sigma_tz
-            E_t = (Y[:, None] / psi_y_safe) * const_t_row[None, :] + X @ Wx @ Psi_x_inv @ Sigma_tt
+            E_z = (Y[:, None] / psi_y_safe) * const_z_row[
+                None, :
+            ] + X @ Wx @ Psi_x_inv @ Sigma_tz
+            E_t = (Y[:, None] / psi_y_safe) * const_t_row[
+                None, :
+            ] + X @ Wx @ Psi_x_inv @ Sigma_tt
 
             diag_Sigma_tt = np.diag(Sigma_tt)
             diag_Sigma_zz = np.diag(Sigma_zz)
@@ -205,7 +221,9 @@ class VariationalBayesianJFA:
             # Eq. (14)
             sum_ez = np.sum(E_z, axis=1)
             szz_scalar = float(one @ Sigma_zz @ one)
-            self.psi_y = float(np.mean(Y**2 - 2.0 * Y * sum_ez + szz_scalar + sum_ez**2))
+            self.psi_y = float(
+                np.mean(Y**2 - 2.0 * Y * sum_ez + szz_scalar + sum_ez**2)
+            )
 
             self.psi_x = np.maximum(self.psi_x, self.eps)
             self.psi_z = np.maximum(self.psi_z, self.eps)
@@ -515,23 +533,43 @@ class RBDPhysicalConsistencyProjector:
 
 
 def run_synthetic_demo(
-        seed=SEED, 
-        apply_physical=APPLY_PHYSICAL, 
-        max_iter=MAX_ITER, 
-        tol=TOL, 
-        verbose=VERBOSE):
-    
+    seed=SEED,
+    apply_physical=APPLY_PHYSICAL,
+    max_iter=MAX_ITER,
+    tol=TOL,
+    verbose=VERBOSE,
+):
+
     np.random.seed(seed)
     N = 10000
     d = 15
 
     T_clean = np.random.normal(0.0, 1.0, (N, d))
     theta_true = np.array(
-        [2.5, -1.2, 4.0, 3.0, -2.0, 1.5, -0.5, 2.0, 1.0, -1.0, 0.5, -0.8, 1.2, 0.9, -1.1],
+        [
+            2.5,
+            -1.2,
+            4.0,
+            3.0,
+            -2.0,
+            1.5,
+            -0.5,
+            2.0,
+            1.0,
+            -1.0,
+            0.5,
+            -0.8,
+            1.2,
+            0.9,
+            -1.1,
+        ],
         dtype=float,
     )
 
-    w_x_true = np.array([2.0, 1.5, 5.0, 3.0, 2.5, 1.0, 0.5, 4.0, 3.5, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=float)
+    w_x_true = np.array(
+        [2.0, 1.5, 5.0, 3.0, 2.5, 1.0, 0.5, 4.0, 3.5, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        dtype=float,
+    )
     w_z_true = theta_true * w_x_true
 
     X_clean = T_clean * w_x_true
@@ -562,8 +600,12 @@ def run_synthetic_demo(
     else:
         print(f"Physical projection reason: {phys_info.get('reason', 'n/a')}")
 
-    print(f"OLS safe relative error (%):\n{format_array(safe_percent_error(theta_ols, theta_true))}")
-    print(f"VB-JFA safe relative error (%):\n{format_array(safe_percent_error(theta_bayes, theta_true))}")
+    print(
+        f"OLS safe relative error (%):\n{format_array(safe_percent_error(theta_ols, theta_true))}"
+    )
+    print(
+        f"VB-JFA safe relative error (%):\n{format_array(safe_percent_error(theta_bayes, theta_true))}"
+    )
 
     rmse_ols = float(np.sqrt(np.mean((Y_noisy - X_noisy @ theta_ols) ** 2)))
     rmse_bayes = float(np.sqrt(np.mean((Y_noisy - X_noisy @ theta_bayes) ** 2)))
@@ -608,7 +650,9 @@ def run_synthetic_demo_paper(
     results = {}
 
     for r, u in scenarios:
-        assert n_relevant + r + u == n_total, f"r={r} u={u} does not sum to {n_total - n_relevant}"
+        assert n_relevant + r + u == n_total, (
+            f"r={r} u={u} does not sum to {n_total - n_relevant}"
+        )
         nmse_ols_trials = []
         nmse_bayes_trials = []
 
@@ -620,22 +664,29 @@ def run_synthetic_demo_paper(
             cov = A @ A.T / n_relevant + np.eye(n_relevant) * 0.1
 
             # --- clean relevant inputs ---
-            T_rel_train = rng.multivariate_normal(np.zeros(n_relevant), cov, size=n_train)
-            T_rel_test  = rng.multivariate_normal(np.zeros(n_relevant), cov, size=n_test)
+            T_rel_train = rng.multivariate_normal(
+                np.zeros(n_relevant), cov, size=n_train
+            )
+            T_rel_test = rng.multivariate_normal(np.zeros(n_relevant), cov, size=n_test)
 
             # --- clean outputs ---
             Y_clean_train = T_rel_train @ beta_true_rel
-            Y_clean_test  = T_rel_test  @ beta_true_rel
+            Y_clean_test = T_rel_test @ beta_true_rel
 
             # --- add input noise to the 10 relevant training dimensions ---
             per_dim_var = np.var(T_rel_train, axis=0)
             input_noise_std = np.sqrt(per_dim_var / float(input_snr))
-            X_rel_train = T_rel_train + rng.standard_normal((n_train, n_relevant)) * input_noise_std
-            X_rel_test  = T_rel_test.copy()  # noiseless test
+            X_rel_train = (
+                T_rel_train
+                + rng.standard_normal((n_train, n_relevant)) * input_noise_std
+            )
+            X_rel_test = T_rel_test.copy()  # noiseless test
 
             # --- add output noise ---
             output_noise_std = np.sqrt(float(np.var(Y_clean_train)) / float(output_snr))
-            Y_noisy_train = Y_clean_train + rng.standard_normal(n_train) * output_noise_std
+            Y_noisy_train = (
+                Y_clean_train + rng.standard_normal(n_train) * output_noise_std
+            )
             Y_test = Y_clean_test.copy()  # noiseless test
 
             # --- redundant dimensions: convex combos of the 10 noisy relevant dims ---
@@ -643,22 +694,22 @@ def run_synthetic_demo_paper(
                 weights = rng.uniform(0.0, 1.0, size=(r, n_relevant))
                 weights /= weights.sum(axis=1, keepdims=True)
                 X_red_train = X_rel_train @ weights.T  # (n_train, r)
-                X_red_test  = X_rel_test  @ weights.T
+                X_red_test = X_rel_test @ weights.T
             else:
                 X_red_train = np.empty((n_train, 0))
-                X_red_test  = np.empty((n_test,  0))
+                X_red_test = np.empty((n_test, 0))
 
             # --- irrelevant dimensions ---
             if u > 0:
                 X_irr_train = rng.standard_normal((n_train, u))
-                X_irr_test  = rng.standard_normal((n_test,  u))
+                X_irr_test = rng.standard_normal((n_test, u))
             else:
                 X_irr_train = np.empty((n_train, 0))
-                X_irr_test  = np.empty((n_test,  0))
+                X_irr_test = np.empty((n_test, 0))
 
             # --- assemble full 100-dim matrices ---
             X_train = np.hstack([X_rel_train, X_red_train, X_irr_train])
-            X_test  = np.hstack([X_rel_test,  X_red_test,  X_irr_test ])
+            X_test = np.hstack([X_rel_test, X_red_test, X_irr_test])
 
             # --- OLS ---
             beta_ols = np.linalg.lstsq(X_train, Y_noisy_train, rcond=None)[0]
@@ -669,9 +720,9 @@ def run_synthetic_demo_paper(
             beta_bayes = model.get_beta_true()
 
             # --- nMSE on noiseless test data ---
-            denom = float(np.mean(Y_test ** 2))
+            denom = float(np.mean(Y_test**2))
             denom = max(denom, 1e-12)
-            nmse_ols   = float(np.mean((X_test @ beta_ols   - Y_test) ** 2)) / denom
+            nmse_ols = float(np.mean((X_test @ beta_ols - Y_test) ** 2)) / denom
             nmse_bayes = float(np.mean((X_test @ beta_bayes - Y_test) ** 2)) / denom
 
             nmse_ols_trials.append(nmse_ols)
@@ -679,13 +730,16 @@ def run_synthetic_demo_paper(
 
             if verbose:
                 print(
-                    f"  [{r=:2d},{u=:2d}] trial {trial+1:2d}/{n_trials}  "
+                    f"  [{r=:2d},{u=:2d}] trial {trial + 1:2d}/{n_trials}  "
                     f"nMSE_OLS={nmse_ols:.4f}  nMSE_BAYES={nmse_bayes:.4f}"
                 )
 
         results[(r, u)] = {
-            "ols":   (float(np.mean(nmse_ols_trials)),   float(np.std(nmse_ols_trials))),
-            "bayes": (float(np.mean(nmse_bayes_trials)), float(np.std(nmse_bayes_trials))),
+            "ols": (float(np.mean(nmse_ols_trials)), float(np.std(nmse_ols_trials))),
+            "bayes": (
+                float(np.mean(nmse_bayes_trials)),
+                float(np.std(nmse_bayes_trials)),
+            ),
         }
 
     # ------------------------------------------------------------------
@@ -693,16 +747,20 @@ def run_synthetic_demo_paper(
     # ------------------------------------------------------------------
     sep = "=" * 72
     print("\n" + sep)
-    print(f"  Section 5.1 — Synthetic Evaluation")
-    print(f"  input SNR={input_snr:.0f}, output SNR={output_snr:.0f}, "
-          f"n_train={n_train}, n_test={n_test}, n_trials={n_trials}")
+    print("  Section 5.1 — Synthetic Evaluation")
+    print(
+        f"  input SNR={input_snr:.0f}, output SNR={output_snr:.0f}, "
+        f"n_train={n_train}, n_test={n_test}, n_trials={n_trials}"
+    )
     print(sep)
-    print(f"  {'Scenario':>14}  {'OLS nMSE':>20}  {'BAYES nMSE':>20}  {'Improvement':>12}")
+    print(
+        f"  {'Scenario':>14}  {'OLS nMSE':>20}  {'BAYES nMSE':>20}  {'Improvement':>12}"
+    )
     print("-" * 72)
     for r, u in scenarios:
         v = results[(r, u)]
-        ols_m,   ols_s   = v["ols"]
-        bay_m,   bay_s   = v["bayes"]
+        ols_m, ols_s = v["ols"]
+        bay_m, bay_s = v["bayes"]
         improvement = (ols_m - bay_m) / max(bay_m, 1e-12) * 100.0
         label = f"r={r:2d}, u={u:2d}"
         print(
@@ -713,7 +771,9 @@ def run_synthetic_demo_paper(
     return results
 
 
-def run_robot_demo(seed=42, apply_physical=True, max_iter=100000, tol=1e-5, verbose=True):
+def run_robot_demo(
+    seed=42, apply_physical=True, max_iter=100000, tol=1e-5, verbose=True
+):
     if FourierTrajectory is None or TargetLimbRegressor is None:
         raise RuntimeError("Robot modules are unavailable in current environment")
 
@@ -725,7 +785,9 @@ def run_robot_demo(seed=42, apply_physical=True, max_iter=100000, tol=1e-5, verb
     start = time.time()
 
     q, v, a = fourier_traj.generate_trajectory(
-        coeffs=np.random.uniform(-1.0, 1.0, size=(regressor.dof * (n_harmonics * 2 + 2)))
+        coeffs=np.random.uniform(
+            -1.0, 1.0, size=(regressor.dof * (n_harmonics * 2 + 2))
+        )
     )
 
     X_true = np.empty((0, regressor.dof * 12), dtype=float)
@@ -786,7 +848,9 @@ def run_robot_demo(seed=42, apply_physical=True, max_iter=100000, tol=1e-5, verb
 
     rmse_ols = float(np.sqrt(np.mean((Y_noisy - X_noisy @ theta_ols) ** 2)))
     rmse_bayes = float(np.sqrt(np.mean((Y_noisy - X_noisy @ theta_bayes) ** 2)))
-    rmse_bayes_phys = float(np.sqrt(np.mean((Y_noisy - X_noisy @ theta_bayes_phys) ** 2)))
+    rmse_bayes_phys = float(
+        np.sqrt(np.mean((Y_noisy - X_noisy @ theta_bayes_phys) ** 2))
+    )
 
     print("================ Robot Identification =================")
     print(f"X_true shape: {X_true.shape}")
@@ -800,8 +864,12 @@ def run_robot_demo(seed=42, apply_physical=True, max_iter=100000, tol=1e-5, verb
     print(f"P@theta_bayes:\n{format_array(theta_bayes_ident)}")
     print(f"P@theta_bayes_phys:\n{format_array(theta_bayes_phys_ident)}")
 
-    print(f"OLS safe relative error (%):\n{format_array(safe_percent_error(theta_ols_ident, theta_true_ident))}")
-    print(f"VB-JFA safe relative error (%):\n{format_array(safe_percent_error(theta_bayes_ident, theta_true_ident))}")
+    print(
+        f"OLS safe relative error (%):\n{format_array(safe_percent_error(theta_ols_ident, theta_true_ident))}"
+    )
+    print(
+        f"VB-JFA safe relative error (%):\n{format_array(safe_percent_error(theta_bayes_ident, theta_true_ident))}"
+    )
     print(
         "VB-JFA + physical safe relative error (%):\n"
         f"{format_array(safe_percent_error(theta_bayes_phys_ident, theta_true_ident))}"
@@ -838,22 +906,48 @@ def main():
             "robot: full robot demo"
         ),
     )
-    parser.add_argument("--seed", type=int, default=SEED, help="Random seed for reproducibility")
+    parser.add_argument(
+        "--seed", type=int, default=SEED, help="Random seed for reproducibility"
+    )
     parser.add_argument("--max-iter", type=int, default=MAX_ITER)
     parser.add_argument("--tol", type=float, default=TOL)
     parser.add_argument("--quiet", action="store_true", help="Reduce solver logs")
-    parser.add_argument("--no-physical", action="store_true", help="Disable physical consistency projection")
+    parser.add_argument(
+        "--no-physical",
+        action="store_true",
+        help="Disable physical consistency projection",
+    )
     # Section 5.1 specific options
-    parser.add_argument("--input-snr", type=float, default=INPUT_SNR,
-                        help=f"Input SNR for paper_synthetic demo (default {INPUT_SNR})")
-    parser.add_argument("--output-snr", type=float, default=OUTPUT_SNR,
-                        help=f"Output SNR for paper_synthetic demo (default {OUTPUT_SNR})")
-    parser.add_argument("--n-trials", type=int, default=N_TRIALS,
-                        help=f"Number of trials to average for paper_synthetic demo (default {N_TRIALS})")
-    parser.add_argument("--n-train", type=int, default=N_TRAIN,
-                        help=f"Training samples per trial for paper_synthetic demo (default {N_TRAIN})")
-    parser.add_argument("--n-test", type=int, default=N_TEST,
-                        help=f"Test samples per trial for paper_synthetic demo (default {N_TEST})")
+    parser.add_argument(
+        "--input-snr",
+        type=float,
+        default=INPUT_SNR,
+        help=f"Input SNR for paper_synthetic demo (default {INPUT_SNR})",
+    )
+    parser.add_argument(
+        "--output-snr",
+        type=float,
+        default=OUTPUT_SNR,
+        help=f"Output SNR for paper_synthetic demo (default {OUTPUT_SNR})",
+    )
+    parser.add_argument(
+        "--n-trials",
+        type=int,
+        default=N_TRIALS,
+        help=f"Number of trials to average for paper_synthetic demo (default {N_TRIALS})",
+    )
+    parser.add_argument(
+        "--n-train",
+        type=int,
+        default=N_TRAIN,
+        help=f"Training samples per trial for paper_synthetic demo (default {N_TRAIN})",
+    )
+    parser.add_argument(
+        "--n-test",
+        type=int,
+        default=N_TEST,
+        help=f"Test samples per trial for paper_synthetic demo (default {N_TEST})",
+    )
     args = parser.parse_args()
 
     if args.demo == "paper_synthetic":

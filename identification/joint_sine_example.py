@@ -61,7 +61,9 @@ class JointSineExample(Node):
 
         self.num_joints = int(sine_cfg.get("num_joints", config.get("num_joints", 24)))
 
-        amplitude_cfg = _flatten_groups(sine_cfg.get("target_position", sine_cfg.get("amplitude")))
+        amplitude_cfg = _flatten_groups(
+            sine_cfg.get("target_position", sine_cfg.get("amplitude"))
+        )
         frequency_cfg = _flatten_groups(sine_cfg.get("frequency"))
         phase_cfg = _flatten_groups(sine_cfg.get("phase"))
         offset_cfg = _flatten_groups(sine_cfg.get("offset"))
@@ -71,11 +73,19 @@ class JointSineExample(Node):
         self.phase_list = _expand_or_default(phase_cfg, self.num_joints, 0.0)
         self.offset_list = _expand_or_default(offset_cfg, self.num_joints, 0.0)
 
-        self.amplitude_list = _require_list("sine.target_position", self.amplitude_list, self.num_joints)
-        self.frequency_list = _require_list("sine.frequency", self.frequency_list, self.num_joints)
+        self.amplitude_list = _require_list(
+            "sine.target_position", self.amplitude_list, self.num_joints
+        )
+        self.frequency_list = _require_list(
+            "sine.frequency", self.frequency_list, self.num_joints
+        )
         self.phase_list = _require_list("sine.phase", self.phase_list, self.num_joints)
-        self.offset_list = _require_list("sine.offset", self.offset_list, self.num_joints)
-        self.amplitude_list = _to_float_list("sine.target_position", self.amplitude_list)
+        self.offset_list = _require_list(
+            "sine.offset", self.offset_list, self.num_joints
+        )
+        self.amplitude_list = _to_float_list(
+            "sine.target_position", self.amplitude_list
+        )
         self.frequency_list = _to_float_list("sine.frequency", self.frequency_list)
         self.phase_list = _to_float_list("sine.phase", self.phase_list)
         self.offset_list = _to_float_list("sine.offset", self.offset_list)
@@ -99,7 +109,9 @@ class JointSineExample(Node):
         self.kp_list = _to_float_list("kp", self.kp_list)
         self.kd_list = _to_float_list("kd", self.kd_list)
 
-        command_topic = sine_cfg.get("command_topic", config.get("command_topic", "/hardware/joint_command"))
+        command_topic = sine_cfg.get(
+            "command_topic", config.get("command_topic", "/hardware/joint_command")
+        )
         self.pub = self.create_publisher(JointCommand, command_topic, 10)
 
         qos = QoSProfile(depth=3)
@@ -114,28 +126,39 @@ class JointSineExample(Node):
 
         self.start_time = self.get_clock().now()
 
-        publish_rate = float(sine_cfg.get("publish_rate", config.get("publish_rate", 500.0)))
+        publish_rate = float(
+            sine_cfg.get("publish_rate", config.get("publish_rate", 500.0))
+        )
         self.timer = self.create_timer(1.0 / publish_rate, self.timer_callback)
-        self.get_logger().info(f"Publishing sine on all {self.num_joints} joints from YAML")
+        self.get_logger().info(
+            f"Publishing sine on all {self.num_joints} joints from YAML"
+        )
 
     def joint_state_callback(self, msg: JointState):
         self.latest_joint_state = msg
         if self.initial_positions is None and len(msg.position) >= self.num_joints:
             self.initial_positions = [float(p) for p in msg.position[: self.num_joints]]
-            self.get_logger().info("Captured initial joint positions for smooth transition")
+            self.get_logger().info(
+                "Captured initial joint positions for smooth transition"
+            )
 
     def transition_weight(self, t: float) -> float:
         if not self.transition_enabled:
             return 1.0
         if t >= self.transition_settle_time:
             return 1.0
-        return 0.5 * (1.0 + math.tanh(self.transition_sharpness * (t - self.transition_center_time)))
+        return 0.5 * (
+            1.0
+            + math.tanh(self.transition_sharpness * (t - self.transition_center_time))
+        )
 
     def timer_callback(self):
         if self.initial_positions is None:
             now = self.get_clock().now()
             if (now - self.last_wait_log_time).nanoseconds > 1_000_000_000:
-                self.get_logger().info("Waiting for /hardware/joint_state to capture initial positions...")
+                self.get_logger().info(
+                    "Waiting for /hardware/joint_state to capture initial positions..."
+                )
                 self.last_wait_log_time = now
             return
 
@@ -158,7 +181,9 @@ class JointSineExample(Node):
             sine_target = self.offset_list[i] + self.amplitude_list[i] * math.sin(
                 2.0 * math.pi * self.frequency_list[i] * t + phase
             )
-            msg.position[i] = self.initial_positions[i] + w * (sine_target - self.initial_positions[i])
+            msg.position[i] = self.initial_positions[i] + w * (
+                sine_target - self.initial_positions[i]
+            )
 
         self.pub.publish(msg)
 
