@@ -9,26 +9,26 @@ from sko.tools import set_run_mode
 from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 
-LEFT_LEG_Q_INDICES  = [0, 1, 2, 3, 4, 5]
+LEFT_LEG_Q_INDICES = [0, 1, 2, 3, 4, 5]
 RIGHT_LEG_Q_INDICES = [6, 7, 8, 9, 10, 11]
-WAIST_Q_INDICES     = [12]
-LEFT_ARM_Q_INDICES  = [13, 14, 15, 16, 17]
+WAIST_Q_INDICES = [12]
+LEFT_ARM_Q_INDICES = [13, 14, 15, 16, 17]
 RIGHT_ARM_Q_INDICES = [18, 19, 20, 21, 22]
-NECK_Q_INDICES      = [23]
+NECK_Q_INDICES = [23]
 
 VALID_LIMB_GROUPS = {
-    'left_leg': LEFT_LEG_Q_INDICES,
-    'right_leg': RIGHT_LEG_Q_INDICES,
-    'left_arm': LEFT_ARM_Q_INDICES,
-    'right_arm': RIGHT_ARM_Q_INDICES,
-    'waist': WAIST_Q_INDICES,
-    'neck': NECK_Q_INDICES
+    "left_leg": LEFT_LEG_Q_INDICES,
+    "right_leg": RIGHT_LEG_Q_INDICES,
+    "left_arm": LEFT_ARM_Q_INDICES,
+    "right_arm": RIGHT_ARM_Q_INDICES,
+    "waist": WAIST_Q_INDICES,
+    "neck": NECK_Q_INDICES,
 }
 
-GROUP_TO_IDENTIFY = 'left_arm' 
+GROUP_TO_IDENTIFY = "left_arm"
 
 URDF_PATH = (
-    Path(get_package_share_directory('identification'))
+    Path(get_package_share_directory("identification"))
     / "resource"
     / "robot"
     / "urdf"
@@ -42,7 +42,7 @@ URDF_PATH = (
 # Series expansion parameters
 N_HARMONICS = 5
 TRAJ_PERIOD = 10.0
-SAMPLE_RATE   = 50.0
+SAMPLE_RATE = 50.0
 
 # Soft constraint parameters
 REG_EPS = 1e-6
@@ -54,9 +54,9 @@ RANK_ABS_TOL = 1e-10
 # ==============================
 POP_SIZE = 100
 MAX_ITER = 500
-PSO_W    = 0.7
-PSO_C1   = 1.5
-PSO_C2   = 1.5
+PSO_W = 0.7
+PSO_C1 = 1.5
+PSO_C2 = 1.5
 
 # Normalized penalty weights
 PENALTY_W_Q = 20
@@ -82,20 +82,20 @@ RNG_SEED = 114
 
 class PSOoptimizer:
     def __init__(
-            self, 
-            fourier_traj: FourierTrajectory, 
-            regressor: TargetLimbRegressor,
-            jfa: VariationalBayesianJFA
-            ):
+        self,
+        fourier_traj: FourierTrajectory,
+        regressor: TargetLimbRegressor,
+        jfa: VariationalBayesianJFA,
+    ):
         self.fourier_traj = fourier_traj
         self.regressor = regressor
         self.jfa = jfa
 
-        self.d = self.fourier_traj.dim * 12 # input dimension (12 * dof)
-        self.N = len(self.fourier_traj.t_array) # sample number
+        self.d = self.fourier_traj.dim * 12  # input dimension (12 * dof)
+        self.N = len(self.fourier_traj.t_array)  # sample number
         self.nq = self.regressor.dof
 
-        print(f'd={self.d}, N={self.N}, nq={self.nq}')
+        print(f"d={self.d}, N={self.N}, nq={self.nq}")
 
         self.lb, self.ub = self._build_bounds()
 
@@ -120,11 +120,13 @@ class PSOoptimizer:
                 idx_a = i * n_coeffs_per_joint + k * 2
                 idx_b = i * n_coeffs_per_joint + k * 2 + 1
                 lb[idx_a] = -amp_bound
-                ub[idx_a] =  amp_bound
+                ub[idx_a] = amp_bound
                 lb[idx_b] = -amp_bound
-                ub[idx_b] =  amp_bound
+                ub[idx_b] = amp_bound
             # q0 bounds: center of joint range
-            q_center = (self.regressor.q_lower_limit[i] + self.regressor.q_upper_limit[i]) / 2.0
+            q_center = (
+                self.regressor.q_lower_limit[i] + self.regressor.q_upper_limit[i]
+            ) / 2.0
             lb[i * n_coeffs_per_joint + harmonics * 2] = q_center - q_range * 0.3
             ub[i * n_coeffs_per_joint + harmonics * 2] = q_center + q_range * 0.3
             # t0 bounds
@@ -143,8 +145,10 @@ class PSOoptimizer:
             n_active += self.jfa.count_small_alphas(threshold=100.0)
             n_weakly_activated += self.jfa.count_small_alphas(threshold=1e4)
 
-        print(f"Active params: {n_active}, Weakly activated params: {n_weakly_activated}")
-            
+        print(
+            f"Active params: {n_active}, Weakly activated params: {n_weakly_activated}"
+        )
+
         return -(REWARD_ACTIVE * n_active + REWARD_WEAKLY_ACTIVE * n_weakly_activated)
 
     def fitness_function(self, coeffs: np.ndarray) -> float:
@@ -156,11 +160,20 @@ class PSOoptimizer:
         collision_count = 0
         collision_penalty = 0.0
         for t in range(self.N):
-            (Y_aug, tau_aug, 
-             pi_aug, pi_inertia, pi_friction,
-             q_excess, v_excess, tau_excess, 
-             q_excess_normalized, v_excess_normalized, tau_excess_normalized,
-             collided) = self.regressor.compute_regressor(
+            (
+                Y_aug,
+                tau_aug,
+                pi_aug,
+                pi_inertia,
+                pi_friction,
+                q_excess,
+                v_excess,
+                tau_excess,
+                q_excess_normalized,
+                v_excess_normalized,
+                tau_excess_normalized,
+                collided,
+            ) = self.regressor.compute_regressor(
                 q=q_traj[:, t],
                 v=v_traj[:, t],
                 a=a_traj[:, t],
@@ -169,19 +182,23 @@ class PSOoptimizer:
                 # Continuous collision penalty: accumulate based on normalized excess,
                 # so PSO can differentiate "mild" from "severe" collisions
                 collision_count += 1
-                collision_penalty += sum([
-                    PENALTY_W_MAX * q_excess_normalized,
-                    PENALTY_W_MAX * v_excess_normalized,
-                    PENALTY_W_MAX * tau_excess_normalized
-                ])
+                collision_penalty += sum(
+                    [
+                        PENALTY_W_MAX * q_excess_normalized,
+                        PENALTY_W_MAX * v_excess_normalized,
+                        PENALTY_W_MAX * tau_excess_normalized,
+                    ]
+                )
                 # Still skip regressor data for collided timesteps
                 continue
             if q_excess_normalized or v_excess_normalized or tau_excess_normalized:
-                cost = sum([
-                    PENALTY_W_Q * q_excess_normalized,
-                    PENALTY_W_V * v_excess_normalized,
-                    PENALTY_W_TAU * tau_excess_normalized
-                ])
+                cost = sum(
+                    [
+                        PENALTY_W_Q * q_excess_normalized,
+                        PENALTY_W_V * v_excess_normalized,
+                        PENALTY_W_TAU * tau_excess_normalized,
+                    ]
+                )
                 excitation_cost += cost
                 total_cost += cost
             for i, yi in enumerate(Y_aug):
@@ -190,23 +207,27 @@ class PSOoptimizer:
         # Add collision penalty scaled by count (makes all-collision trajectories worse)
         total_cost += collision_penalty + collision_count * PENALTY_W_COLLISION
         if collision_count > 5:
-            print(f"Quit early due to excessive collisions {collision_count}/{self.N}. Cost:", total_cost)
+            print(
+                f"Quit early due to excessive collisions {collision_count}/{self.N}. Cost:",
+                total_cost,
+            )
             print(f"coeffs: {coeffs}")
             print("-" * 50)
             return total_cost
         compute_cost = self._compute_cost(xim_list, yi_list)
         total_cost += compute_cost
-        print(f"Total cost: {total_cost} \n "
-              f"Collision penalty: {collision_penalty}, Collision count: {collision_count}, Excitation cost: {excitation_cost}, Compute cost: {compute_cost}")
+        print(
+            f"Total cost: {total_cost} \n "
+            f"Collision penalty: {collision_penalty}, Collision count: {collision_count}, Excitation cost: {excitation_cost}, Compute cost: {compute_cost}"
+        )
         print(f"coeffs: {coeffs}")
         print("-" * 50)
         return total_cost
-    
+
+
 def main():
     regressor = TargetLimbRegressor(
-        urdf_path=URDF_PATH,
-        group_to_identify='left_arm',
-        print_info=True
+        urdf_path=URDF_PATH, group_to_identify="left_arm", print_info=True
     )
     fourier_traj = FourierTrajectory(dim=regressor.dof)
     jfa = VariationalBayesianJFA(verbose=False)
@@ -218,7 +239,7 @@ def main():
     def fitness_wrapper(x):
         return optimizer.fitness_function(x)
 
-    set_run_mode(fitness_wrapper, 'multithreading')
+    set_run_mode(fitness_wrapper, "multithreading")
 
     pso = PSO(
         func=fitness_wrapper,
@@ -230,9 +251,10 @@ def main():
         c2=PSO_C2,
         lb=optimizer.lb,
         ub=optimizer.ub,
-        verbose=True
+        verbose=True,
     )
     pso.run()
 
-if __name__ == "__main__":    
+
+if __name__ == "__main__":
     main()
