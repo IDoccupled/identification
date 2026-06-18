@@ -17,7 +17,7 @@ from interface_protocol.msg import JointCommand, JointState  # type: ignore
 
 
 CONFIG_PATH = (
-    Path(__file__).resolve().parent / ".." / "config" / "pm01" / "joint_sine.yaml"
+    Path(__file__).resolve().parent / ".." / "config" / "joint_sine.yaml"
 ).resolve()
 
 
