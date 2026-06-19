@@ -84,6 +84,13 @@ class FourierTrajectoryNode(Node):
             raise FileNotFoundError(f"Config file not found: {config_path}")
         with config_path.open("r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
+        if group not in VALID_LIMB_GROUPS:
+            raise ValueError(
+                f"Invalid group '{group}', must be one of: {list(VALID_LIMB_GROUPS.keys())}"
+            )
+        assert len(coeff) == 12 * len(VALID_LIMB_GROUPS[group]), (
+            f"Expected {12 * len(VALID_LIMB_GROUPS[group])} coefficients for group '{group}'"
+        )
 
         super().__init__("fourier_trajectory_node")
 
