@@ -1,4 +1,5 @@
 import argparse
+import json
 import time
 import warnings
 
@@ -115,13 +116,11 @@ class VariationalBayesianJFA:
         self.max_iter = int(max_iter)
         self.tol = float(tol)
 
-        # Mild data-driven warm start. It improves numerical stability while
-        # keeping the variational updates unchanged.
-        theta_ols = np.linalg.lstsq(X, Y, rcond=None)[0]
-
         self.w_x_mean = self._as_vector(w_x_init, d, 1.0)
         self.w_z_mean = (
-            theta_ols.copy() if w_z_init is None else self._as_vector(w_z_init, d, 1.0)
+            np.linalg.lstsq(X, Y, rcond=None)[0]
+            if w_z_init is None
+            else self._as_vector(w_z_init, d, 1.0)
         )
 
         default_psi_x = np.maximum(np.var(X, axis=0) * 0.1, 1e-3)
@@ -534,88 +533,6 @@ class RBDPhysicalConsistencyProjector:
 
 def run_synthetic_demo(
     seed=SEED,
-    apply_physical=APPLY_PHYSICAL,
-    max_iter=MAX_ITER,
-    tol=TOL,
-    verbose=VERBOSE,
-):
-
-    np.random.seed(seed)
-    N = 10000
-    d = 15
-
-    T_clean = np.random.normal(0.0, 1.0, (N, d))
-    theta_true = np.array(
-        [
-            2.5,
-            -1.2,
-            4.0,
-            3.0,
-            -2.0,
-            1.5,
-            -0.5,
-            2.0,
-            1.0,
-            -1.0,
-            0.5,
-            -0.8,
-            1.2,
-            0.9,
-            -1.1,
-        ],
-        dtype=float,
-    )
-
-    w_x_true = np.array(
-        [2.0, 1.5, 5.0, 3.0, 2.5, 1.0, 0.5, 4.0, 3.5, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        dtype=float,
-    )
-    w_z_true = theta_true * w_x_true
-
-    X_clean = T_clean * w_x_true
-    Y_clean = np.sum(T_clean * w_z_true, axis=1)
-
-    X_noisy = X_clean + np.random.normal(0.0, 0.2, (N, d))
-    Y_noisy = Y_clean + np.random.normal(0.0, 0.1, N)
-
-    theta_ols = np.linalg.lstsq(X_noisy, Y_noisy, rcond=None)[0]
-
-    model = VariationalBayesianJFA(verbose=verbose)
-    model.fit(X_noisy, Y_noisy, cal_beta=True, max_iter=max_iter, tol=tol)
-    theta_bayes = model.get_beta_true()
-
-    theta_phys = theta_bayes.copy()
-    phys_info = {"applied": False, "reason": "disabled"}
-    if apply_physical:
-        projector = RBDPhysicalConsistencyProjector(verbose=True)
-        theta_phys, phys_info = projector.project(theta_bayes, X_noisy)
-
-    print("================ Synthetic Identification =================")
-    print(f"True theta:\n{format_array(theta_true)}")
-    print(f"OLS theta:\n{format_array(theta_ols)}")
-    print(f"VB-JFA theta (Eq.29):\n{format_array(theta_bayes)}")
-    print(f"Physical projection applied: {phys_info.get('applied', False)}")
-    if phys_info.get("applied", False):
-        print(f"Projected theta:\n{format_array(theta_phys)}")
-    else:
-        print(f"Physical projection reason: {phys_info.get('reason', 'n/a')}")
-
-    print(
-        f"OLS safe relative error (%):\n{format_array(safe_percent_error(theta_ols, theta_true))}"
-    )
-    print(
-        f"VB-JFA safe relative error (%):\n{format_array(safe_percent_error(theta_bayes, theta_true))}"
-    )
-
-    rmse_ols = float(np.sqrt(np.mean((Y_noisy - X_noisy @ theta_ols) ** 2)))
-    rmse_bayes = float(np.sqrt(np.mean((Y_noisy - X_noisy @ theta_bayes) ** 2)))
-    print(f"OLS torque RMSE: {rmse_ols:.6f}")
-    print(f"VB-JFA torque RMSE: {rmse_bayes:.6f}")
-    print("==========================================================")
-
-
-def run_synthetic_demo_paper(
-    seed=SEED,
     input_snr=INPUT_SNR,
     output_snr=OUTPUT_SNR,
     n_trials=N_TRIALS,
@@ -772,23 +689,90 @@ def run_synthetic_demo_paper(
 
 
 def run_robot_demo(
-    seed=42, apply_physical=True, max_iter=100000, tol=1e-5, verbose=True
+    seed=42,
+    apply_physical=True,
+    max_iter=100000,
+    tol=1e-5,
+    verbose=True,
+    parameters=None,
 ):
-    if FourierTrajectory is None or TargetLimbRegressor is None:
-        raise RuntimeError("Robot modules are unavailable in current environment")
 
     np.random.seed(seed)
     regressor = TargetLimbRegressor()
-    fourier_traj = FourierTrajectory(regressor=regressor)
+    fourier_traj = FourierTrajectory(dim=5)
 
-    n_harmonics = 5
-    start = time.time()
-
-    q, v, a = fourier_traj.generate_trajectory(
-        coeffs=np.random.uniform(
-            -1.0, 1.0, size=(regressor.dof * (n_harmonics * 2 + 2))
+    parameters = (
+        np.array(parameters)
+        if parameters
+        else np.array(
+            [
+                1.62747080e-01,
+                -1.35994919e-01,
+                -9.75755707e-02,
+                -3.15167643e-01,
+                -5.23979956e-01,
+                4.63712076e-01,
+                6.98639941e-01,
+                2.35656746e-01,
+                -8.73299926e-01,
+                -2.69208837e-01,
+                -9.21240000e-01,
+                9.81766220e-06,
+                -5.42230741e-02,
+                -7.01016614e-02,
+                -1.50428188e-01,
+                1.27949633e-01,
+                1.87742830e-01,
+                1.26563514e-01,
+                -3.47711475e-01,
+                -3.47711475e-01,
+                2.67178020e-01,
+                3.98071414e-02,
+                4.57650000e-01,
+                0.00000000e00,
+                -4.90937107e-02,
+                -1.49872408e-01,
+                3.16421212e-01,
+                3.04698778e-01,
+                -4.73053389e-01,
+                4.15575151e-01,
+                -2.28100405e-01,
+                2.69538005e-01,
+                7.91053030e-01,
+                7.91053030e-01,
+                2.77387025e-01,
+                4.99636528e-06,
+                -8.58345945e-02,
+                6.92765476e-02,
+                -1.54501135e-01,
+                1.06842117e-01,
+                1.61672021e-01,
+                2.57503783e-01,
+                -3.43338378e-01,
+                5.45056611e-02,
+                4.29172972e-01,
+                -3.32355829e-01,
+                -6.88704113e-01,
+                1.00000000e-05,
+                -1.19099379e-03,
+                1.58210606e-01,
+                3.16421212e-01,
+                2.33777711e-01,
+                -4.74631818e-01,
+                -4.74631818e-01,
+                6.32842424e-01,
+                5.79828861e-01,
+                3.33286477e-01,
+                7.91053030e-01,
+                -7.55400000e-01,
+                0.00000000e00,
+            ]  # -4400, 88 strong
         )
     )
+
+    start = time.time()
+
+    q, v, a = fourier_traj.generate_trajectory(coeffs=parameters)
 
     X_true = np.empty((0, regressor.dof * 12), dtype=float)
     Y_true = np.empty((0,), dtype=float)
@@ -898,25 +882,22 @@ def main():
     )
     parser.add_argument(
         "--demo",
-        choices=["synthetic", "paper_synthetic", "robot"],
-        default="paper_synthetic",
+        choices=["synthetic", "robot"],
+        default="synthetic",
         help=(
-            "synthetic: quick custom demo; "
-            "paper_synthetic: Section 5.1 setup (OLS vs BAYES, 4 scenarios, 10 trials); "
-            "robot: full robot demo"
+            "synthetic: Section 5.1 setup (OLS vs BAYES, 4 scenarios, 10 trials)"
+            "robot: full robot regression demo with input fourier trajectory parameters"
         ),
     )
+
+    # General options
     parser.add_argument(
         "--seed", type=int, default=SEED, help="Random seed for reproducibility"
     )
     parser.add_argument("--max-iter", type=int, default=MAX_ITER)
     parser.add_argument("--tol", type=float, default=TOL)
     parser.add_argument("--quiet", action="store_true", help="Reduce solver logs")
-    parser.add_argument(
-        "--no-physical",
-        action="store_true",
-        help="Disable physical consistency projection",
-    )
+
     # Section 5.1 specific options
     parser.add_argument(
         "--input-snr",
@@ -948,26 +929,29 @@ def main():
         default=N_TEST,
         help=f"Test samples per trial for paper_synthetic demo (default {N_TEST})",
     )
+
+    # Robot demo specific options
+    parser.add_argument(
+        "--no-physical",
+        action="store_true",
+        default=True,
+        help="Disable physical consistency projection",
+    )
+    parser.add_argument(
+        "--fourier-parameters",
+        type=json.loads,
+        help='Parameters for Fourier trajectory generation as a JSON array. Size [dof * (n_harmonics * 2 + 2)], n_harmonics=5 in this project. Usage: --fourier-parameters "[1.0, 2.0, 3.0]"',
+    )
     args = parser.parse_args()
 
-    if args.demo == "paper_synthetic":
-        run_synthetic_demo_paper(
+    if args.demo == "synthetic":
+        run_synthetic_demo(
             seed=args.seed,
             input_snr=args.input_snr,
             output_snr=args.output_snr,
             n_trials=args.n_trials,
             n_train=args.n_train,
             n_test=args.n_test,
-            max_iter=args.max_iter,
-            tol=args.tol,
-            verbose=not args.quiet,
-        )
-        return
-
-    if args.demo == "synthetic":
-        run_synthetic_demo(
-            seed=args.seed,
-            apply_physical=False,
             max_iter=args.max_iter,
             tol=args.tol,
             verbose=not args.quiet,
@@ -981,6 +965,7 @@ def main():
             max_iter=args.max_iter,
             tol=args.tol,
             verbose=not args.quiet,
+            parameters=args.fourier_parameters,
         )
     except Exception as exc:
         warnings.warn(f"Robot demo failed: {exc}")
