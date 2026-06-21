@@ -466,9 +466,10 @@ class TargetLimbRegressor:
             print(f"  damping      = {info['damping']:.6g}")
             print(f"  friction     = {info['friction']:.6g}")
 
-    def print_info(
+    def print_regressor_info(
         self,
         aug=True,
+        parameters=False,
         inertial=False,
         friction=False,
         computed_torques=False,
@@ -479,6 +480,7 @@ class TargetLimbRegressor:
             "\n"
             + "\033[92mRegressor and state info for target limb\033[0m".center(80, "=")
         )
+
         print(f"Selected group to identify: {self.group_to_identify}")
         if self.collided:
             print("\033[91mCollision detected for the given state!\033[0m")
@@ -486,6 +488,7 @@ class TargetLimbRegressor:
             print("\033[92mNo collision detected for the given state.\033[0m")
 
         print("\033[94mRegressor Infos\033[0m".center(80, "="))
+
         if aug:
             print(
                 "\033[93mAugmented regressor (inertia + friction)\033[0m".center(
@@ -497,6 +500,16 @@ class TargetLimbRegressor:
                 print(
                     f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
                     f"{self._fmt_array_lines(self.Y_aug[i, :], per_line=10)} \n"
+                )
+
+        if parameters:
+            print(
+                "\033[93mOriginal inertial parameters from URDF\033[0m".center(80, "-")
+            )
+            for i in range(self.Y_target_inertial.shape[0]):
+                print(
+                    f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
+                    f"{self._fmt_array_lines(self.pi_aug[i * 12 : (i + 1) * 12], per_line=12)} \n"
                 )
 
         if inertial:
@@ -583,7 +596,10 @@ def main():
         a=[10.0, 8.0, 5.0, 3.0, 1.0],
         print_info=True,
     )
-    regressor.print_info(computed_torques=True, excess=True)
+    regressor.print_regressor_info(computed_torques=True, parameters=True, excess=True)
+    print("................")
+    print(Y_aug)
+    print(pi_aug)
 
 
 if __name__ == "__main__":
