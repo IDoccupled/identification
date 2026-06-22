@@ -774,11 +774,14 @@ def run_robot_demo(
 
     q, v, a = fourier_traj.generate_trajectory(coeffs=parameters)
 
-    X_true = np.empty((0, regressor.dof * 12), dtype=float)
-    Y_true = np.empty((0,), dtype=float)
+    dof = q.shape[0]
+    samples = q.shape[1]
+
+    X_true = [np.empty((0, dof * 12), dtype=float)] * dof
+    Y_true = [np.empty((0,), dtype=float)] * dof
     theta_true = None
 
-    for sample in range(q.shape[1]):
+    for sample in range(samples):
         (
             Y_aug,
             tau_aug,
@@ -793,87 +796,92 @@ def run_robot_demo(
             _,
             _,
         ) = regressor.compute_regressor(q=q[:, sample], v=v[:, sample], a=a[:, sample])
-        X_true = np.vstack((X_true, Y_aug))
-        Y_true = np.hstack((Y_true, tau_aug))
+        for d in range(dof):
+            X_true[d] = np.vstack((X_true[d], Y_aug[d]))
+            Y_true[d] = np.hstack((Y_true[d], tau_aug[d]))
         theta_true = pi_aug
 
     if theta_true is None:
         raise RuntimeError("Failed to build robot dataset")
 
-    N, d = X_true.shape
-    X_noisy = X_true + np.random.normal(0.0, 0.1, (N, d))
-    Y_noisy = Y_true + np.random.normal(0.0, 0.2, N)
+    N, d_ = X_true[0].shape
 
-    proj_ident, rank_x = identifiable_projection_matrix(X_true)
+    for d in range(dof):
+        X_noisy = X_true[d] + np.random.normal(0.0, 0.1, (N, d_))
+        Y_noisy = Y_true[d] + np.random.normal(0.0, 0.2, N)
 
-    theta_ols = np.linalg.lstsq(X_noisy, Y_noisy, rcond=None)[0]
-    model = VariationalBayesianJFA(max_iter=max_iter, tol=tol, verbose=verbose)
-    model.fit(
-        X_noisy,
-        Y_noisy,
-        w_x_init=np.ones(d),
-        w_z_init=theta_ols.copy(),
-        psi_x_init=np.ones(d) * 0.1,
-        psi_z_init=np.ones(d) * 0.1,
-        psi_y_init=0.2,
-    )
-    theta_bayes = model.get_beta_true()
+        proj_ident, rank_x = identifiable_projection_matrix(X_true[d])
 
-    theta_bayes_phys = theta_bayes.copy()
-    phys_info = {"applied": False, "reason": "disabled"}
-    if apply_physical:
-        projector = RBDPhysicalConsistencyProjector(verbose=True)
-        theta_bayes_phys, phys_info = projector.project(theta_bayes, X_noisy)
+        theta_ols = np.linalg.lstsq(X_noisy, Y_noisy, rcond=None)[0]
+        model = VariationalBayesianJFA(verbose=verbose)
+        model.fit(
+            X=X_noisy,
+            Y=Y_noisy,
+            w_x_init=np.ones(d_),
+            w_z_init=theta_true.copy(),
+            psi_x_init=np.ones(d_) * 0.1,
+            psi_z_init=np.ones(d_) * 0.1,
+            psi_y_init=0.2,
+            tol=1e-5,
+        )
+        theta_bayes = model.get_beta_true()
 
-    theta_true_ident = proj_ident @ theta_true
-    theta_ols_ident = proj_ident @ theta_ols
-    theta_bayes_ident = proj_ident @ theta_bayes
-    theta_bayes_phys_ident = proj_ident @ theta_bayes_phys
+        theta_bayes_phys = theta_bayes.copy()
+        phys_info = {"applied": False, "reason": "disabled"}
+        if apply_physical:
+            projector = RBDPhysicalConsistencyProjector(verbose=True)
+            theta_bayes_phys, phys_info = projector.project(theta_bayes, X_noisy)
 
-    rmse_ols = float(np.sqrt(np.mean((Y_noisy - X_noisy @ theta_ols) ** 2)))
-    rmse_bayes = float(np.sqrt(np.mean((Y_noisy - X_noisy @ theta_bayes) ** 2)))
-    rmse_bayes_phys = float(
-        np.sqrt(np.mean((Y_noisy - X_noisy @ theta_bayes_phys) ** 2))
-    )
+        theta_true_ident = proj_ident @ theta_true
+        theta_ols_ident = proj_ident @ theta_ols
+        theta_bayes_ident = proj_ident @ theta_bayes
+        theta_bayes_phys_ident = proj_ident @ theta_bayes_phys
 
-    print("================ Robot Identification =================")
-    print(f"X_true shape: {X_true.shape}")
-    print(f"Y_true shape: {Y_true.shape}")
-    print(f"theta_true shape: {theta_true.shape}")
-    print(f"rank(X_true): {rank_x}/{d}")
-    print(f"matrix generation time: {time.time() - start:.2f} s")
-
-    print(f"P@theta_true:\n{format_array(theta_true_ident)}")
-    print(f"P@theta_ols:\n{format_array(theta_ols_ident)}")
-    print(f"P@theta_bayes:\n{format_array(theta_bayes_ident)}")
-    print(f"P@theta_bayes_phys:\n{format_array(theta_bayes_phys_ident)}")
-
-    print(
-        f"OLS safe relative error (%):\n{format_array(safe_percent_error(theta_ols_ident, theta_true_ident))}"
-    )
-    print(
-        f"VB-JFA safe relative error (%):\n{format_array(safe_percent_error(theta_bayes_ident, theta_true_ident))}"
-    )
-    print(
-        "VB-JFA + physical safe relative error (%):\n"
-        f"{format_array(safe_percent_error(theta_bayes_phys_ident, theta_true_ident))}"
-    )
-
-    print(f"physical projection applied: {phys_info.get('applied', False)}")
-    if not phys_info.get("applied", False):
-        print(f"physical projection reason: {phys_info.get('reason', 'n/a')}")
-    else:
-        print(
-            "physical projection details: "
-            f"phys_dims={phys_info['phys_dims']}, "
-            f"iter={phys_info['iterations']}, "
-            f"objective={phys_info['objective']:.6e}"
+        rmse_ols = float(np.sqrt(np.mean((Y_noisy - X_noisy @ theta_ols) ** 2)))
+        rmse_bayes = float(np.sqrt(np.mean((Y_noisy - X_noisy @ theta_bayes) ** 2)))
+        rmse_bayes_phys = float(
+            np.sqrt(np.mean((Y_noisy - X_noisy @ theta_bayes_phys) ** 2))
         )
 
-    print(f"OLS torque RMSE: {rmse_ols:.6f}")
-    print(f"VB-JFA torque RMSE: {rmse_bayes:.6f}")
-    print(f"VB-JFA + physical torque RMSE: {rmse_bayes_phys:.6f}")
-    print("======================================================")
+        print("================ Robot Identification =================")
+        print(f"Joint {d + 1}/{dof}")
+        print(f"X_true shape: {X_true[d].shape}")
+        print(f"Y_true shape: {Y_true[d].shape}")
+        print(f"theta_true shape: {theta_true.shape}")
+        print(f"rank(X_true): {rank_x}/{d_}")
+        print(f"matrix generation time: {time.time() - start:.2f} s")
+
+        print(f"P@theta_true:\n{format_array(theta_true_ident)}")
+        print(f"P@theta_ols:\n{format_array(theta_ols_ident)}")
+        print(f"P@theta_bayes:\n{format_array(theta_bayes_ident)}")
+        print(f"P@theta_bayes_phys:\n{format_array(theta_bayes_phys_ident)}")
+
+        print(
+            f"OLS safe relative error (%):\n{format_array(safe_percent_error(theta_ols_ident, theta_true_ident))}"
+        )
+        print(
+            f"VB-JFA safe relative error (%):\n{format_array(safe_percent_error(theta_bayes_ident, theta_true_ident))}"
+        )
+        print(
+            "VB-JFA + physical safe relative error (%):\n"
+            f"{format_array(safe_percent_error(theta_bayes_phys_ident, theta_true_ident))}"
+        )
+
+        print(f"physical projection applied: {phys_info.get('applied', False)}")
+        if not phys_info.get("applied", False):
+            print(f"physical projection reason: {phys_info.get('reason', 'n/a')}")
+        else:
+            print(
+                "physical projection details: "
+                f"phys_dims={phys_info['phys_dims']}, "
+                f"iter={phys_info['iterations']}, "
+                f"objective={phys_info['objective']:.6e}"
+            )
+
+        print(f"OLS torque RMSE: {rmse_ols:.6f}")
+        print(f"VB-JFA torque RMSE: {rmse_bayes:.6f}")
+        print(f"VB-JFA + physical torque RMSE: {rmse_bayes_phys:.6f}")
+        print("======================================================")
 
 
 def main():
