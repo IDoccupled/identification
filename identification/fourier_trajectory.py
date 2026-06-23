@@ -16,6 +16,9 @@ SAMPLE_RATE = 50.0
 
 
 class FourierTrajectory:
+    # Directory where all coefficient YAML files are stored
+    _coeffs_dir = Path(__file__).resolve().parent / ".." / "trajectory_coefficients"
+
     def __init__(
         self,
         dim: int,
@@ -32,6 +35,44 @@ class FourierTrajectory:
         )
         self.n_harmonics = N_HARMONICS
         self.dim = dim
+
+    @staticmethod
+    def load_coeffs(yaml_filename: str) -> np.ndarray:
+        """
+        Load Fourier coefficients from a YAML file in the trajectory_coefficients
+        directory and convert to the flat array format.
+
+        :param yaml_filename: Name of the YAML file (e.g. 'exciting_trajectory.yaml').
+        :return: Flattened coefficient array of shape (dim * (n_harmonics * 2 + 1),).
+        """
+        yaml_path = FourierTrajectory._coeffs_dir / yaml_filename
+        with open(str(yaml_path), "r") as f:
+            data = yaml.safe_load(f)
+
+        coeffs_list = []
+        for joint_key in sorted(data.keys()):
+            joint = data[joint_key]
+            a = joint["a"]
+            b = joint["b"]
+            q0 = joint["q0"]
+            joint_coeffs = []
+            for ai, bi in zip(a, b):
+                joint_coeffs.append(ai)
+                joint_coeffs.append(bi)
+            joint_coeffs.append(q0)
+            coeffs_list.extend(joint_coeffs)
+
+        return np.array(coeffs_list)
+
+    def generate_trajectory_from_yaml(self, yaml_filename: str):
+        """
+        Load coefficients from a YAML file and generate joint trajectories.
+
+        :param yaml_filename: Name of the YAML file in trajectory_coefficients/.
+        :return: Tuple of (q_traj, v_traj, a_traj), each of shape (len(t_array), dim).
+        """
+        coeffs = self.load_coeffs(yaml_filename)
+        return self.generate_trajectory(coeffs)
 
     def generate_trajectory(self, coeffs: np.ndarray):
         """
@@ -63,60 +104,17 @@ class FourierTrajectory:
         return q_traj, v_traj, a_traj
 
 
-def load_coeffs_from_yaml(yaml_path: str) -> np.ndarray:
-    """
-    Load Fourier coefficients from a YAML file and convert to the flat array
-    format expected by FourierTrajectory.generate_trajectory().
-
-    YAML format (per joint):
-      joint_0:
-        a: [a1, a2, ..., aN]
-        b: [b1, b2, ..., bN]
-        q0: <offset>
-
-    :param yaml_path: Path to the YAML file.
-    :return: Flattened coefficient array of shape (dim * (n_harmonics * 2 + 1),).
-    """
-    with open(yaml_path, "r") as f:
-        data = yaml.safe_load(f)
-
-    coeffs_list = []
-    for joint_key in sorted(data.keys()):
-        joint = data[joint_key]
-        a = joint["a"]
-        b = joint["b"]
-        q0 = joint["q0"]
-        # Interleave a and b: [a1, b1, a2, b2, ..., aN, bN, q0]
-        joint_coeffs = []
-        for ai, bi in zip(a, b):
-            joint_coeffs.append(ai)
-            joint_coeffs.append(bi)
-        joint_coeffs.append(q0)
-        coeffs_list.extend(joint_coeffs)
-
-    return np.array(coeffs_list)
-
-
 def get_package_coeffs_path(filename: str = "exciting_trajectory.yaml") -> Path:
-    """
-    Get the path to a built-in coefficient YAML file inside the
-    trajectory_coefficients package directory.
-
-    :param filename: Name of the YAML file (default: 'exciting_trajectory.yaml').
-    :return: Absolute Path to the YAML file.
-    """
-    return Path(__file__).resolve().parent / ".." / "trajectory_coefficients" / filename
+    """Convenience: get the full path to a coefficient YAML file."""
+    return FourierTrajectory._coeffs_dir / filename
 
 
 def main():
     dim = 5
-    yaml_path = get_package_coeffs_path("exciting_trajectory.yaml")
-    coeffs = load_coeffs_from_yaml(str(yaml_path))
-    print(f"Loaded {len(coeffs)} coefficients from {yaml_path}")
-
-    q_traj, v_traj, a_traj = FourierTrajectory(
-        dim=dim, sample_rate=100
-    ).generate_trajectory(coeffs=coeffs)
+    traj = FourierTrajectory(dim=dim, sample_rate=100)
+    q_traj, v_traj, a_traj = traj.generate_trajectory_from_yaml(
+        "exciting_trajectory.yaml"
+    )
     print("生成的轨迹形状:", q_traj.shape)
 
     import matplotlib.pyplot as plt

@@ -1,11 +1,9 @@
-import numpy as np
-
 import sys
 import time
 from pathlib import Path
+import yaml
 
 import rclpy
-import yaml
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Header
@@ -76,7 +74,7 @@ def _to_float_list(name, value):
 class FourierTrajectoryNode(Node):
     def __init__(
         self,
-        coeff: list,
+        yaml_name: str = None,
         config_path: Path = CONFIG_PATH,
         group: str = DEFAULT_GROUP_TO_IDENTIFY,
     ):
@@ -86,9 +84,7 @@ class FourierTrajectoryNode(Node):
         assert group in VALID_LIMB_GROUPS, (
             f"Invalid group '{group}', must be one of: {list(VALID_LIMB_GROUPS.keys())}"
         )
-        assert len(coeff) == 12 * len(VALID_LIMB_GROUPS[group]), (
-            f"Expected {12 * len(VALID_LIMB_GROUPS[group])} coefficients for group '{group}'"
-        )
+        assert yaml_name is not None, "YAML coefficients not provided"
 
         super().__init__("fourier_trajectory_node")
 
@@ -131,8 +127,8 @@ class FourierTrajectoryNode(Node):
 
         # Initialize trajectory
         self.q_traj, self.v_traj, _ = FourierTrajectory(
-            dim=self.dim, repeat=REPEAT_TRAJ, sample_rate=CONTROL_FREQUENCY
-        ).generate_trajectory(coeffs=np.array(coeff))
+            dim=self.dim, sample_rate=CONTROL_FREQUENCY
+        ).generate_trajectory_from_yaml(yaml_name)
         self.total_samples = self.q_traj.shape[1]
         self.sample_per_traj = self.total_samples // REPEAT_TRAJ
 
@@ -252,64 +248,7 @@ class FourierTrajectoryNode(Node):
 
 def main(argv=None):
     rclpy.init(args=argv)
-    coeff = [
-        1.62747080e-01,
-        -1.35994919e-01,
-        -9.75755707e-02,
-        -3.15167643e-01,
-        -5.23979956e-01,
-        4.63712076e-01,
-        6.98639941e-01,
-        2.35656746e-01,
-        -8.73299926e-01,
-        -2.69208837e-01,
-        -9.21240000e-01,
-        -5.42230741e-02,
-        -7.01016614e-02,
-        -1.50428188e-01,
-        1.27949633e-01,
-        1.87742830e-01,
-        1.26563514e-01,
-        -3.47711475e-01,
-        -3.47711475e-01,
-        2.67178020e-01,
-        3.98071414e-02,
-        4.57650000e-01,
-        -4.90937107e-02,
-        -1.49872408e-01,
-        3.16421212e-01,
-        3.04698778e-01,
-        -4.73053389e-01,
-        4.15575151e-01,
-        -2.28100405e-01,
-        2.69538005e-01,
-        7.91053030e-01,
-        7.91053030e-01,
-        2.77387025e-01,
-        -8.58345945e-02,
-        6.92765476e-02,
-        -1.54501135e-01,
-        1.06842117e-01,
-        1.61672021e-01,
-        2.57503783e-01,
-        -3.43338378e-01,
-        5.45056611e-02,
-        4.29172972e-01,
-        -3.32355829e-01,
-        -6.88704113e-01,
-        -1.19099379e-03,
-        1.58210606e-01,
-        3.16421212e-01,
-        2.33777711e-01,
-        -4.74631818e-01,
-        -4.74631818e-01,
-        6.32842424e-01,
-        5.79828861e-01,
-        3.33286477e-01,
-        7.91053030e-01,
-        -7.55400000e-01,
-    ]
-    node = FourierTrajectoryNode(coeff=coeff, group="left_arm")
+    node = FourierTrajectoryNode(yaml_name="0723_1.yaml", group="left_arm")
 
     if not node.initialize():
         node.get_logger().error("Failed to initialize, exiting")
