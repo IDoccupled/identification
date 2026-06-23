@@ -2,3 +2,4 @@ pin
 numpy<2
 meshcat
 scikit-opt
+pyyaml
