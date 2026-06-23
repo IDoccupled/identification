@@ -1,5 +1,5 @@
-# Exciting trajectory coefficients for Fourier trajectory generation
-# dim=5, n_harmonics=5, period=5.0s
+# Older version trajectory
+# dim=5, n_harmonics=5, period=10.0s
 # Description: -4400, 88 strong
 
 joint_0:
