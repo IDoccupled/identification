@@ -67,6 +67,7 @@ PENALTY_W_COLLISION = 1000
 
 REWARD_ACTIVE = 30.0
 REWARD_WEAKLY_ACTIVE = 20.0
+REWARD_AMPLITUDE = 30.0
 
 # Progressive penalty schedule: lambda(k) = lambda0 * (1 + alpha * progress)
 PENALTY_LAMBDA0 = 400.0
@@ -77,7 +78,7 @@ Q_LIMIT_BUFFER = 0.1
 V_LIMIT_BUFFER = 0.1
 TAU_LIMIT_BUFFER = 0.1
 
-RNG_SEED = 114
+RNG_SEED = 67
 
 
 class PSOoptimizer:
@@ -104,7 +105,7 @@ class PSOoptimizer:
     def _build_bounds(self):
         dim, harmonics = self.fourier_traj.dim, self.fourier_traj.n_harmonics
         omega_f = self.fourier_traj.omega_f
-        n_coeffs_per_joint = harmonics * 2 + 2
+        n_coeffs_per_joint = harmonics * 2 + 1
         total_coeffs = dim * n_coeffs_per_joint
         lb = np.zeros(total_coeffs)
         ub = np.zeros(total_coeffs)
@@ -129,27 +130,32 @@ class PSOoptimizer:
             ) / 2.0
             lb[i * n_coeffs_per_joint + harmonics * 2] = q_center - q_range * 0.3
             ub[i * n_coeffs_per_joint + harmonics * 2] = q_center + q_range * 0.3
-            # t0 bounds
-            lb[i * n_coeffs_per_joint + harmonics * 2 + 1] = 0.0
-            ub[i * n_coeffs_per_joint + harmonics * 2 + 1] = 1e-5
         return lb, ub
 
     def _compute_cost(self, X, Y) -> float:
-        """Evaluate excitation quality: higher = more inertial params activated."""
-        # Y_list is a list of (N, d) regressor matrices, one per sample
-        n_active = 0
-        n_weakly_activated = 0
+        """Evaluate excitation quality with diversity bonus.
+
+        Builds a per-parameter hit-count table across joints, then applies
+        diminishing returns (sqrt) so that activating *different* parameters
+        yields higher reward than activating the *same* parameter repeatedly
+        across different joints.
+        """
+        d_per_joint = X[0].shape[1]  # 12 * dof (same for all joints)
+        # n_joints = len(X)
+
+        # hit_count[k] = how many joints activated parameter index k
+        hit_active = np.zeros(d_per_joint, dtype=int)
+        hit_weakly = np.zeros(d_per_joint, dtype=int)
 
         for x, y in zip(X, Y):
             self.jfa.fit(x, y, cal_beta=False, tol=1e-4)
-            n_active += self.jfa.count_small_alphas(threshold=100.0)
-            n_weakly_activated += self.jfa.count_small_alphas(threshold=1e4)
+            hit_active += self.jfa.get_active_mask(threshold=100.0).astype(int)
+            hit_weakly += self.jfa.get_active_mask(threshold=1e4).astype(int)
 
-        print(
-            f"Active params: {n_active}, Weakly activated params: {n_weakly_activated}"
-        )
+        active_score = float(np.sum(np.sqrt(hit_active)))
+        weakly_score = float(np.sum(np.sqrt(hit_weakly)))
 
-        return -(REWARD_ACTIVE * n_active + REWARD_WEAKLY_ACTIVE * n_weakly_activated)
+        return -(REWARD_ACTIVE * active_score + REWARD_WEAKLY_ACTIVE * weakly_score)
 
     def fitness_function(self, coeffs: np.ndarray) -> float:
         q_traj, v_traj, a_traj = self.fourier_traj.generate_trajectory(coeffs)
@@ -215,12 +221,14 @@ class PSOoptimizer:
             print("-" * 50)
             return total_cost
         compute_cost = self._compute_cost(xim_list, yi_list)
-        total_cost += compute_cost
+        amplitude_cost = -np.sqrt(np.sum(coeffs**2)) * REWARD_AMPLITUDE
+        total_cost += compute_cost + amplitude_cost
         print(
-            f"Total cost: {total_cost} \n "
-            f"Collision penalty: {collision_penalty}, Collision count: {collision_count}, Excitation cost: {excitation_cost}, Compute cost: {compute_cost}"
+            f"Total reward: {-total_cost} \n ",
+            f"Collision penalty: {collision_penalty}, Collision count: {collision_count}, Excitation cost: {excitation_cost}\n",
+            f"Compute reward: {-compute_cost}, Amplitude reward: {-amplitude_cost}",
         )
-        print(f"coeffs: {coeffs}")
+        print("coeffs:\n", coeffs)
         print("-" * 50)
         return total_cost
 
@@ -233,9 +241,6 @@ def main():
     jfa = VariationalBayesianJFA(verbose=False)
     optimizer = PSOoptimizer(fourier_traj, regressor, jfa)
 
-    # Wrap fitness function to enable parallel evaluation via multithreading.
-    # (multiprocessing would require pickling the optimizer, which may fail with
-    #  C++ bound objects; multithreading works because numpy/C++ code releases the GIL.)
     def fitness_wrapper(x):
         return optimizer.fitness_function(x)
 
@@ -243,7 +248,7 @@ def main():
 
     pso = PSO(
         func=fitness_wrapper,
-        dim=fourier_traj.dim * (fourier_traj.n_harmonics * 2 + 2),
+        dim=fourier_traj.dim * (fourier_traj.n_harmonics * 2 + 1),
         pop=POP_SIZE,
         max_iter=MAX_ITER,
         w=PSO_W,
