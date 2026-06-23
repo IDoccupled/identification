@@ -597,9 +597,7 @@ def main():
         print_info=True,
     )
     regressor.print_regressor_info(computed_torques=True, parameters=True, excess=True)
-    print("................")
-    print(Y_aug)
-    print(pi_aug)
+    regressor.print_joint_info(selected_group=True)
 
 
 if __name__ == "__main__":

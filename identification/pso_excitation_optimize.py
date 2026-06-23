@@ -225,8 +225,8 @@ class PSOoptimizer:
         total_cost += compute_cost + amplitude_cost
         print(
             f"Total reward: {-total_cost} \n ",
-            f"Collision penalty: {collision_penalty}, Collision count: {collision_count}, Excitation cost: {excitation_cost}\n",
-            f"Compute reward: {-compute_cost}, Amplitude reward: {-amplitude_cost}",
+            f"  Collision penalty: {collision_penalty}, Collision count: {collision_count}, Excitation cost: {excitation_cost}\n",
+            f"  Compute reward: {-compute_cost}, Amplitude reward: {-amplitude_cost}",
         )
         print("coeffs:\n", coeffs)
         print("-" * 50)
