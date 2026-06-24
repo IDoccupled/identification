@@ -110,7 +110,7 @@ def get_package_coeffs_path(filename: str = "exciting_trajectory.yaml") -> Path:
 def main():
     dim = 5
     traj = FourierTrajectory(dim=dim, sample_rate=200)
-    q_traj, v_traj, a_traj = traj.generate_trajectory_from_yaml("0724_1.yaml")
+    q_traj, v_traj, a_traj = traj.generate_trajectory_from_yaml("0724_2.yaml")
     print("生成的轨迹形状:", q_traj.shape)
 
     import matplotlib.pyplot as plt

@@ -233,12 +233,10 @@ class TargetLimbRegressor:
         self, q: list | np.ndarray, v: list | np.ndarray, a: list | np.ndarray
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         n = len(self.group_to_identify)
-        if len(q) != n:
-            raise ValueError(f"Expected q of length {n}, got {len(q)}")
-        if len(v) != n:
-            raise ValueError(f"Expected v of length {n}, got {len(v)}")
-        if len(a) != n:
-            raise ValueError(f"Expected a of length {n}, got {len(a)}")
+        assert len(q) == n, f"Expected q of length {n}, got {len(q)}"
+        assert len(v) == n, f"Expected v of length {n}, got {len(v)}"
+        assert len(a) == n, f"Expected a of length {n}, got {len(a)}"
+
         formed_q = np.zeros(self.model.nq)
         formed_v = np.zeros(self.model.nv)
         formed_a = np.zeros(self.model.nv)
