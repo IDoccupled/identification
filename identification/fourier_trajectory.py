@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-
 from pathlib import Path
-
 import numpy as np
 import yaml
 
@@ -111,21 +109,45 @@ def get_package_coeffs_path(filename: str = "exciting_trajectory.yaml") -> Path:
 
 def main():
     dim = 5
-    traj = FourierTrajectory(dim=dim, sample_rate=100)
-    q_traj, v_traj, a_traj = traj.generate_trajectory_from_yaml(
-        "exciting_trajectory.yaml"
-    )
+    traj = FourierTrajectory(dim=dim, sample_rate=200)
+    q_traj, v_traj, a_traj = traj.generate_trajectory_from_yaml("0724_1.yaml")
     print("生成的轨迹形状:", q_traj.shape)
 
     import matplotlib.pyplot as plt
 
-    plt.figure(figsize=(10, 8))
-    for i in range(q_traj.shape[0]):
-        plt.subplot(q_traj.shape[0], 1, i + 1)
-        plt.plot(q_traj[i, :])
-        plt.title(f"Joint {i}")
-        plt.grid()
+    n_joints = q_traj.shape[0]
+    t = traj.t_array
+
+    # Position
+    fig_q, axes_q = plt.subplots(n_joints, 1, figsize=(10, 8), sharex=True)
+    fig_q.suptitle("Joint Positions (q)")
+    for i in range(n_joints):
+        axes_q[i].plot(t, q_traj[i, :], "b", label="q")
+        axes_q[i].set_ylabel(f"Joint {i}")
+        axes_q[i].grid()
+    axes_q[-1].set_xlabel("Time (s)")
     plt.tight_layout()
+
+    # Velocity
+    fig_v, axes_v = plt.subplots(n_joints, 1, figsize=(10, 8), sharex=True)
+    fig_v.suptitle("Joint Velocities (v)")
+    for i in range(n_joints):
+        axes_v[i].plot(t, v_traj[i, :], "r", label="v")
+        axes_v[i].set_ylabel(f"Joint {i}")
+        axes_v[i].grid()
+    axes_v[-1].set_xlabel("Time (s)")
+    plt.tight_layout()
+
+    # Acceleration
+    fig_a, axes_a = plt.subplots(n_joints, 1, figsize=(10, 8), sharex=True)
+    fig_a.suptitle("Joint Accelerations (a)")
+    for i in range(n_joints):
+        axes_a[i].plot(t, a_traj[i, :], "g", label="a")
+        axes_a[i].set_ylabel(f"Joint {i}")
+        axes_a[i].grid()
+    axes_a[-1].set_xlabel("Time (s)")
+    plt.tight_layout()
+
     plt.show()
 
 
