@@ -20,15 +20,14 @@ class FourierTrajectory:
     def __init__(
         self,
         dim: int,
-        traj_period=TRAJ_PERIOD,
         sample_rate=SAMPLE_RATE,
     ):
 
-        self.omega_f = 2.0 * np.pi / traj_period
+        self.omega_f = 2.0 * np.pi / TRAJ_PERIOD
         self.t_array = np.linspace(
             0,
-            traj_period,
-            int(traj_period * sample_rate),
+            TRAJ_PERIOD,
+            int(TRAJ_PERIOD * sample_rate),
             endpoint=False,
         )
         self.n_harmonics = N_HARMONICS
@@ -44,6 +43,7 @@ class FourierTrajectory:
         :return: Flattened coefficient array of shape (dim * (n_harmonics * 2 + 1),).
         """
         yaml_path = FourierTrajectory._coeffs_dir / yaml_filename
+        assert yaml_path.is_file(), f"YAML file not found: {yaml_path}"
         with open(str(yaml_path), "r") as f:
             data = yaml.safe_load(f)
 
