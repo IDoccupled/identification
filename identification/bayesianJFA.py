@@ -749,73 +749,131 @@ def run_robot_demo(
     # kinematic subtree (i.e. joint d's torque depends on joint j's parameters).
     subtree_mask = regressor.get_subtree_mask()  # shape (dof, dof)
 
-    for d in range(dof):
-        X_noisy = X_true[d] + np.random.normal(0.0, 0.1, (N, d_))
-        Y_noisy = Y_true[d] + np.random.normal(0.0, 0.2, N)
+    # ------------------------------------------------------------------
+    # Per-joint fitting WITH standardization and structural zero-column removal.
+    # For each joint d, we only fit on the 12 * (#subtree_joints) columns that
+    # are structurally non-zero.  This avoids the numerical issues of zero
+    # columns in get_beta_true() and lets standardisation work correctly.
+    # ------------------------------------------------------------------
 
+    for d in range(dof):
+        # ---- active column mask for this joint ----
+        active_12block = np.zeros(dof, dtype=bool)
+        active_12block[:] = subtree_mask[d, :]
+        # Expand to 12-column blocks
+        active_cols = np.repeat(active_12block, 12)  # length d_, bool
+
+        n_active = int(np.sum(active_cols))
+        X_active_true = X_true[d][:, active_cols]  # (N, n_active)
+        Y_true_joint = Y_true[d]  # (N,)
+
+        # ---- standardize non-zero columns and Y ----
+        X_mean = np.mean(X_active_true, axis=0)
+        X_std = np.std(X_active_true, axis=0)
+        X_std = np.maximum(X_std, 1e-12)  # guard against zero-std columns
+        X_active_std = (X_active_true - X_mean) / X_std
+
+        Y_mean = float(np.mean(Y_true_joint))
+        Y_std_val = float(np.std(Y_true_joint))
+        Y_std_val = max(Y_std_val, 1e-12)
+        Y_std_norm = (Y_true_joint - Y_mean) / Y_std_val
+
+        # ---- SNR-based noise addition ----
+        input_snr_val = 10.0  # tunable: input SNR
+        output_snr_val = 5.0  # tunable: output SNR (matching paper default)
+        X_noise_std = 1.0 / np.sqrt(input_snr_val)
+        Y_noise_std = 1.0 / np.sqrt(output_snr_val)
+
+        rng = np.random.default_rng(SEED + d)
+        X_active = X_active_std + rng.normal(0.0, X_noise_std, X_active_std.shape)
+        Y_active = Y_std_norm + rng.normal(0.0, Y_noise_std, N)
+
+        # ---- identifiable projection (on full original space) ----
         proj_ident, rank_x = identifiable_projection_matrix(X_true[d])
 
-        theta_ols = np.linalg.lstsq(X_noisy, Y_noisy, rcond=None)[0]
+        # ---- OLS on standardized data ----
+        theta_ols_active_std = np.linalg.lstsq(X_active, Y_active, rcond=None)[0]
+        # Transform back to original scale
+        theta_ols_active = theta_ols_active_std * (Y_std_val / X_std)
+        theta_ols = np.zeros(d_, dtype=float)
+        theta_ols[active_cols] = theta_ols_active
 
-        # --- per-joint w_z_init: zero out parameters that are structurally
-        #     irrelevant for THIS joint's torque equation ---
-        w_z_init_joint = np.zeros(d_, dtype=float)
-        for j in range(dof):
-            if subtree_mask[d, j]:
-                col_start = j * 12
-                col_end = col_start + 12
-                w_z_init_joint[col_start:col_end] = theta_true[col_start:col_end]
+        # ---- VB-JFA initialization on standardized data ----
+        # w_x_init: all ~1.0 on standardized data (columns have unit variance)
+        w_x_init_active = np.ones(n_active, dtype=float)
+        # w_z_init: true theta mapped to standardized space
+        theta_true_active = theta_true[active_cols]
+        w_z_init_active = theta_true_active * (X_std / Y_std_val)
 
-        # --- w_x_init: small value for structurally-irrelevant (zero) columns,
-        #     ones for relevant columns ---
-        zero_col_mask = ~np.any(np.abs(X_noisy) > 1e-12, axis=0)
-        w_x_init_joint = np.where(zero_col_mask, 1e-6, 1.0)
-        psi_x_init_joint = np.where(zero_col_mask, 1e-10, 0.1)
+        # psi_x_init: noise variance ≈ 1/SNR for all standardized columns
+        psi_x_init_active = np.full(n_active, X_noise_std**2)
+        # psi_z_init: expected per-dim contribution to unit-variance Y
+        psi_z_init_active = np.full(n_active, 1.0 / max(n_active, 1))
+        # psi_y_init: output noise variance ≈ 1/output_SNR
+        psi_y_init_val = Y_noise_std**2
 
         model = VariationalBayesianJFA(verbose=verbose)
         model.fit(
-            X=X_noisy,
-            Y=Y_noisy,
-            w_x_init=w_x_init_joint,
-            w_z_init=w_z_init_joint,
-            psi_x_init=psi_x_init_joint,
-            psi_z_init=np.ones(d_) * 0.1,
-            psi_y_init=0.2,
+            X=X_active,
+            Y=Y_active,
+            w_x_init=w_x_init_active,
+            w_z_init=w_z_init_active,
+            psi_x_init=psi_x_init_active,
+            psi_z_init=psi_z_init_active,
+            psi_y_init=psi_y_init_val,
             tol=1e-5,
             cal_beta=True,
         )
-        theta_bayes = model.get_beta_true()
+        theta_bayes_active_std = model.get_beta_true()
 
+        # Transform back to original scale
+        theta_bayes_active = theta_bayes_active_std * (Y_std_val / X_std)
+        theta_bayes = np.zeros(d_, dtype=float)
+        theta_bayes[active_cols] = theta_bayes_active
+
+        # ---- reconstruct full noisy X and Y in original space (for RMSE / projection) ----
+        X_noisy_full = X_true[d].copy()
+        X_noisy_full[:, active_cols] = X_active * X_std + X_mean
+        Y_noisy_full = Y_active * Y_std_val + Y_mean
+
+        # ---- physical projection (on full space) ----
         theta_bayes_phys = theta_bayes.copy()
         phys_info = {"applied": False, "reason": "disabled"}
         if apply_physical:
             projector = RBDPhysicalConsistencyProjector(verbose=True)
-            theta_bayes_phys, phys_info = projector.project(theta_bayes, X_noisy)
+            theta_bayes_phys, phys_info = projector.project(theta_bayes, X_noisy_full)
 
         theta_true_ident = proj_ident @ theta_true
         theta_ols_ident = proj_ident @ theta_ols
         theta_bayes_ident = proj_ident @ theta_bayes
         theta_bayes_phys_ident = proj_ident @ theta_bayes_phys
 
-        rmse_ols = float(np.sqrt(np.mean((Y_noisy - X_noisy @ theta_ols) ** 2)))
-        rmse_bayes = float(np.sqrt(np.mean((Y_noisy - X_noisy @ theta_bayes) ** 2)))
+        rmse_ols = float(
+            np.sqrt(np.mean((Y_noisy_full - X_noisy_full @ theta_ols) ** 2))
+        )
+        rmse_bayes = float(
+            np.sqrt(np.mean((Y_noisy_full - X_noisy_full @ theta_bayes) ** 2))
+        )
         rmse_bayes_phys = float(
-            np.sqrt(np.mean((Y_noisy - X_noisy @ theta_bayes_phys) ** 2))
+            np.sqrt(np.mean((Y_noisy_full - X_noisy_full @ theta_bayes_phys) ** 2))
         )
 
         print("================ Robot Identification =================")
         print(f"Joint {d + 1}/{dof}")
-        # Show which joints are in this joint's subtree
         subtree_joints = [j for j in range(dof) if subtree_mask[d, j]]
-        print(
-            f"Subtree joints: {subtree_joints}  (active params: {len(subtree_joints) * 12}/{d_})"
-        )
+        print(f"Subtree joints: {subtree_joints}  (active params: {n_active}/{d_})")
         print(f"VB-JFA converged in {model.n_iter_} iterations")
+        # Map alpha from reduced model back to full 12-param blocks
+        alpha_active = model.get_alpha_mean()  # length n_active
+        alpha_full = np.full(d_, np.inf)
+        alpha_full[active_cols] = alpha_active
         print(
             f"VB-JFA E[alpha] (per 12-param block): "
-            f"{format_array([float(np.mean(model.get_alpha_mean()[j * 12 : (j + 1) * 12])) for j in range(dof)])}"
+            f"{format_array([float(np.mean(alpha_full[j * 12 : (j + 1) * 12])) for j in range(dof)])}"
         )
-        print(f"VB-JFA active dims (alpha < 1e2): {model.count_small_alphas(100)}/{d_}")
+        print(
+            f"VB-JFA active dims (alpha < 1e2): {model.count_small_alphas(100)}/{n_active}"
+        )
         print(f"X_true shape: {X_true[d].shape}")
         print(f"Y_true shape: {Y_true[d].shape}")
         print(f"theta_true shape: {theta_true.shape}")
