@@ -1,4 +1,5 @@
 import numpy as np
+import yaml
 
 from identification.fourier_trajectory import FourierTrajectory
 from identification.target_limb_regressor import TargetLimbRegressor
@@ -132,7 +133,7 @@ class PSOoptimizer:
             ub[i * n_coeffs_per_joint + harmonics * 2] = q_center + q_range * 0.3
         return lb, ub
 
-    def _compute_cost(self, X, Y) -> float:
+    def _compute_cost(self, X, Y, w_z_init) -> float:
         """Evaluate excitation quality with diversity bonus.
 
         Builds a per-parameter hit-count table across joints, then applies
@@ -148,7 +149,9 @@ class PSOoptimizer:
         hit_weakly = np.zeros(d_per_joint, dtype=int)
 
         for x, y in zip(X, Y):
-            self.jfa.fit(x, y, cal_beta=False, tol=1e-4)
+            self.jfa.fit(
+                X=x, Y=y, psi_x_init=1e-8, psi_z_init=1e-8, w_z_init=None, tol=1e-4
+            )
             hit_active += self.jfa.get_active_mask(threshold=100.0).astype(int)
             hit_weakly += self.jfa.get_active_mask(threshold=1e4).astype(int)
 
@@ -220,17 +223,104 @@ class PSOoptimizer:
             print(f"coeffs: {coeffs}")
             print("-" * 50)
             return total_cost
-        compute_cost = self._compute_cost(xim_list, yi_list)
+        compute_cost = self._compute_cost(xim_list, yi_list, pi_aug)
         amplitude_cost = -np.sqrt(np.sum(coeffs**2)) * REWARD_AMPLITUDE
         total_cost += compute_cost + amplitude_cost
         print(
-            f"Total reward: {-total_cost} \n ",
+            f"Converged at iteration {self.jfa.n_iter_}. Total reward: {-total_cost} \n",
             f"  Collision penalty: {collision_penalty}, Collision count: {collision_count}, Excitation cost: {excitation_cost}\n",
             f"  Compute reward: {-compute_cost}, Amplitude reward: {-amplitude_cost}",
         )
         print("coeffs:\n", coeffs)
         print("-" * 50)
         return total_cost
+
+
+class PSOWithYamlSave(PSO):
+    """PSO subclass that saves structured coefficients to YAML at each iteration.
+
+    Uses the same joint_0/joint_1/.../{a, b, q0} format as flat_to_yaml.
+    Each iteration is appended as a new top-level key ``iter_N``, preserving
+    the full optimization history in a single YAML file.
+    """
+
+    def __init__(
+        self, save_path="pso_best.yaml", dim_structured=None, n_harmonics=None, **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.save_path = Path(save_path)
+        self._dim_structured = dim_structured
+        self._n_harmonics = n_harmonics
+
+    @staticmethod
+    def _flat_to_yaml(flat_array: np.ndarray, dim: int, n_harmonics: int) -> dict:
+        """Convert flat coeff array to {joint_i: {a, b, q0}} dict (same as flat_to_yaml)."""
+        params = flat_array.reshape(dim, n_harmonics * 2 + 1)
+        data = {}
+        for i in range(dim):
+            a = params[i, 0 : n_harmonics * 2 : 2]
+            b = params[i, 1 : n_harmonics * 2 : 2]
+            q0 = params[i, -1]
+            data[f"joint_{i}"] = {
+                "a": [round(float(v), 8) for v in a.tolist()],
+                "b": [round(float(v), 8) for v in b.tolist()],
+                "q0": round(float(q0), 8),
+            }
+        return data
+
+    def run(self, max_iter=None, precision=None, N=20):
+        self.max_iter = max_iter or self.max_iter
+        c = 0
+        for iter_num in range(self.max_iter):
+            self.update_V()
+            self.recorder()
+            self.update_X()
+            self.cal_y()
+            self.update_pbest()
+            self.update_gbest()
+            if precision is not None:
+                tor_iter = np.amax(self.pbest_y) - np.amin(self.pbest_y)
+                if tor_iter < precision:
+                    c = c + 1
+                    if c > N:
+                        break
+                else:
+                    c = 0
+
+            # Build structured coefficients (same format as flat_to_yaml)
+            coeffs = self.gbest_x.flatten()
+            if self._dim_structured is not None and self._n_harmonics is not None:
+                coeffs_data = self._flat_to_yaml(
+                    coeffs, dim=self._dim_structured, n_harmonics=self._n_harmonics
+                )
+            else:
+                coeffs_data = coeffs.tolist()
+
+            iter_data = {
+                "gbest_y": float(self.gbest_y),
+                "description": f"Iter: {iter_num}, Best fit: [{self.gbest_y}]",
+                "coefficients": coeffs_data,
+            }
+
+            # Read -> append -> write back to preserve history
+            history = {}
+            if self.save_path.exists():
+                try:
+                    with open(self.save_path, "r") as f:
+                        history = yaml.safe_load(f) or {}
+                except yaml.YAMLError:
+                    history = {}
+            history[f"iter_{iter_num}"] = iter_data
+
+            with open(self.save_path, "w") as f:
+                yaml.dump(history, f, default_flow_style=False, sort_keys=False)
+
+            if self.verbose:
+                print(
+                    "Iter: {}, Best fit: {} at {}".format(
+                        iter_num, self.gbest_y, self.gbest_x
+                    )
+                )
 
 
 def main():
@@ -246,7 +336,7 @@ def main():
 
     set_run_mode(fitness_wrapper, "multithreading")
 
-    pso = PSO(
+    pso = PSOWithYamlSave(
         func=fitness_wrapper,
         dim=fourier_traj.dim * (fourier_traj.n_harmonics * 2 + 1),
         pop=POP_SIZE,
@@ -257,6 +347,9 @@ def main():
         lb=optimizer.lb,
         ub=optimizer.ub,
         verbose=True,
+        save_path="0724_2.yaml",
+        dim_structured=fourier_traj.dim,
+        n_harmonics=fourier_traj.n_harmonics,
     )
     pso.run()
 
