@@ -265,6 +265,40 @@ class TargetLimbRegressor:
 
         return q, v, a
 
+    def get_subtree_mask(self) -> np.ndarray:
+        """
+        Return a boolean matrix of shape (dof, dof) where mask[d, j] = True
+        if joint group_to_identify[j] is in the kinematic subtree of
+        group_to_identify[d].
+
+        For a serial chain (no branching), this is simply:
+            mask[d, j] = True  iff  j >= d
+        because each joint's torque only depends on parameters of its
+        descendants in the chain.
+
+        For branching trees, we use the parent array to walk up from each
+        potential descendant.
+        """
+        dof = self.dof
+        mask = np.zeros((dof, dof), dtype=bool)
+
+        for d in range(dof):
+            joint_d = self.group_to_identify[d]
+            for j in range(dof):
+                joint_j = self.group_to_identify[j]
+                # Walk up from joint_j to see if joint_d is an ancestor.
+                cur = joint_j
+                while cur != 0:  # 0 = universe (root)
+                    if cur == joint_d:
+                        mask[d, j] = True
+                        break
+                    cur = self.model.parents[cur]
+                # Also true if joint_j == joint_d (a joint is in its own subtree).
+                if joint_j == joint_d:
+                    mask[d, j] = True
+
+        return mask
+
     def build_augmented_target_regressor(
         self,
         Y_target_limb,
