@@ -248,7 +248,7 @@ class FourierTrajectoryNode(Node):
 
 def main(argv=None):
     rclpy.init(args=argv)
-    yaml_name = "0724_1.yaml"
+    yaml_name = "0724_2.yaml"
     node = FourierTrajectoryNode(yaml_name=yaml_name, group="left_arm")
     print("Using YAML:", yaml_name)
 

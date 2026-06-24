@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-Convert flat Fourier coefficient arrays to structured YAML files.
-
-Quick use: paste your array below, set OUTPUT_NAME, run the script.
-"""
-
 import argparse
 import sys
 import re
@@ -13,25 +7,21 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-# ============================================================
-# 👇 Paste your flat array here (string, with or without brackets)
-RAW_INPUT = ""
-#   例如:
-#   RAW_INPUT = "[-0.349 -0.349 0.246 ...]"
-#   RAW_INPUT = "0.1 -0.2 0.3 ..."
-# ============================================================
+RAW_INPUT = """[-0.34931997 -0.34931997  0.16290269 -0.69863994  0.63477713 -0.60446766
+                -1.39727988  0.41323439  1.74659985  1.74659985 -0.92124     0.12264838
+                0.02150395  0.20799582  0.12449974 -0.52156721 -0.52156721  0.6497416
+                -0.69542295  0.8071618   0.86927869  1.08010606 -0.22706097  0.14793677
+                -0.03073244  0.63284242 -0.59988055  0.94926364  1.26568485 -0.70219627
+                0.24454341  1.29798241  0.68349291 -0.16678559  0.02512467 -0.03863867
+                0.2327646  -0.03412696 -0.49257543  0.68667676  0.04142631  0.8275987
+                -0.10527229 -0.46203604 -0.31635363 -0.31642121 -0.20002292  0.3602492
+                -0.42345581  0.91580144 -0.2393867   1.26568485  1.4310329   1.58210606
+                -0.7554    ]"""
 
-# ============================================================
-# 👇 Set the output filename (without .yaml)
-OUTPUT_NAME = ""
-#   例如:
-#   OUTPUT_NAME = "my_trajectory"
-# ============================================================
+OUTPUT_NAME = "0724_1"
 
-# Optional description comment (e.g., optimization iteration info)
-OUTPUT_DESC = ""
+OUTPUT_DESC = "Iter: 145, Best fit: [-3552.53817433]"
 
-# Default constants (must match fourier_trajectory.py)
 DEFAULT_DIM = 5
 DEFAULT_N_HARMONICS = 5
 
