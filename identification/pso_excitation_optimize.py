@@ -150,7 +150,7 @@ class PSOoptimizer:
 
         for x, y in zip(X, Y):
             self.jfa.fit(
-                X=x, Y=y, psi_x_init=1e-8, psi_z_init=1e-8, w_z_init=None, tol=1e-4
+                X=x, Y=y, psi_x_init=1e-8, psi_z_init=1e-8, w_z_init=w_z_init, tol=1e-4
             )
             hit_active += self.jfa.get_active_mask(threshold=100.0).astype(int)
             hit_weakly += self.jfa.get_active_mask(threshold=1e4).astype(int)
@@ -248,7 +248,12 @@ class PSOWithYamlSave(PSO):
         self, save_path="pso_best.yaml", dim_structured=None, n_harmonics=None, **kwargs
     ):
         super().__init__(**kwargs)
-        self.save_path = Path(save_path)
+        self.save_path = (
+            Path(__file__).resolve().parent
+            / ".."
+            / "trajectory_coefficients"
+            / save_path
+        )
         self._dim_structured = dim_structured
         self._n_harmonics = n_harmonics
 
