@@ -23,6 +23,8 @@ N_TRIALS = 3
 N_TRAIN = 1000
 N_TEST = 1000
 
+YAML_FILE = "0724_2.yaml"
+
 
 def format_array(value, per_line=5):
     arr = np.asarray(value).ravel()
@@ -709,7 +711,7 @@ def run_robot_demo(
 
     start = time.time()
 
-    q, v, a = fourier_traj.generate_trajectory_from_yaml("0724_1.yaml")
+    q, v, a = fourier_traj.generate_trajectory_from_yaml(YAML_FILE)
 
     dof = q.shape[0]
     samples = q.shape[1]
@@ -743,6 +745,10 @@ def run_robot_demo(
 
     N, d_ = X_true[0].shape
 
+    # Build per-joint subtree mask: mask[d, j] = True if joint j is in joint d's
+    # kinematic subtree (i.e. joint d's torque depends on joint j's parameters).
+    subtree_mask = regressor.get_subtree_mask()  # shape (dof, dof)
+
     for d in range(dof):
         X_noisy = X_true[d] + np.random.normal(0.0, 0.1, (N, d_))
         Y_noisy = Y_true[d] + np.random.normal(0.0, 0.2, N)
@@ -750,16 +756,33 @@ def run_robot_demo(
         proj_ident, rank_x = identifiable_projection_matrix(X_true[d])
 
         theta_ols = np.linalg.lstsq(X_noisy, Y_noisy, rcond=None)[0]
+
+        # --- per-joint w_z_init: zero out parameters that are structurally
+        #     irrelevant for THIS joint's torque equation ---
+        w_z_init_joint = np.zeros(d_, dtype=float)
+        for j in range(dof):
+            if subtree_mask[d, j]:
+                col_start = j * 12
+                col_end = col_start + 12
+                w_z_init_joint[col_start:col_end] = theta_true[col_start:col_end]
+
+        # --- w_x_init: small value for structurally-irrelevant (zero) columns,
+        #     ones for relevant columns ---
+        zero_col_mask = ~np.any(np.abs(X_noisy) > 1e-12, axis=0)
+        w_x_init_joint = np.where(zero_col_mask, 1e-6, 1.0)
+        psi_x_init_joint = np.where(zero_col_mask, 1e-10, 0.1)
+
         model = VariationalBayesianJFA(verbose=verbose)
         model.fit(
             X=X_noisy,
             Y=Y_noisy,
-            w_x_init=np.ones(d_),
-            w_z_init=theta_true.copy(),
-            psi_x_init=np.ones(d_) * 0.1,
+            w_x_init=w_x_init_joint,
+            w_z_init=w_z_init_joint,
+            psi_x_init=psi_x_init_joint,
             psi_z_init=np.ones(d_) * 0.1,
             psi_y_init=0.2,
             tol=1e-5,
+            cal_beta=True,
         )
         theta_bayes = model.get_beta_true()
 
@@ -782,6 +805,17 @@ def run_robot_demo(
 
         print("================ Robot Identification =================")
         print(f"Joint {d + 1}/{dof}")
+        # Show which joints are in this joint's subtree
+        subtree_joints = [j for j in range(dof) if subtree_mask[d, j]]
+        print(
+            f"Subtree joints: {subtree_joints}  (active params: {len(subtree_joints) * 12}/{d_})"
+        )
+        print(f"VB-JFA converged in {model.n_iter_} iterations")
+        print(
+            f"VB-JFA E[alpha] (per 12-param block): "
+            f"{format_array([float(np.mean(model.get_alpha_mean()[j * 12 : (j + 1) * 12])) for j in range(dof)])}"
+        )
+        print(f"VB-JFA active dims (alpha < 1e2): {model.count_small_alphas(100)}/{d_}")
         print(f"X_true shape: {X_true[d].shape}")
         print(f"Y_true shape: {Y_true[d].shape}")
         print(f"theta_true shape: {theta_true.shape}")
