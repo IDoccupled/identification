@@ -5,12 +5,8 @@ import warnings
 
 import numpy as np
 
-try:
-    from identification.fourier_trajectory import FourierTrajectory
-    from identification.target_limb_regressor import TargetLimbRegressor
-except Exception:
-    FourierTrajectory = None
-    TargetLimbRegressor = None
+from identification.fourier_trajectory import FourierTrajectory
+from identification.target_limb_regressor import TargetLimbRegressor
 
 SEED = 42
 APPLY_PHYSICAL = False
@@ -98,18 +94,15 @@ class VariationalBayesianJFA:
         psi_x_init=None,
         psi_z_init=None,
         psi_y_init=None,
-        max_iter=100000,
+        max_iter=1e5,
         tol=1e-5,
         cal_beta=False,
     ):
         X = np.asarray(X, dtype=float)
         Y = np.asarray(Y, dtype=float).reshape(-1)
-        if X.ndim != 2:
-            raise ValueError("X must be 2D")
-        if Y.ndim != 1:
-            raise ValueError("Y must be 1D")
-        if X.shape[0] != Y.shape[0]:
-            raise ValueError("X and Y size mismatch")
+        assert X.ndim == 2, "X must be 2D"
+        assert Y.ndim == 1, "Y must be 1D"
+        assert X.shape[0] == Y.shape[0], "X and Y size mismatch"
 
         N, d = X.shape
         self.d = d
@@ -753,7 +746,7 @@ def run_robot_demo(
     # Per-joint fitting WITH standardization and structural zero-column removal.
     # For each joint d, we only fit on the 12 * (#subtree_joints) columns that
     # are structurally non-zero.  This avoids the numerical issues of zero
-    # columns in get_beta_true() and lets standardisation work correctly.
+    # columns in get_beta_true().
     # ------------------------------------------------------------------
 
     for d in range(dof):
@@ -767,50 +760,32 @@ def run_robot_demo(
         X_active_true = X_true[d][:, active_cols]  # (N, n_active)
         Y_true_joint = Y_true[d]  # (N,)
 
-        # ---- standardize non-zero columns and Y ----
-        X_mean = np.mean(X_active_true, axis=0)
-        X_std = np.std(X_active_true, axis=0)
-        X_std = np.maximum(X_std, 1e-12)  # guard against zero-std columns
-        X_active_std = (X_active_true - X_mean) / X_std
-
-        Y_mean = float(np.mean(Y_true_joint))
-        Y_std_val = float(np.std(Y_true_joint))
-        Y_std_val = max(Y_std_val, 1e-12)
-        Y_std_norm = (Y_true_joint - Y_mean) / Y_std_val
-
-        # ---- SNR-based noise addition ----
-        input_snr_val = 10.0  # tunable: input SNR
-        output_snr_val = 5.0  # tunable: output SNR (matching paper default)
-        X_noise_std = 1.0 / np.sqrt(input_snr_val)
-        Y_noise_std = 1.0 / np.sqrt(output_snr_val)
-
+        # ---- add noise (absolute, same as original) ----
         rng = np.random.default_rng(SEED + d)
-        X_active = X_active_std + rng.normal(0.0, X_noise_std, X_active_std.shape)
-        Y_active = Y_std_norm + rng.normal(0.0, Y_noise_std, N)
+        X_active = X_active_true + rng.normal(0.0, 0.001, X_active_true.shape)
+        Y_active = Y_true_joint + rng.normal(0.0, 0.002, N)
 
         # ---- identifiable projection (on full original space) ----
         proj_ident, rank_x = identifiable_projection_matrix(X_true[d])
 
-        # ---- OLS on standardized data ----
-        theta_ols_active_std = np.linalg.lstsq(X_active, Y_active, rcond=None)[0]
-        # Transform back to original scale
-        theta_ols_active = theta_ols_active_std * (Y_std_val / X_std)
+        # ---- OLS on active data ----
+        theta_ols_active = np.linalg.lstsq(X_active, Y_active, rcond=None)[0]
         theta_ols = np.zeros(d_, dtype=float)
         theta_ols[active_cols] = theta_ols_active
 
-        # ---- VB-JFA initialization on standardized data ----
-        # w_x_init: all ~1.0 on standardized data (columns have unit variance)
+        # ---- VB-JFA on active data (no standardization) ----
         w_x_init_active = np.ones(n_active, dtype=float)
-        # w_z_init: true theta mapped to standardized space
         theta_true_active = theta_true[active_cols]
-        w_z_init_active = theta_true_active * (X_std / Y_std_val)
+        w_z_init_active = theta_true_active.copy()
 
-        # psi_x_init: noise variance ≈ 1/SNR for all standardized columns
-        psi_x_init_active = np.full(n_active, X_noise_std**2)
-        # psi_z_init: expected per-dim contribution to unit-variance Y
-        psi_z_init_active = np.full(n_active, 1.0 / max(n_active, 1))
-        # psi_y_init: output noise variance ≈ 1/output_SNR
-        psi_y_init_val = Y_noise_std**2
+        # psi_x_init: per-column input noise variance (0.1^2 for all)
+        psi_x_init_active = np.full(n_active, 0.00001)
+        # psi_z_init: latent prior variance, roughly var(Y) / n_active
+        psi_z_init_active = np.full(
+            n_active, max(np.var(Y_true_joint), 1e-4) / max(n_active, 1)
+        )
+        # psi_y_init: output noise variance (0.2^2)
+        psi_y_init_val = 0.00004
 
         model = VariationalBayesianJFA(verbose=verbose)
         model.fit(
@@ -824,17 +799,14 @@ def run_robot_demo(
             tol=1e-5,
             cal_beta=True,
         )
-        theta_bayes_active_std = model.get_beta_true()
-
-        # Transform back to original scale
-        theta_bayes_active = theta_bayes_active_std * (Y_std_val / X_std)
+        theta_bayes_active = model.get_beta_true()
         theta_bayes = np.zeros(d_, dtype=float)
         theta_bayes[active_cols] = theta_bayes_active
 
-        # ---- reconstruct full noisy X and Y in original space (for RMSE / projection) ----
+        # ---- reconstruct full noisy X and Y (for RMSE / projection) ----
         X_noisy_full = X_true[d].copy()
-        X_noisy_full[:, active_cols] = X_active * X_std + X_mean
-        Y_noisy_full = Y_active * Y_std_val + Y_mean
+        X_noisy_full[:, active_cols] = X_active
+        Y_noisy_full = Y_active
 
         # ---- physical projection (on full space) ----
         theta_bayes_phys = theta_bayes.copy()
