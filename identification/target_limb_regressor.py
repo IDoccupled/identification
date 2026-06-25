@@ -59,13 +59,11 @@ class TargetLimbRegressor:
         print_info=False,
     ):
 
-        if not urdf_path.is_file():
-            raise FileNotFoundError(f"URDF file not found at: {urdf_path}")
-        if group_to_identify not in VALID_LIMB_GROUPS:
-            raise ValueError(
-                f"Invalid group_to_identify: {group_to_identify}. "
-                f"Must be one of: {list(VALID_LIMB_GROUPS.keys())}"
-            )
+        assert urdf_path.is_file(), f"URDF file not found at: {urdf_path}"
+        assert group_to_identify in VALID_LIMB_GROUPS, (
+            f"Invalid group_to_identify: {group_to_identify}. "
+            f"Must be one of: {list(VALID_LIMB_GROUPS.keys())}"
+        )
 
         urdf_path = Path(urdf_path).resolve()
         print(f"\033[93mUsing URDF path: {urdf_path}\033[0m") if print_info else None
@@ -282,18 +280,17 @@ class TargetLimbRegressor:
 
         for d in range(dof):
             joint_d = self.group_to_identify[d]
+            # Pinocchio joint ID = idx_q + 1 (joint 0 is the "universe" root)
+            pinocchio_d = joint_d + 1
             for j in range(dof):
                 joint_j = self.group_to_identify[j]
-                # Walk up from joint_j to see if joint_d is an ancestor.
-                cur = joint_j
-                while cur != 0:  # 0 = universe (root)
-                    if cur == joint_d:
+                # Walk up the parent chain from joint_j to see if joint_d is an ancestor.
+                cur = joint_j + 1  # convert to Pinocchio joint ID
+                while cur != 0:  # 0 = universe (root), has no parent
+                    if cur == pinocchio_d:
                         mask[d, j] = True
                         break
                     cur = self.model.parents[cur]
-                # Also true if joint_j == joint_d (a joint is in its own subtree).
-                if joint_j == joint_d:
-                    mask[d, j] = True
 
         return mask
 
@@ -398,6 +395,8 @@ class TargetLimbRegressor:
             Y_target_limb=Y_target_limb,
             v_target_limb=v_target_limb,
         )
+
+        self.subtree_mask = self.get_subtree_mask()
 
         q_excess = 0.0
         v_excess = 0.0
@@ -506,6 +505,7 @@ class TargetLimbRegressor:
         friction=False,
         computed_torques=False,
         excess=False,
+        subtree_mask=False,
     ):
 
         print(
@@ -561,6 +561,22 @@ class TargetLimbRegressor:
                     f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
                     f"{self._fmt_array_lines(self.Y_target_friction[i, :], per_line=10)} \n"
                 )
+
+        if subtree_mask:
+            print("\033[93mKinematic subtree mask (d x j)\033[0m".center(80, "-"))
+            mask = self.subtree_mask
+            print(f"Shape: {mask.shape}")
+            # Print header row showing group_to_identify joint names
+            header = "       " + "  ".join(
+                f"j{j_idx}({self.target_joint_infos[j_idx]['name'][:12]})"
+                for j_idx in range(self.dof)
+            )
+            print(header)
+            for d in range(self.dof):
+                row = "  ".join(
+                    f"{'T' if mask[d, j] else '.':>5}" for j in range(self.dof)
+                )
+                print(f"d={d} ({self.target_joint_infos[d]['name']:<20s}): {row}")
 
         if computed_torques:
             print("\033[95mComputed torques for target limb\033[0m".center(80, "*"))
@@ -628,7 +644,9 @@ def main():
         a=[10.0, 8.0, 5.0, 3.0, 1.0],
         print_info=True,
     )
-    regressor.print_regressor_info(computed_torques=True, parameters=True, excess=True)
+    regressor.print_regressor_info(
+        computed_torques=True, parameters=True, excess=True, subtree_mask=True
+    )
     regressor.print_joint_info(selected_group=True)
 
 
