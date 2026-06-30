@@ -79,7 +79,7 @@ Q_LIMIT_BUFFER = 0.1
 V_LIMIT_BUFFER = 0.1
 TAU_LIMIT_BUFFER = 0.1
 
-RNG_SEED = 67
+RNG_SEED = 70
 
 
 class PSOoptimizer:
@@ -150,7 +150,13 @@ class PSOoptimizer:
 
         for x, y in zip(X, Y):
             self.jfa.fit(
-                X=x, Y=y, psi_x_init=1e-8, psi_z_init=1e-8, w_z_init=w_z_init, tol=1e-4
+                X=x,
+                Y=y,
+                psi_x_init=1e-4,
+                psi_z_init=1e-4,
+                psi_y_init=1e-4,
+                w_z_init=w_z_init,
+                tol=1e-4,
             )
             hit_active += self.jfa.get_active_mask(threshold=100.0).astype(int)
             hit_weakly += self.jfa.get_active_mask(threshold=1e4).astype(int)
@@ -304,6 +310,7 @@ class PSOWithYamlSave(PSO):
             iter_data = {
                 "gbest_y": float(self.gbest_y),
                 "description": f"Iter: {iter_num}, Best fit: [{self.gbest_y}]",
+                "rnd_seed": RNG_SEED,
                 "coefficients": coeffs_data,
             }
 
@@ -332,7 +339,7 @@ def main():
     regressor = TargetLimbRegressor(
         urdf_path=URDF_PATH, group_to_identify="left_arm", print_info=True
     )
-    fourier_traj = FourierTrajectory(dim=regressor.dof)
+    fourier_traj = FourierTrajectory(dim=regressor.dof, sample_rate=50)
     jfa = VariationalBayesianJFA(verbose=False)
     optimizer = PSOoptimizer(fourier_traj, regressor, jfa)
 
@@ -345,14 +352,14 @@ def main():
         func=fitness_wrapper,
         dim=fourier_traj.dim * (fourier_traj.n_harmonics * 2 + 1),
         pop=POP_SIZE,
-        max_iter=MAX_ITER,
+        max_iter=1,
         w=PSO_W,
         c1=PSO_C1,
         c2=PSO_C2,
         lb=optimizer.lb,
         ub=optimizer.ub,
         verbose=True,
-        save_path="0724_2.yaml",
+        save_path="0729_3.yaml",
         dim_structured=fourier_traj.dim,
         n_harmonics=fourier_traj.n_harmonics,
     )

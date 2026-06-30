@@ -1,6 +1,5 @@
 import argparse
 import json
-import time
 import warnings
 
 import numpy as np
@@ -19,7 +18,8 @@ N_TRIALS = 3
 N_TRAIN = 1000
 N_TEST = 1000
 
-YAML_FILE = "0724_2.yaml"
+YAML_FILE = ["0724_2.yaml", "0729_1.yaml", "0729_2.yaml", "0729_3.yaml"]
+# YAML_FILE = ["0724_2.yaml"]
 
 
 def format_array(value, per_line=5):
@@ -549,9 +549,16 @@ def run_synthetic_demo(
     Comparison: OLS vs Bayesian VB-JFA (no physical projection needed for synthetic).
     """
     print("\nRunning Section 5.1 synthetic evaluation...")
+    # ===
+    # n_relevant = 10
+    # n_total = 100
+    # scenarios = [(90, 0), (0, 90), (30, 60), (60, 30)]
+    # # beta_true_rel = np.arange(1, n_relevant + 1, dtype=float)  # [1, 2, ..., 10]
+    # beta_true_rel = np.array([0.7, 0.5, 1, 5, 0.3, 0.2, 0.1, 1, 0.6, 0.4]) * 10
+    # ===
     n_relevant = 10
-    n_total = 100
-    scenarios = [(90, 0), (0, 90), (30, 60), (60, 30)]
+    n_total = 10
+    scenarios = [(0, 0)]
     # beta_true_rel = np.arange(1, n_relevant + 1, dtype=float)  # [1, 2, ..., 10]
     beta_true_rel = np.array([0.7, 0.5, 1, 5, 0.3, 0.2, 0.1, 1, 0.6, 0.4]) * 10
 
@@ -665,7 +672,8 @@ def run_synthetic_demo(
                 print(
                     f"  [{r=:2d},{u=:2d}] trial {trial + 1:2d}/{n_trials}  "
                     f"nMSE_OLS={nmse_ols:.4f}  nMSE_BAYES={nmse_bayes:.4f}"
-                    f"  (β={beta_used})"
+                    f"  (β={beta_used})\n"
+                    f"beta_OLS={beta_ols}\nbeta_BAYES={beta_bayes}\n"
                 )
 
         results[(r, u)] = {
@@ -710,7 +718,7 @@ def run_robot_demo(
     input_snr=10.0,
     output_snr=20.0,
     apply_physical=True,
-    max_iter=100000,
+    max_iter=1e5,
     tol=1e-5,
     verbose=True,
     parameters=None,
@@ -724,70 +732,68 @@ def run_robot_demo(
         sample_rate=100,
     )
 
-    start = time.time()
+    X_true_per_joint = [np.empty((0, 5 * 12), dtype=float)] * 5
+    X_noisy_per_joint = [np.empty((0, 5 * 12), dtype=float)] * 5
+    Y_clean_per_joint = [np.empty((0,), dtype=float)] * 5
 
-    q, v, a = fourier_traj.generate_trajectory_from_yaml(YAML_FILE)
+    for trial in YAML_FILE:
+        q, v, a = fourier_traj.generate_trajectory_from_yaml(trial)
 
-    dof = q.shape[0]
-    samples = q.shape[1]
+        dof = q.shape[0]
+        assert dof == 5, f"Expected 5 DoF, got {dof}"
+        samples = q.shape[1]
 
-    # ---- Add SNR-based noise to v and a BEFORE regressor computation ----
-    # This propagates naturally through the regressor, creating realistic
-    # column-dependent noise structure suitable for VB-JFA.
-    v_var = np.var(v, axis=1)  # per-DoF velocity variance
-    a_var = np.var(a, axis=1)  # per-DoF acceleration variance
-    v_noise_std = np.sqrt(np.maximum(v_var, 1e-8) / input_snr)
-    a_noise_std = np.sqrt(np.maximum(a_var, 1e-8) / input_snr)
-    v_noisy = v + rng.normal(0, 1, v.shape) * v_noise_std[:, None]
-    a_noisy = a + rng.normal(0, 1, a.shape) * a_noise_std[:, None]
+        # ---- Add SNR-based noise to v and a BEFORE regressor computation ----
+        # This propagates naturally through the regressor, creating realistic
+        # column-dependent noise structure suitable for VB-JFA.
+        v_var = np.var(v, axis=1)  # per-DoF velocity variance
+        a_var = np.var(a, axis=1)  # per-DoF acceleration variance
+        v_noise_std = np.sqrt(np.maximum(v_var, 1e-8) / input_snr)
+        a_noise_std = np.sqrt(np.maximum(a_var, 1e-8) / input_snr)
+        v_noisy = v + rng.normal(0, 1, v.shape) * v_noise_std[:, None]
+        a_noisy = a + rng.normal(0, 1, a.shape) * a_noise_std[:, None]
+        theta_true = None
 
-    # Compute regressors: clean (from clean v,a) and noisy (from noisy v,a)
-    X_true_per_joint = [np.empty((0, dof * 12), dtype=float)] * dof
-    X_noisy_per_joint = [np.empty((0, dof * 12), dtype=float)] * dof
-    Y_clean_per_joint = [np.empty((0,), dtype=float)] * dof
-    theta_true = None
-
-    for sample in range(samples):
-        # Clean: from clean q, v, a
-        (
-            Y_aug_clean,
-            tau_clean,
-            pi_aug,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-        ) = regressor.compute_regressor(q=q[:, sample], v=v[:, sample], a=a[:, sample])
-        # Noisy: from clean q, noisy v, a
-        (
-            Y_aug_noisy,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-        ) = regressor.compute_regressor(
-            q=q[:, sample], v=v_noisy[:, sample], a=a_noisy[:, sample]
-        )
-        for d in range(dof):
-            X_true_per_joint[d] = np.vstack((X_true_per_joint[d], Y_aug_clean[d]))
-            X_noisy_per_joint[d] = np.vstack((X_noisy_per_joint[d], Y_aug_noisy[d]))
-            Y_clean_per_joint[d] = np.hstack((Y_clean_per_joint[d], tau_clean[d]))
+        for sample in range(samples):
+            # Clean: from clean q, v, a
+            (
+                Y_aug_clean,
+                tau_clean,
+                pi_aug,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+            ) = regressor.compute_regressor(
+                q=q[:, sample], v=v[:, sample], a=a[:, sample]
+            )
+            # Noisy: from clean q, noisy v, a
+            (
+                Y_aug_noisy,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+            ) = regressor.compute_regressor(
+                q=q[:, sample], v=v_noisy[:, sample], a=a_noisy[:, sample]
+            )
+            for d in range(dof):
+                X_true_per_joint[d] = np.vstack((X_true_per_joint[d], Y_aug_clean[d]))
+                X_noisy_per_joint[d] = np.vstack((X_noisy_per_joint[d], Y_aug_noisy[d]))
+                Y_clean_per_joint[d] = np.hstack((Y_clean_per_joint[d], tau_clean[d]))
         theta_true = pi_aug
-
-    if theta_true is None:
-        raise RuntimeError("Failed to build robot dataset")
 
     N, d_ = X_true_per_joint[0].shape
 
@@ -820,49 +826,28 @@ def run_robot_demo(
         theta_ols = np.zeros(d_, dtype=float)
         theta_ols[active_cols] = theta_ols_active
 
-        # ---- Per-column standardization (z-score) for VB-JFA ----
-        # Columns have vastly different scales (std from 0 to ~17).
-        # Standardize so w_x ≈ 1 for all columns, ARD prior works properly.
-        X_active_mean = np.mean(X_active_noisy, axis=0)
-        X_active_std = np.std(X_active_noisy, axis=0)
-        zero_col_mask = X_active_std < 1e-8
-        X_active_std[zero_col_mask] = 1.0
-        X_active_stdz = (X_active_noisy - X_active_mean) / X_active_std
-        X_active_stdz[:, zero_col_mask] = 0.0
-
-        # psi_x after standardization: original noise variance / column_std²
-        # Add floor to prevent K from exploding (K_diag ≈ 1/psi_x)
-        psi_x_orig = np.maximum(np.var(delta_X, axis=0), 1e-8)
-        psi_x_stdz = np.maximum(psi_x_orig / (X_active_std**2), 1e-4)
-        psi_x_stdz[zero_col_mask] = 1e-4
-
+        # ---- VB-JFA on original-scale noisy regressor ----
+        # psi_x from observed noise (clean vs noisy regressor difference)
+        psi_x_init_active = np.maximum(np.var(delta_X, axis=0), 1e-8)
         w_x_init_active = np.ones(n_active, dtype=float)
-        w_x_init_active[zero_col_mask] = 1e-8
-        theta_ols_stdz = np.linalg.lstsq(X_active_stdz, Y_noisy, rcond=None)[0]
-        w_z_init_active = theta_ols_stdz.copy()
-
+        w_z_init_active = theta_ols_active.copy()
         psi_z_init_active = np.full(n_active, max(y_var, 1e-4) / max(n_active, 1))
         psi_y_init_val = max(output_noise_std**2, 1e-8)
 
         model = VariationalBayesianJFA(verbose=verbose)
         model.fit(
-            X=X_active_stdz,
+            X=X_active_noisy,
             Y=Y_noisy,
             w_x_init=w_x_init_active,
             w_z_init=w_z_init_active,
-            psi_x_init=psi_x_stdz,
+            psi_x_init=psi_x_init_active,
             psi_z_init=psi_z_init_active,
             psi_y_init=psi_y_init_val,
             max_iter=max_iter,
             tol=tol,
             cal_beta=True,
         )
-        theta_bayes_stdz = model.get_beta_true()
-        # Un-standardize: β_original = β_stdz / column_std
-        theta_bayes_active = np.zeros(n_active, dtype=float)
-        theta_bayes_active[~zero_col_mask] = (
-            theta_bayes_stdz[~zero_col_mask] / X_active_std[~zero_col_mask]
-        )
+        theta_bayes_active = model.get_beta_true()
         theta_bayes = np.zeros(d_, dtype=float)
         theta_bayes[active_cols] = theta_bayes_active
 
@@ -908,7 +893,6 @@ def run_robot_demo(
         print(f"X shape: {X_active_noisy.shape}")
         print(f"Y shape: {Y_noisy.shape}")
         print(f"rank(X_true): {rank_x}/{d_}")
-        print(f"matrix generation time: {time.time() - start:.2f} s")
 
         print(f"P@theta_true:\n{format_array(theta_true_ident)}")
         print(f"P@theta_ols:\n{format_array(theta_ols_ident)}")
