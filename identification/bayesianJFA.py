@@ -250,14 +250,12 @@ class VariationalBayesianJFA:
         return self
 
     def get_beta_true(self):
-        """Eq. (29): regression coefficients for noiseless input queries.
-
-        Closed form: beta_true = w_z / w_x (element-wise), derived via Woodbury
-        from the paper's Eq. (29). This avoids the numerically fragile C-matrix
-        inversion.
+        """
+        Eq. (29): regression coefficients for noiseless input queries.
         """
         if self.d is None:
             raise RuntimeError("Model is not initialized")
+
         return self.w_z_mean / np.maximum(self.w_x_mean, self.eps)
 
     def get_beta_sum(self):
@@ -519,6 +517,117 @@ class RBDPhysicalConsistencyProjector:
             "objective": float(info["objective"]),
         }
         return theta_out, out_info
+
+
+# =========================================================================
+# Chirp (frequency sweep) trajectory generator for rum_robot_random demo
+# =========================================================================
+
+CHIRP_DEFAULT_DURATION = 5.0
+CHIRP_DEFAULT_SAMPLE_RATE = 100.0
+CHIRP_DEFAULT_N_TRIALS = 30
+
+
+def generate_chirp_trajectory(
+    dof,
+    q_lower,
+    q_upper,
+    duration=CHIRP_DEFAULT_DURATION,
+    sample_rate=CHIRP_DEFAULT_SAMPLE_RATE,
+    rng=None,
+):
+    """
+    Generate a single chirp (frequency-sweep) trajectory for all joints.
+
+    Each joint gets independently randomized parameters to maximise the
+    diversity of angle–velocity combinations across trials:
+
+    - Amplitude: 20%–80% of the joint's half-range.
+    - Centre position q0: uniform within safe bounds (avoiding limit margins).
+    - Start/end frequency: random sweep between 0.05 Hz and 8 Hz, direction
+      randomised (up- or down-chirp).
+    - Phase: uniform random [0, 2π).
+
+    Parameters
+    ----------
+    dof : int
+        Number of degrees of freedom.
+    q_lower : ndarray of shape (dof,)
+        Lower joint position limits.
+    q_upper : ndarray of shape (dof,)
+        Upper joint position limits.
+    duration : float
+        Trajectory duration in seconds.
+    sample_rate : float
+        Sampling frequency in Hz.
+    rng : numpy.random.Generator, optional
+        Random number generator for reproducibility.
+
+    Returns
+    -------
+    q_traj : ndarray of shape (dof, n_samples)
+    v_traj : ndarray of shape (dof, n_samples)
+    a_traj : ndarray of shape (dof, n_samples)
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    n_samples = int(duration * sample_rate)
+    t = np.linspace(0.0, duration, n_samples, endpoint=False)
+
+    q_traj = np.zeros((dof, n_samples))
+    v_traj = np.zeros((dof, n_samples))
+    a_traj = np.zeros((dof, n_samples))
+
+    for i in range(dof):
+        q_range = float(q_upper[i] - q_lower[i])
+        half_range = q_range / 2.0
+
+        # Amplitude: cover different magnitudes across trials
+        amp_ratio = rng.uniform(0.2, 0.8)
+        amplitude = half_range * amp_ratio
+
+        # Centre position q0: stay within safe bounds
+        margin = amplitude * 1.05  # small safety margin
+        q0_min = float(q_lower[i]) + margin
+        q0_max = float(q_upper[i]) - margin
+        if q0_min >= q0_max:
+            # fallback for very narrow joints
+            q0 = (float(q_lower[i]) + float(q_upper[i])) / 2.0
+        else:
+            q0 = rng.uniform(q0_min, q0_max)
+
+        # Frequency sweep range – randomised per joint per trial
+        f_start = rng.uniform(0.05, 2.0)
+        f_end = rng.uniform(1.5, 8.0)
+        # Randomise sweep direction (up-chirp vs down-chirp)
+        if rng.random() < 0.5:
+            f_start, f_end = f_end, f_start
+
+        # Random phase offset
+        phase = rng.uniform(0.0, 2.0 * np.pi)
+
+        # --- Chirp signal generation ---
+        # φ(t) = 2π·[f₀·t + (f₁−f₀)/(2T)·t²] + phase₀
+        f_slope = (f_end - f_start) / duration
+        phi = 2.0 * np.pi * (f_start * t + 0.5 * f_slope * t**2) + phase
+
+        # Instantaneous frequency and its derivative
+        f_inst = f_start + f_slope * t  # Hz
+        omega_inst = 2.0 * np.pi * f_inst  # rad/s
+        alpha_inst = 2.0 * np.pi * f_slope  # rad/s²  (constant)
+
+        # Position, velocity, acceleration
+        sin_phi = np.sin(phi)
+        cos_phi = np.cos(phi)
+
+        q_traj[i, :] = q0 + amplitude * sin_phi
+        v_traj[i, :] = amplitude * omega_inst * cos_phi
+        a_traj[i, :] = (
+            -amplitude * omega_inst**2 * sin_phi + amplitude * alpha_inst * cos_phi
+        )
+
+    return q_traj, v_traj, a_traj
 
 
 def run_synthetic_demo(
@@ -927,17 +1036,325 @@ def run_robot_demo(
         print("======================================================")
 
 
+def run_rum_robot_random_demo(
+    seed=42,
+    input_snr=10.0,
+    output_snr=20.0,
+    apply_physical=True,
+    max_iter=1e5,
+    tol=1e-5,
+    verbose=True,
+    n_chirp_trials=CHIRP_DEFAULT_N_TRIALS,
+    duration=CHIRP_DEFAULT_DURATION,
+    sample_rate=CHIRP_DEFAULT_SAMPLE_RATE,
+):
+    """
+    "rum robot random" experiment — chirp-based excitation with maximally
+    diverse angle–velocity coverage.
+
+    Instead of optimised Fourier trajectories loaded from YAML files, this
+    experiment generates many independent frequency-sweep (chirp) trajectories,
+    each with randomly varied amplitude, centre position, sweep range,
+    direction and phase per joint.  The goal is to test whether a large,
+    coverage-rich dataset allows VB-JFA to outperform classical OLS in the
+    robot identification setting.
+
+    Parameters
+    ----------
+    seed : int
+        Random seed for reproducibility.
+    input_snr : float
+        Target SNR for velocity/acceleration input noise.
+    output_snr : float
+        Target SNR for torque output noise.
+    apply_physical : bool
+        Whether to apply the rigid-body physical-consistency projector.
+    max_iter : int
+        Max VB-EM iterations per joint.
+    tol : float
+        Convergence tolerance.
+    verbose : bool
+        Print per-joint diagnostics.
+    n_chirp_trials : int
+        Number of independent chirp trajectories to generate and stack.
+    duration : float
+        Duration of each chirp trajectory (seconds).
+    sample_rate : float
+        Sampling rate (Hz) for each trajectory.
+    """
+    print("\n" + "=" * 72)
+    print("  rum robot random demo — Chirp Excitation Experiment")
+    print(
+        f"  n_chirp_trials={n_chirp_trials}, duration={duration}s, "
+        f"sample_rate={sample_rate}Hz"
+    )
+    print(f"  total samples ≈ {n_chirp_trials * int(duration * sample_rate)}")
+    print("=" * 72 + "\n")
+
+    np.random.seed(seed)
+    rng = np.random.default_rng(seed)
+
+    # ---- Robot model (provides joint limits) ----
+    regressor = TargetLimbRegressor()
+    dof = regressor.dof
+
+    q_lower = regressor.limits["q_lower"]
+    q_upper = regressor.limits["q_upper"]
+
+    print(f"Target limb: {regressor.group_to_identify}")
+    print(f"DOF: {dof}")
+    print("Joint limits:")
+    for i in range(dof):
+        print(
+            f"  Joint {i}: q ∈ [{q_lower[i]:.3f}, {q_upper[i]:.3f}], "
+            f"v_limit={regressor.limits['v_limit'][i]:.3f}"
+        )
+
+    # ---- Accumulators ----
+    X_true_per_joint = [np.empty((0, dof * 12), dtype=float) for _ in range(dof)]
+    X_noisy_per_joint = [np.empty((0, dof * 12), dtype=float) for _ in range(dof)]
+    Y_clean_per_joint = [np.empty((0,), dtype=float) for _ in range(dof)]
+
+    # Statistics for coverage diagnostics
+    all_q = [[] for _ in range(dof)]
+    all_v = [[] for _ in range(dof)]
+    theta_true = None
+
+    # ---- Generate and process chirp trajectories ----
+    for trial in range(n_chirp_trials):
+        q, v, a = generate_chirp_trajectory(
+            dof=dof,
+            q_lower=q_lower,
+            q_upper=q_upper,
+            duration=duration,
+            sample_rate=sample_rate,
+            rng=rng,
+        )
+
+        samples = q.shape[1]  # time steps in this trajectory
+
+        # Per-joint velocity/acceleration variance for noise scaling
+        v_var = np.var(v, axis=1)
+        a_var = np.var(a, axis=1)
+        v_noise_std = np.sqrt(np.maximum(v_var, 1e-8) / input_snr)
+        a_noise_std = np.sqrt(np.maximum(a_var, 1e-8) / input_snr)
+        v_noisy = v + rng.normal(0, 1, v.shape) * v_noise_std[:, None]
+        a_noisy = a + rng.normal(0, 1, a.shape) * a_noise_std[:, None]
+
+        for s in range(samples):
+            # Clean regressor
+            (
+                Y_aug_clean,
+                tau_clean,
+                pi_aug,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+            ) = regressor.compute_regressor(q=q[:, s], v=v[:, s], a=a[:, s])
+            # Noisy regressor
+            (
+                Y_aug_noisy,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+            ) = regressor.compute_regressor(q=q[:, s], v=v_noisy[:, s], a=a_noisy[:, s])
+
+            for d in range(dof):
+                X_true_per_joint[d] = np.vstack((X_true_per_joint[d], Y_aug_clean[d]))
+                X_noisy_per_joint[d] = np.vstack((X_noisy_per_joint[d], Y_aug_noisy[d]))
+                Y_clean_per_joint[d] = np.hstack((Y_clean_per_joint[d], tau_clean[d]))
+                all_q[d].append(q[d, s])
+                all_v[d].append(v[d, s])
+
+        if theta_true is None:
+            theta_true = pi_aug
+
+        if verbose and (trial + 1) % max(1, n_chirp_trials // 5) == 0:
+            print(
+                f"  Processed trial {trial + 1}/{n_chirp_trials} "
+                f"(accumulated {X_true_per_joint[0].shape[0]} samples)"
+            )
+
+    # ---- Coverage diagnostics ----
+    N, d_ = X_true_per_joint[0].shape
+    print(f"\nTotal dataset: {N} samples × {d_} regressor columns")
+    print("Coverage summary (per joint):")
+    for d in range(dof):
+        q_arr = np.array(all_q[d])
+        v_arr = np.array(all_v[d])
+        q_range = q_upper[d] - q_lower[d]
+        v_limit = regressor.limits["v_limit"][d]
+        q_coverage = (np.max(q_arr) - np.min(q_arr)) / max(q_range, 1e-6) * 100.0
+        v_coverage = (np.max(np.abs(v_arr))) / max(v_limit, 1e-6) * 100.0
+        print(
+            f"  Joint {d}: q_range_used={q_coverage:.1f}%, "
+            f"v_peak_used={v_coverage:.1f}% | "
+            f"q∈[{np.min(q_arr):.3f},{np.max(q_arr):.3f}], "
+            f"v∈[{np.min(v_arr):.3f},{np.max(v_arr):.3f}]"
+        )
+
+    # ---- Per-joint VB-JFA identification ----
+    subtree_mask = regressor.get_subtree_mask()
+
+    print("\n" + "=" * 72)
+    print("  VB-JFA Identification Results (per joint)")
+    print("=" * 72)
+
+    for d in range(dof):
+        # Active column mask (subtree)
+        active_12block = np.zeros(dof, dtype=bool)
+        active_12block[:] = subtree_mask[d, :]
+        active_cols = np.repeat(active_12block, 12)
+        n_active = int(np.sum(active_cols))
+
+        X_active_true = X_true_per_joint[d][:, active_cols]
+        X_active_noisy = X_noisy_per_joint[d][:, active_cols]
+        Y_clean = Y_clean_per_joint[d]
+
+        # Output noise
+        y_var = float(np.var(Y_clean))
+        output_noise_std = np.sqrt(max(y_var, 1e-8) / output_snr)
+        Y_noisy = Y_clean + rng.normal(0, output_noise_std, N)
+
+        delta_X = X_active_noisy - X_active_true
+
+        # Identifiable projection
+        proj_ident, rank_x = identifiable_projection_matrix(X_true_per_joint[d])
+
+        # OLS
+        theta_ols_active = np.linalg.lstsq(X_active_noisy, Y_noisy, rcond=None)[0]
+        theta_ols = np.zeros(d_, dtype=float)
+        theta_ols[active_cols] = theta_ols_active
+
+        # VB-JFA
+        psi_x_init_active = np.maximum(np.var(delta_X, axis=0), 1e-8)
+        w_x_init_active = np.ones(n_active, dtype=float)
+        w_z_init_active = theta_ols_active.copy()
+        psi_z_init_active = np.full(n_active, max(y_var, 1e-4) / max(n_active, 1))
+        psi_y_init_val = max(output_noise_std**2, 1e-8)
+
+        model = VariationalBayesianJFA(verbose=verbose)
+        model.fit(
+            X=X_active_noisy,
+            Y=Y_noisy,
+            w_x_init=w_x_init_active,
+            w_z_init=w_z_init_active,
+            psi_x_init=psi_x_init_active,
+            psi_z_init=psi_z_init_active,
+            psi_y_init=psi_y_init_val,
+            max_iter=max_iter,
+            tol=tol,
+            cal_beta=True,
+        )
+        theta_bayes_active = model.get_beta_true()
+        theta_bayes = np.zeros(d_, dtype=float)
+        theta_bayes[active_cols] = theta_bayes_active
+
+        # Physical projection
+        X_noisy_full = X_noisy_per_joint[d].copy()
+        theta_bayes_phys = theta_bayes.copy()
+        phys_info = {"applied": False, "reason": "disabled"}
+        if apply_physical:
+            projector = RBDPhysicalConsistencyProjector(verbose=True)
+            theta_bayes_phys, phys_info = projector.project(theta_bayes, X_noisy_full)
+
+        theta_true_ident = proj_ident @ theta_true
+        theta_ols_ident = proj_ident @ theta_ols
+        theta_bayes_ident = proj_ident @ theta_bayes
+        theta_bayes_phys_ident = proj_ident @ theta_bayes_phys
+
+        rmse_ols = float(
+            np.sqrt(np.mean((Y_noisy - X_active_noisy @ theta_ols_active) ** 2))
+        )
+        rmse_bayes = float(
+            np.sqrt(np.mean((Y_noisy - X_active_noisy @ theta_bayes_active) ** 2))
+        )
+        rmse_bayes_phys = float(
+            np.sqrt(np.mean((Y_noisy - X_noisy_full @ theta_bayes_phys) ** 2))
+        )
+
+        print(f"\n---------------- Joint {d + 1}/{dof} ----------------")
+        subtree_joints = [j for j in range(dof) if subtree_mask[d, j]]
+        print(f"Subtree joints: {subtree_joints}  (active params: {n_active}/{d_})")
+        print(f"VB-JFA converged in {model.n_iter_} iterations")
+        print(f"input SNR={input_snr:.1f}, output SNR={output_snr:.1f}")
+        alpha_active = model.get_alpha_mean()
+        alpha_full = np.full(d_, np.inf)
+        alpha_full[active_cols] = alpha_active
+        print(
+            f"VB-JFA E[alpha] (per 12-param block): "
+            f"{format_array([float(np.mean(alpha_full[j * 12 : (j + 1) * 12])) for j in range(dof)])}"
+        )
+        print(
+            f"VB-JFA active dims (alpha < 1e2): {model.count_small_alphas(100)}/{n_active}"
+        )
+        print(f"X shape: {X_active_noisy.shape}")
+        print(f"Y shape: {Y_noisy.shape}")
+        print(f"rank(X_true): {rank_x}/{d_}")
+
+        print(f"P@theta_true:\n{format_array(theta_true_ident)}")
+        print(f"P@theta_ols:\n{format_array(theta_ols_ident)}")
+        print(f"P@theta_bayes:\n{format_array(theta_bayes_ident)}")
+        print(f"P@theta_bayes_phys:\n{format_array(theta_bayes_phys_ident)}")
+
+        print(
+            f"OLS safe relative error (%):\n{format_array(safe_percent_error(theta_ols_ident, theta_true_ident))}"
+        )
+        print(
+            f"VB-JFA safe relative error (%):\n{format_array(safe_percent_error(theta_bayes_ident, theta_true_ident))}"
+        )
+        print(
+            "VB-JFA + physical safe relative error (%):\n"
+            f"{format_array(safe_percent_error(theta_bayes_phys_ident, theta_true_ident))}"
+        )
+
+        print(f"physical projection applied: {phys_info.get('applied', False)}")
+        if not phys_info.get("applied", False):
+            print(f"physical projection reason: {phys_info.get('reason', 'n/a')}")
+        else:
+            print(
+                "physical projection details: "
+                f"phys_dims={phys_info['phys_dims']}, "
+                f"iter={phys_info['iterations']}, "
+                f"objective={phys_info['objective']:.6e}"
+            )
+
+        print(f"OLS torque RMSE: {rmse_ols:.6f}")
+        print(f"VB-JFA torque RMSE: {rmse_bayes:.6f}")
+        print(f"VB-JFA + physical torque RMSE: {rmse_bayes_phys:.6f}")
+
+    print("\n" + "=" * 72)
+    print("  rum robot random demo finished")
+    print("=" * 72 + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Paper-aligned Bayesian JFA with optional physical consistency projection"
     )
     parser.add_argument(
         "--demo",
-        choices=["synthetic", "robot"],
+        choices=["synthetic", "robot", "rum_robot_random"],
         default="synthetic",
         help=(
-            "synthetic: Section 5.1 setup (OLS vs BAYES, 4 scenarios, 10 trials)"
-            "robot: full robot regression demo with input fourier trajectory parameters"
+            "synthetic: Section 5.1 setup (OLS vs BAYES, 4 scenarios, 10 trials)  "
+            "robot: full robot regression demo with pre-optimised Fourier trajectories  "
+            "rum_robot_random: chirp-based excitation with randomised sweep parameters "
+            "per joint — maximises angle–velocity coverage to test data-richness benefit"
         ),
     )
 
@@ -993,6 +1410,26 @@ def main():
         type=json.loads,
         help='Parameters for Fourier trajectory generation as a JSON array. Size [dof * (n_harmonics * 2 + 2)], n_harmonics=5 in this project. Usage: --fourier-parameters "[1.0, 2.0, 3.0]"',
     )
+
+    # ---- rum_robot_random specific options ----
+    parser.add_argument(
+        "--n-chirp-trials",
+        type=int,
+        default=CHIRP_DEFAULT_N_TRIALS,
+        help=f"Number of chirp trajectories to generate (default {CHIRP_DEFAULT_N_TRIALS})",
+    )
+    parser.add_argument(
+        "--chirp-duration",
+        type=float,
+        default=CHIRP_DEFAULT_DURATION,
+        help=f"Duration of each chirp trajectory in seconds (default {CHIRP_DEFAULT_DURATION})",
+    )
+    parser.add_argument(
+        "--chirp-sample-rate",
+        type=float,
+        default=CHIRP_DEFAULT_SAMPLE_RATE,
+        help=f"Sample rate for chirp trajectories in Hz (default {CHIRP_DEFAULT_SAMPLE_RATE})",
+    )
     args = parser.parse_args()
 
     if args.demo == "synthetic":
@@ -1006,6 +1443,21 @@ def main():
             max_iter=args.max_iter,
             tol=args.tol,
             verbose=not args.quiet,
+        )
+        return
+
+    if args.demo == "rum_robot_random":
+        run_rum_robot_random_demo(
+            seed=args.seed,
+            input_snr=args.input_snr,
+            output_snr=args.output_snr,
+            apply_physical=not args.no_physical,
+            max_iter=args.max_iter,
+            tol=args.tol,
+            verbose=not args.quiet,
+            n_chirp_trials=args.n_chirp_trials,
+            duration=args.chirp_duration,
+            sample_rate=args.chirp_sample_rate,
         )
         return
 
