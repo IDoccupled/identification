@@ -59,6 +59,22 @@ class VariationalBayesianJFA:
 
     The updates follow Eq. (8)-(25) in:
     Ting et al., Neural Networks 24 (2011) 99-108.
+
+    Generative model (per sample n, dimension j):
+        t_n       ~ N(0, I)              # latent clean input
+        x_{n,j}   = w_{x,j} t_{n,j} + ε^x_{n,j},   ε^x ~ N(0, ψ_{x,j})
+        z_{n,j}   = w_{z,j} t_{n,j} + ε^z_{n,j},   ε^z ~ N(0, ψ_{z,j})
+        y_n       = Σ_j z_{n,j} + ε^y_n,            ε^y ~ N(0, ψ_y)
+
+    True regression coefficient (noiseless x → y):
+        β_j = w_{z,j} / w_{x,j}                        Eq. (29)
+
+    Priors:
+        w_{x,j}, w_{z,j} ~ N(0, α_j^{-1})
+        α_j ~ Gamma(a_0, b_0)
+
+    Variational posterior factorisation:
+        q(W,Z,T,α) = Π_j q(w_{x,j}) q(w_{z,j})  Π_n q(z_n,t_n)  Π_j q(α_j)
     """
 
     def __init__(
@@ -75,12 +91,13 @@ class VariationalBayesianJFA:
 
         self.fitted_ = False
         self.n_iter_ = 0
+        self.d = None
 
     def _as_vector(self, value, d):
         assert value is not None, "No Input Value Provided"
         arr = np.asarray(value, dtype=float)
         if arr.ndim == 0:
-            return np.ones(d, dtype=float) * float(arr)
+            return np.full(d, float(arr), dtype=float)
         if arr.shape != (d,):
             raise ValueError(f"Expected shape ({d},), got {arr.shape}")
         return arr.copy()
@@ -98,6 +115,20 @@ class VariationalBayesianJFA:
         tol=1e-5,
         cal_beta=False,
     ):
+        """Run VB-EM for the JFA model.
+
+        Parameters
+        ----------
+        X : (N, d) array — observed noisy inputs.
+        Y : (N,)  array — observed outputs.
+        w_x_init, w_z_init : (d,) initial weight means.
+        psi_x_init, psi_z_init : (d,) initial input noise variances.
+        psi_y_init : float, initial output noise variance.
+        max_iter : int
+        tol : float — convergence threshold on max |Δψ_y| and mean |Δα_b|.
+        cal_beta : bool — if True, also check convergence on β = w_z / w_x
+                   (slightly more expensive).
+        """
         X = np.asarray(X, dtype=float)
         Y = np.asarray(Y, dtype=float).reshape(-1)
         assert X.ndim == 2, "X must be 2D"
@@ -106,10 +137,10 @@ class VariationalBayesianJFA:
 
         N, d = X.shape
         self.d = d
-
         self.max_iter = int(max_iter)
         self.tol = float(tol)
 
+        # ---- initialise q(w) ----
         self.w_x_mean = (
             self._as_vector(w_x_init, d)
             if w_x_init is not None
@@ -120,127 +151,155 @@ class VariationalBayesianJFA:
             if w_z_init is not None
             else np.linalg.lstsq(X, Y, rcond=None)[0]
         )
+        self.w_x_var = np.full(d, 1e-2, dtype=float)
+        self.w_z_var = np.full(d, 1e-2, dtype=float)
 
-        self.psi_x = self._as_vector(psi_x_init, d)
-        self.psi_z = self._as_vector(psi_z_init, d)
-        self.psi_y = float(psi_y_init)
-        self.w_x_var = np.ones(d, dtype=float) * 1e-2
-        self.w_z_var = np.ones(d, dtype=float) * 1e-2
-
-        # Start from E[alpha] = a0/b0 ≈ 1e-2 (weaker prior, faster adaptation)
+        # ---- initialise q(α) ----
         self.alpha_a = np.full(d, self.alpha_a0, dtype=float)
         self.alpha_b = np.full(d, self.alpha_b0, dtype=float)
 
-        one = np.ones(d, dtype=float)
-        prev_beta = None
+        # ---- initialise noise variances ----
+        self.psi_x = self._as_vector(psi_x_init, d)
+        self.psi_z = self._as_vector(psi_z_init, d)
+        self.psi_y = float(psi_y_init)
+
+        # pre-compute Σ_x = X^T X / N (used only for convergence tracking)
+        sum_x2 = np.sum(X**2, axis=0)  # (d,)
+
+        # ---- convergence tracking ----
+        prev_param = None  # stores β (if cal_beta) or α_b (otherwise)
 
         for it in range(self.max_iter):
-            psi_x_safe = np.maximum(self.psi_x, self.eps)
-            psi_z_safe = np.maximum(self.psi_z, self.eps)
-            psi_y_safe = float(max(self.psi_y, self.eps))
+            # -------- numerical safeguards --------
+            psi_x_s = np.maximum(self.psi_x, self.eps)
+            psi_z_s = np.maximum(self.psi_z, self.eps)
+            psi_y_s = float(max(self.psi_y, self.eps))
             alpha_mean = self.alpha_a / np.maximum(self.alpha_b, self.eps)
 
-            e_wx2 = self.w_x_mean**2 + self.w_x_var
+            e_wx2 = self.w_x_mean**2 + self.w_x_var  # E[w_{x,j}²]
+            e_wz2 = self.w_z_mean**2 + self.w_z_var  # E[w_{z,j}²]
+
+            # ============================================================
+            #  E-step: update q(z_n, t_n) for all n
+            # ============================================================
+            #
+            #  Joint precision  Λ = [[Λ_zz, Λ_zt], [Λ_tz, Λ_tt]]
+            #
+            #  Λ_zz = diag(1/ψ_z) + 11^T / ψ_y                     (a)
+            #  Λ_zt = -diag(μ_z / ψ_z)                              (b)
+            #  Λ_tt = diag(1 + e_wx2/ψ_x + e_wz2/ψ_z)  = diag(K)   (c)
+            #
+            #  Schur complement for z:
+            #    S_z = Λ_zz - Λ_zt Λ_tt^{-1} Λ_zt
+            #        = diag(a) + 11^T/ψ_y
+            #    where  a_j = 1/ψ_{z,j} − μ_{z,j}² / (ψ_{z,j}² K_j)
+
+            K_diag = 1.0 + e_wx2 / psi_x_s + e_wz2 / psi_z_s  # (d,)
+            a_diag = 1.0 / psi_z_s - self.w_z_mean**2 / (psi_z_s**2 * K_diag)
+            a_diag = np.maximum(a_diag, self.eps)  # (d,)
+            v = 1.0 / a_diag  # (d,)
+            s_v = float(np.sum(v))
+            woodbury_denom = psi_y_s + s_v
+            woodbury_denom = max(woodbury_denom, self.eps)
+
+            # β_j = μ_{z,j} / (ψ_{z,j} K_j)   —  auxiliary vector
+            beta_vec = self.w_z_mean / (psi_z_s * K_diag)  # (d,)
+
+            # ---- per-sample posterior means μ_{z,n}, μ_{t,n} ----
+            #  g_n    = x_n ⊙ μ_x / ψ_x      (d,)     η_t term
+            #  h_n    = g_n ⊙ β              (d,)
+            #  c_n    = y_n / woodbury_denom (scalar)
+            #
+            #  μ_{z,n} = c_n · v  +  v ⊙ h_n  −  v · (v·h_n) / woodbury_denom
+            #  μ_{t,n} = g_n / K  +  β ⊙ μ_{z,n}
+
+            g = X * (self.w_x_mean[None, :] / psi_x_s[None, :])  # (N, d)
+            h = g * beta_vec[None, :]  # (N, d)
+            vh = h @ v  # (N,)
+            c = Y / woodbury_denom  # (N,)
+
+            # μ_z  (N, d)
+            E_z = v[None, :] * (c[:, None] + h - vh[:, None] / woodbury_denom)
+
+            # μ_t  (N, d)
+            E_t = g / K_diag[None, :] + beta_vec[None, :] * E_z
+
+            # ---- posterior covariances (shared across samples) ----
+            #  Σ_zz_{i,j} = δ_{ij}·v_i  −  v_i v_j / woodbury_denom
+            #  Σ_zt = Σ_zz · diag(β)
+            #  Σ_tt = diag(1/K) + diag(β) · Σ_zz · diag(β)
+            #
+            #  Only the diagonals are needed for the M-step.
+            diag_Sigma_zz = v - v**2 / woodbury_denom  # (d,)
+            diag_Sigma_zt = diag_Sigma_zz * beta_vec  # (d,)
+            diag_Sigma_tt = 1.0 / K_diag + beta_vec**2 * diag_Sigma_zz  # (d,)
+
+            # ---- sufficient statistics for M-step ----
+            sum_t2 = N * diag_Sigma_tt + np.sum(E_t**2, axis=0)  # (d,)
+            sum_z2 = N * diag_Sigma_zz + np.sum(E_z**2, axis=0)  # (d,)
+            sum_zt = N * diag_Sigma_zt + np.sum(E_z * E_t, axis=0)  # (d,)
+            sum_xt = np.sum(X * E_t, axis=0)  # (d,)
+
+            # ============================================================
+            #  M-step: update q(w_z), q(w_x), q(α), ψ
+            # ============================================================
+
+            # Eq. (8):  Σ_{w_z}  = (diag(E[α]) + diag(sum_t2/ψ_z))^{-1}
+            prec_wz = alpha_mean + sum_t2 / psi_z_s
+            self.w_z_var = 1.0 / np.maximum(prec_wz, self.eps)
+            # Eq. (9):  μ_{w_z}  = Σ_{w_z} · (sum_zt / ψ_z)
+            self.w_z_mean = self.w_z_var * (sum_zt / psi_z_s)
+
+            # Eq. (10): Σ_{w_x}  = (diag(E[α]) + diag(sum_t2/ψ_x))^{-1}
+            prec_wx = alpha_mean + sum_t2 / psi_x_s
+            self.w_x_var = 1.0 / np.maximum(prec_wx, self.eps)
+            # Eq. (11): μ_{w_x}  = Σ_{w_x} · (sum_xt / ψ_x)
+            self.w_x_mean = self.w_x_var * (sum_xt / psi_x_s)
+
+            # Eq. (12)-(13): q(α_j) = Gamma(a_0+1,  b_0 + ½(E[w_z²]+E[w_x²]))
             e_wz2 = self.w_z_mean**2 + self.w_z_var
-
-            # Eq. (21)
-            K_diag = 1.0 + e_wx2 / psi_x_safe + e_wz2 / psi_z_safe
-            K_inv = np.diag(1.0 / np.maximum(K_diag, self.eps))
-
-            # Eq. (22)
-            inner_diag = 1.0 + e_wx2 / psi_x_safe + self.w_z_var / psi_z_safe
-            M_diag = psi_z_safe + (self.w_z_mean**2) / np.maximum(inner_diag, self.eps)
-            M = np.diag(M_diag)
-
-            # Eq. (17)
-            M1 = M @ one
-            denom = psi_y_safe + float(one @ M1)
-            Sigma_zz = M - np.outer(M1, M1) / max(denom, self.eps)
-
-            Wz = np.diag(self.w_z_mean)
-            Wx = np.diag(self.w_x_mean)
-            Psi_z_inv = np.diag(1.0 / psi_z_safe)
-            Psi_x_inv = np.diag(1.0 / psi_x_safe)
-
-            # Eq. (19), Eq. (20), Eq. (18)
-            Sigma_zt = Sigma_zz @ Wz @ Psi_z_inv @ K_inv
-            Sigma_tz = Sigma_zt.T
-            Sigma_tt = (
-                K_inv + K_inv @ Wz @ Psi_z_inv @ Sigma_zz @ Psi_z_inv @ Wz @ K_inv
-            )
-
-            # Eq. (23), Eq. (24)
-            const_z_row = one @ Sigma_zz
-            const_t_row = one @ Sigma_zz @ Wz @ Psi_z_inv @ K_inv
-            E_z = (Y[:, None] / psi_y_safe) * const_z_row[
-                None, :
-            ] + X @ Wx @ Psi_x_inv @ Sigma_tz
-            E_t = (Y[:, None] / psi_y_safe) * const_t_row[
-                None, :
-            ] + X @ Wx @ Psi_x_inv @ Sigma_tt
-
-            diag_Sigma_tt = np.diag(Sigma_tt)
-            diag_Sigma_zz = np.diag(Sigma_zz)
-            diag_Sigma_zt = np.diag(Sigma_zt)
-
-            sum_t2 = N * diag_Sigma_tt + np.sum(E_t**2, axis=0)
-            sum_z2 = N * diag_Sigma_zz + np.sum(E_z**2, axis=0)
-            sum_zt = N * diag_Sigma_zt + np.sum(E_z * E_t, axis=0)
-            sum_xt = np.sum(X * E_t, axis=0)
-            sum_x2 = np.sum(X**2, axis=0)
-
-            # Eq. (8)-(11)
-            self.w_z_var = 1.0 / np.maximum(sum_t2 / psi_z_safe + alpha_mean, self.eps)
-            self.w_z_mean = self.w_z_var * (sum_zt / psi_z_safe)
-
-            self.w_x_var = 1.0 / np.maximum(sum_t2 / psi_x_safe + alpha_mean, self.eps)
-            self.w_x_mean = self.w_x_var * (sum_xt / psi_x_safe)
-
-            # Eq. (12), Eq. (13)
-            e_wz2 = self.w_z_mean**2 + self.w_z_var
             e_wx2 = self.w_x_mean**2 + self.w_x_var
-            self.alpha_a = np.ones(d, dtype=float) * (self.alpha_a0 + 1.0)
+            self.alpha_a = np.full(d, self.alpha_a0 + 1.0, dtype=float)
             self.alpha_b = self.alpha_b0 + 0.5 * (e_wz2 + e_wx2)
 
-            # Eq. (15), Eq. (16)
+            # Eq. (15): ψ_{z,j} = (1/N) Σ_n E[(z_{n,j} − w_{z,j} t_{n,j})²]
             self.psi_z = (sum_z2 - 2.0 * self.w_z_mean * sum_zt + e_wz2 * sum_t2) / N
+            # Eq. (16): ψ_{x,j} = (1/N) Σ_n E[(x_{n,j} − w_{x,j} t_{n,j})²]
             self.psi_x = (sum_x2 - 2.0 * self.w_x_mean * sum_xt + e_wx2 * sum_t2) / N
 
-            # Eq. (14)
-            sum_ez = np.sum(E_z, axis=1)
-            szz_scalar = float(one @ Sigma_zz @ one)
+            # Eq. (14): ψ_y = (1/N) Σ_n E[(y_n − 1^T z_n)²]
+            #  1^T Σ_zz 1 = Σ_i v_i − (Σ_i v_i)²/woodbury_denom = s_v − s_v²/woodbury_denom
+            sum_ez = np.sum(E_z, axis=1)  # (N,)
+            szz_scalar = s_v - s_v**2 / woodbury_denom
             self.psi_y = float(
                 np.mean(Y**2 - 2.0 * Y * sum_ez + szz_scalar + sum_ez**2)
             )
 
-            self.psi_x = np.maximum(self.psi_x, self.eps)
-            self.psi_z = np.maximum(self.psi_z, self.eps)
-            self.psi_y = float(max(self.psi_y, self.eps))
+            # ---- clamp noise variances ----
+            self.psi_x = np.clip(self.psi_x, self.eps, 1.0 / self.eps)
+            self.psi_z = np.clip(self.psi_z, self.eps, 1.0 / self.eps)
+            self.psi_y = float(np.clip(self.psi_y, self.eps, 1.0 / self.eps))
 
-            # Prevent extreme psi values from causing numerical blowup
-            self.psi_x = np.minimum(self.psi_x, 1.0 / self.eps)
-            self.psi_z = np.minimum(self.psi_z, 1.0 / self.eps)
-            self.psi_y = float(min(self.psi_y, 1.0 / self.eps))
-
+            # ---- convergence check ----
+            converged = False
             if cal_beta:
                 beta_now = self.get_beta_true()
-                if prev_beta is not None:
-                    if np.max(np.abs(beta_now - prev_beta)) < self.tol:
-                        self.n_iter_ = it + 1
-                        if self.verbose:
-                            print(f"VB-EM converged at iteration {it}")
-                        break
-                prev_beta = beta_now
+                if prev_param is not None:
+                    if np.max(np.abs(beta_now - prev_param)) < self.tol:
+                        converged = True
+                prev_param = beta_now
             else:
-                # Lightweight convergence: track alpha_b changes (ARD weights)
-                # instead of expensive get_beta_true().
-                if prev_beta is not None:
-                    if np.max(np.abs(self.alpha_b - prev_beta)) < self.tol:
-                        self.n_iter_ = it + 1
-                        if self.verbose:
-                            print(f"VB-EM converged (alpha) at iteration {it}")
-                        break
-                prev_beta = self.alpha_b.copy()
+                # Track changes in ARD rate parameters α_b
+                if prev_param is not None:
+                    if np.max(np.abs(self.alpha_b - prev_param)) < self.tol:
+                        converged = True
+                prev_param = self.alpha_b.copy()
+
+            if converged:
+                self.n_iter_ = it + 1
+                if self.verbose:
+                    print(f"VB-EM converged at iteration {it + 1}")
+                break
         else:
             self.n_iter_ = self.max_iter
             if self.verbose:
@@ -251,26 +310,52 @@ class VariationalBayesianJFA:
 
     def get_beta_true(self):
         """
-        Eq. (29): regression coefficients for noiseless input queries.
+        Eq. (29): regression vector for noiseless input queries.
+
+        β̂_true = [ψ_y · 1^T C^{-1} / (ψ_y − 1^T C^{-1} 1)] · Ψ_z^{-1} · <W_z>^T · <W_x>^{-1}
+
+        where  C = 11^T / ψ_y + Ψ_z^{-1}
+
+        C^{-1} is obtained by the Sherman–Morrison formula:
+            C^{-1} = Ψ_z − (Ψ_z 1)(Ψ_z 1)^T / (ψ_y + 1^T Ψ_z 1)
+
+        All diagonal matrices (<W_z>, <W_x>, Ψ_z) are represented by their
+        diagonal vectors (w_z_mean, w_x_mean, psi_z).
         """
         if self.d is None:
             raise RuntimeError("Model is not initialized")
 
-        return self.w_z_mean / np.maximum(self.w_x_mean, self.eps)
+        psi_z = np.maximum(self.psi_z, self.eps)  # (d,)  diagonal of Ψ_z
+        psi_y = float(max(self.psi_y, self.eps))  # scalar ψ_y
 
-    def get_beta_sum(self):
-        """Direct regression coefficients from the generative model.
+        # ---- C^{-1} via Sherman–Morrison ----
+        # C = Ψ_z^{-1} + (1/ψ_y) 1 1^T
+        # s = 1^T Ψ_z 1 = Σ_j ψ_{z,j}
+        s = float(np.sum(psi_z))
 
-        From y = z^T w_z + x^T w_x + ε_y, for noiseless t*:
-            E[y* | t*] = t*^T (w_z + w_x)
-        This returns w_z_mean + w_x_mean as an alternative to get_beta_true().
-        """
-        if self.d is None:
-            raise RuntimeError("Model is not initialized")
-        return self.w_z_mean + self.w_x_mean
+        # 1^T C^{-1}  (row vector, size d)
+        # = 1^T Ψ_z − s · 1^T Ψ_z / (ψ_y + s)
+        # = ψ_z · ψ_y / (ψ_y + s)
+        one_T_C_inv = psi_z * psi_y / (psi_y + s)  # (d,)
+
+        # 1^T C^{-1} 1  (scalar)
+        one_T_C_inv_1 = float(np.sum(one_T_C_inv))  # = ψ_y · s / (ψ_y + s)
+
+        # denominator:  ψ_y − 1^T C^{-1} 1  (= ψ_y² / (ψ_y + s))
+        denom_scalar = max(psi_y - one_T_C_inv_1, self.eps)
+
+        # prefactor row vector:  ψ_y · 1^T C^{-1} / denom_scalar  (d,)
+        prefactor = psi_y * one_T_C_inv / denom_scalar  # (d,)
+
+        # β̂_true = prefactor · Ψ_z^{-1} · diag(<w_z>) · diag(<w_x>)^{-1}
+        # element-wise: β_j = prefactor_j / ψ_{z,j} · <w_{z,j}> / <w_{x,j}>
+        beta_true = (
+            (prefactor / psi_z) * self.w_z_mean / np.maximum(self.w_x_mean, self.eps)
+        )
+        return beta_true
 
     def get_alpha_mean(self):
-        """Return E[alpha_j] = alpha_a_j / alpha_b_j for each input dimension."""
+        """Return E[α_j] = alpha_a_j / alpha_b_j for each input dimension."""
         if self.d is None:
             raise RuntimeError("Model is not initialized")
         return self.alpha_a / np.maximum(self.alpha_b, self.eps)
@@ -281,21 +366,17 @@ class VariationalBayesianJFA:
         *threshold*, meaning the parameter is "activated" (not pruned).
 
         Typical regime:
-          - E[alpha_j] < 1e2  → strongly activated (identifiable)
-          - E[alpha_j] > 1e3 → pruned (not identifiable)
-          - 1e2~1e3          → intermediate (may be weakly excited)
+          - E[α_j] < 1e2  → strongly activated (identifiable)
+          - E[α_j] > 1e3 → pruned (not identifiable)
+          - 1e2~1e3      → intermediate (may be weakly excited)
         """
         if self.d is None:
             raise RuntimeError("Model is not initialized")
-        alpha_mean = self.get_alpha_mean()
-        return alpha_mean < threshold
+        return self.get_alpha_mean() < threshold
 
     def count_small_alphas(self, threshold=100.0):
         """Return the integer count of activated (non-pruned) dimensions."""
         return int(np.sum(self.get_active_mask(threshold)))
-
-    def get_theta_ratio(self):
-        return self.w_z_mean / (self.w_x_mean + self.eps)
 
 
 class RBDPhysicalConsistencyProjector:
@@ -659,17 +740,17 @@ def run_synthetic_demo(
     """
     print("\nRunning Section 5.1 synthetic evaluation...")
     # ===
-    # n_relevant = 10
-    # n_total = 100
-    # scenarios = [(90, 0), (0, 90), (30, 60), (60, 30)]
-    # # beta_true_rel = np.arange(1, n_relevant + 1, dtype=float)  # [1, 2, ..., 10]
+    n_relevant = 10
+    n_total = 100
+    scenarios = [(90, 0), (0, 90), (30, 60), (60, 30)]
+    beta_true_rel = np.arange(1, n_relevant + 1, dtype=float)  # [1, 2, ..., 10]
     # beta_true_rel = np.array([0.7, 0.5, 1, 5, 0.3, 0.2, 0.1, 1, 0.6, 0.4]) * 10
     # ===
-    n_relevant = 10
-    n_total = 10
-    scenarios = [(0, 0)]
+    # n_relevant = 10
+    # n_total = 10
+    # scenarios = [(0, 0)]
     # beta_true_rel = np.arange(1, n_relevant + 1, dtype=float)  # [1, 2, ..., 10]
-    beta_true_rel = np.array([0.7, 0.5, 1, 5, 0.3, 0.2, 0.1, 1, 0.6, 0.4]) * 10
+    # # beta_true_rel = np.array([0.7, 0.5, 1, 5, 0.3, 0.2, 0.1, 1, 0.6, 0.4]) * 10
 
     results = {}
 
@@ -747,7 +828,10 @@ def run_synthetic_demo(
                 X_train,
                 Y_noisy_train,
                 w_x_init=np.ones(X_train.shape[1]),
-                w_z_init=beta_ols.copy(),
+                w_z_init=np.hstack(
+                    [beta_true_rel, np.zeros((X_train.shape[1] - n_relevant,))]
+                )
+                + np.random.normal(0, 0.3, size=X_train.shape[1]),
                 psi_x_init=psi_x_init,
                 psi_z_init=np.full(
                     X_train.shape[1],
@@ -758,14 +842,7 @@ def run_synthetic_demo(
                 max_iter=max_iter,
                 tol=tol,
             )
-            beta_bayes_ratio = model.get_beta_true()  # paper Eq.(29): w_z / w_x
-            beta_bayes_sum = model.get_beta_sum()  # generative model: w_z + w_x
-            # Use the better of the two on training data
-            pred_ratio = X_train @ beta_bayes_ratio
-            pred_sum = X_train @ beta_bayes_sum
-            mse_ratio = np.mean((pred_ratio - Y_noisy_train) ** 2)
-            mse_sum = np.mean((pred_sum - Y_noisy_train) ** 2)
-            beta_bayes = beta_bayes_sum if mse_sum < mse_ratio else beta_bayes_ratio
+            beta_bayes = model.get_beta_true()  # paper Eq.(29): w_z / w_x
 
             # --- nMSE on noiseless test data ---
             denom = float(np.mean(Y_test**2))
@@ -777,11 +854,9 @@ def run_synthetic_demo(
             nmse_bayes_trials.append(nmse_bayes)
 
             if verbose:
-                beta_used = "sum" if mse_sum < mse_ratio else "ratio"
                 print(
                     f"  [{r=:2d},{u=:2d}] trial {trial + 1:2d}/{n_trials}  "
-                    f"nMSE_OLS={nmse_ols:.4f}  nMSE_BAYES={nmse_bayes:.4f}"
-                    f"  (β={beta_used})\n"
+                    f"nMSE_OLS={nmse_ols:.4f}  nMSE_BAYES={nmse_bayes:.4f}\n"
                     f"beta_OLS={beta_ols}\nbeta_BAYES={beta_bayes}\n"
                 )
 
