@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Trim-weight approach v2 — fully manual residual function.
+Balance-weight approach v2 — fully manual residual function.
 
-Each link gets a small box-shaped "trim weight" (7 params: mass, pos×3, size×3)
+Each link gets a small box-shaped "balance weight" (7 params: mass, pos×3, size×3)
 to compensate for CAD-to-real gap.  Mass can be negative.
 
-Test: TRUE model generates data; NOMINAL model (perturbed masses/CoMs) + trim
+Test: TRUE model generates data; NOMINAL model (perturbed masses/CoMs) + balance
 weights is optimized to match TRUE dynamics.
 """
 
@@ -13,8 +13,10 @@ import os
 
 os.environ["MUJOCO_GL"] = "egl"
 import numpy as np
-import mujoco, mujoco.rollout as rollout
+import mujoco
+import mujoco.rollout as rollout
 from mujoco import sysid
+import matplotlib.pyplot as plt
 
 # ---------------------------------------------------------------------------
 BODY_NAMES = [
@@ -48,8 +50,9 @@ TRUE_INERTIA = {
     },
 }
 
-MASS_PERTURB = 0.75  # CAD model is LIGHTER than reality (non-neg trim compensates)
-IPOS_PERTURB = 0.03
+MASS_PERTURB = 0.45  # CAD is 55% lighter (wider gap)
+IPOS_PERTURB = 1.25  # CoM scaled by 25% (preserves sign direction)
+INERTIA_PERTURB = 1.0  # rotational inertia unchanged
 
 # ---------------------------------------------------------------------------
 LEFT_ARM_XML = """\
@@ -148,44 +151,45 @@ def make_valid_inertia(Ixx, Iyy, Izz):
 
 
 def build_nominal_spec(base_spec):
-    """Copy spec, perturb masses/CoMs, return it (no trim bodies)."""
+    """Copy spec, perturb masses/CoMs, return it (no balance bodies)."""
     s = base_spec.copy()
     for bn in BODY_NAMES:
         b = s.body(bn)
         b.mass = b.mass * MASS_PERTURB
         old = np.array(b.ipos) if b.ipos is not None else np.zeros(3)
-        b.ipos = old + IPOS_PERTURB * np.array([1.0, -0.7, 0.5])
+        b.ipos = old * IPOS_PERTURB  # proportional scaling, preserves sign
+        # Rotational inertia unchanged (INERTIA_PERTURB = 1.0)
     return s
 
 
-def apply_trims_to_spec(spec, trim_vectors):
-    """Apply trim weights: adjust mass, CoM, and rotational inertia.
-    trim_vectors: dict body_name -> [mass, px, py, pz, sx, sy, sz]
+def apply_balances_to_spec(spec, balance_vectors):
+    """Apply balance weights: adjust mass, CoM, and rotational inertia.
+    balance_vectors: dict body_name -> [mass, px, py, pz, sx, sy, sz]
 
-    Computes the combined inertia of the original body + a box-shaped trim weight
+    Computes the combined inertia of the original body + a box-shaped balance weight
     at position (px,py,pz).  Uses parallel axis theorem to shift both inertias to
     the new combined CoM, then sums diagonals and enforces triangle inequality.
     """
     for bn in BODY_NAMES:
-        m, px, py, pz, sx, sy, sz = trim_vectors[bn]
+        m, px, py, pz, sx, sy, sz = balance_vectors[bn]
         if abs(m) < 1e-9:
             continue
         b = spec.body(bn)
         old_mass = b.mass
         old_ipos = np.array(b.ipos)
         old_I = np.array(b.inertia)
-        trim_pos = np.array([px, py, pz])
+        balance_pos = np.array([px, py, pz])
 
         # Combined mass and CoM
         new_mass = old_mass + m
-        new_ipos = (old_mass * old_ipos + m * trim_pos) / new_mass
+        new_ipos = (old_mass * old_ipos + m * balance_pos) / new_mass
 
         # Box inertia about its own CoM
         box_I = np.array(box_inertia(m, sx, sy, sz))
 
         # Shift both inertias to the new combined CoM
         old_I_shifted = parallel_axis_shift(old_I, old_mass, old_ipos, new_ipos)
-        box_I_shifted = parallel_axis_shift(box_I, m, trim_pos, new_ipos)
+        box_I_shifted = parallel_axis_shift(box_I, m, balance_pos, new_ipos)
 
         # Combine, make physically valid, and ensure strictly positive
         combined = old_I_shifted + box_I_shifted
@@ -201,18 +205,18 @@ def rollout_spec(spec, init_state, ctrl):
     """Compile spec and rollout, return sensor data."""
     try:
         model = spec.compile()
-    except ValueError as e:
+    except ValueError:
         # Print debug info on compile failure
         for bn in BODY_NAMES:
             b = spec.body(bn)
-            I = np.array(b.inertia)
+            i = np.array(b.inertia)
             ok = (
                 "OK"
-                if (I[0] + I[1] >= I[2] and I[0] + I[2] >= I[1] and I[1] + I[2] >= I[0])
+                if (i[0] + i[1] >= i[2] and i[0] + i[2] >= i[1] and i[1] + i[2] >= i[0])
                 else "BAD"
             )
             print(
-                f"  [FAIL] {bn}: mass={b.mass:.4f}, inertia={I}, valid={ok}", flush=True
+                f"  [FAIL] {bn}: mass={b.mass:.4f}, inertia={i}, valid={ok}", flush=True
             )
         raise
     data = mujoco.MjData(model)
@@ -285,7 +289,7 @@ def main():
         nominal_m = true_m * MASS_PERTURB
         known_dm = true_m - nominal_m  # known mass gap
         p = sysid.Parameter(
-            f"trim_{bn}",
+            f"balance_{bn}",
             nominal=np.zeros(7),
             min_value=np.array([0.0, -0.10, -0.10, -0.10, 0.005, 0.005, 0.005]),
             max_value=np.array([1.0, 0.10, 0.10, 0.10, 0.250, 0.250, 0.250]),
@@ -302,9 +306,9 @@ def main():
         def residual_fn(x, param_dict):
             if x.ndim == 1:
                 param_dict.update_from_vector(x)
-                tv = {bn: list(param_dict[f"trim_{bn}"].value) for bn in BODY_NAMES}
+                tv = {bn: list(param_dict[f"balance_{bn}"].value) for bn in BODY_NAMES}
                 spec_copy = nominal_base.copy()
-                apply_trims_to_spec(spec_copy, tv)
+                apply_balances_to_spec(spec_copy, tv)
                 sens_pred = rollout_spec(spec_copy, init_state, ctrl[:-1])
                 return [(sens_pred - sens_true).ravel()], None, None
             else:
@@ -312,9 +316,11 @@ def main():
                 for k in range(x.shape[1]):
                     xk = x[:, k]
                     param_dict.update_from_vector(xk)
-                    tv = {bn: list(param_dict[f"trim_{bn}"].value) for bn in BODY_NAMES}
+                    tv = {
+                        bn: list(param_dict[f"balance_{bn}"].value) for bn in BODY_NAMES
+                    }
                     spec_copy = nominal_base.copy()
-                    apply_trims_to_spec(spec_copy, tv)
+                    apply_balances_to_spec(spec_copy, tv)
                     sens_pred = rollout_spec(spec_copy, init_state, ctrl[:-1])
                     results.append((sens_pred - sens_true).ravel())
                 return [np.column_stack(results)], None, None
@@ -326,14 +332,14 @@ def main():
     # Identify from last link to first
     for round_idx, bn in enumerate(reversed(BODY_NAMES)):
         print(f"\n{'=' * 60}")
-        print(f"  Round {round_idx + 1}/{len(BODY_NAMES)}: identifying trim_{bn}")
+        print(f"  Round {round_idx + 1}/{len(BODY_NAMES)}: identifying balance_{bn}")
         print(f"{'=' * 60}")
 
-        # Unfreeze this body's trim, using known mass diff as initial guess
+        # Unfreeze this body's balance, using known mass diff as initial guess
         true_m = TRUE_INERTIA[bn]["mass"]
         known_dm = true_m - true_m * MASS_PERTURB
-        params[f"trim_{bn}"].frozen = False
-        params[f"trim_{bn}"].value[:] = [
+        params[f"balance_{bn}"].frozen = False
+        params[f"balance_{bn}"].value[:] = [
             known_dm * 1.05,
             0.0,
             0.0,
@@ -362,7 +368,7 @@ def main():
         # Build per-round x_scale (only for the free body)
         x_scales = []
         for b in BODY_NAMES:
-            if not params[f"trim_{b}"].frozen:
+            if not params[f"balance_{b}"].frozen:
                 x_scales.extend(x_scale_7)
 
         opt_params, opt_result = sysid.optimize(
@@ -376,10 +382,10 @@ def main():
         )
         # Copy optimized values back and freeze
         for b in BODY_NAMES:
-            params[f"trim_{b}"].value[:] = opt_params[f"trim_{b}"].value
-        params[f"trim_{bn}"].frozen = True
+            params[f"balance_{b}"].value[:] = opt_params[f"balance_{b}"].value
+        params[f"balance_{bn}"].frozen = True
 
-        val = params[f"trim_{bn}"].value
+        val = params[f"balance_{bn}"].value
         print(
             f"  → {bn}: mass={val[0]:+.4f}, pos=({val[1]:+.3f},{val[2]:+.3f},{val[3]:+.3f}), "
             f"size=({val[4]:.4f},{val[5]:.4f},{val[6]:.4f})"
@@ -387,10 +393,10 @@ def main():
 
     # ---- Final Results ----
     print("\n" + "=" * 65)
-    print("  Sequential Trim Weight Results  (end→base)")
+    print("  Sequential Balance Weight Results  (end→base)")
     print("=" * 65)
     for bn in BODY_NAMES:
-        val = params[f"trim_{bn}"].value
+        val = params[f"balance_{bn}"].value
         m, px, py, pz, sx, sy, sz = val
         true_m = TRUE_INERTIA[bn]["mass"]
         nominal_m = true_m * MASS_PERTURB
@@ -400,6 +406,166 @@ def main():
         print(f"    size=({sx:.4f}, {sy:.4f}, {sz:.4f}) m")
 
     print("\nDone.")
+
+    # ---- Inverse dynamics torque comparison ----
+    # Use mj_inverse: same (q,dq,ddq) on each model → directly tests inverse dynamics.
+    print("\nRunning inverse dynamics comparison …")
+
+    true_model_c = mujoco.MjSpec.from_string(LEFT_ARM_XML).compile()
+    tv_zero = {bn: [0.0] * 7 for bn in BODY_NAMES}
+    tv_opt = {bn: list(params[f"balance_{bn}"].value) for bn in BODY_NAMES}
+
+    def make_model(base_spec, bv):
+        s = base_spec.copy()
+        if bv is not None:
+            apply_balances_to_spec(s, bv)
+        return s.compile()
+
+    init_model_c = make_model(nominal_base, tv_zero)
+    opt_model_c = make_model(nominal_base, tv_opt)
+
+    # Generate reference (q, dq) from true model under gentle excitation
+    duration_vid = 2.0
+    n_steps = int(duration_vid / true_model.opt.timestep)
+    t_vid = np.arange(n_steps) * true_model.opt.timestep
+    # Start from mid-range to avoid immediately hitting limits
+    q_mid = 0.5 * (
+        true_model_c.jnt_range[: true_model_c.nv, 0]
+        + true_model_c.jnt_range[: true_model_c.nv, 1]
+    )
+
+    ctrl_ref = np.column_stack(
+        [
+            2.0 * np.sin(2 * np.pi * 0.5 * t_vid),
+            1.5 * np.sin(2 * np.pi * 0.7 * t_vid + 0.5),
+            1.2 * np.sin(2 * np.pi * 0.4 * t_vid + 1.0),
+            0.8 * np.sin(2 * np.pi * 0.9 * t_vid + 1.5),
+            0.5 * np.sin(2 * np.pi * 0.6 * t_vid + 2.0),
+        ]
+    )
+
+    d_true = mujoco.MjData(true_model_c)
+    d_true.qpos[:] = q_mid
+    q_ref = np.zeros((n_steps, true_model_c.nv))
+    dq_ref = np.zeros((n_steps, true_model_c.nv))
+    ddq_ref = np.zeros((n_steps, true_model_c.nv))
+    q_ref[0] = q_mid
+    for k in range(n_steps - 1):
+        d_true.ctrl[:] = ctrl_ref[k]
+        mujoco.mj_step(true_model_c, d_true)
+        q_ref[k + 1] = d_true.qpos.copy()
+        dq_ref[k + 1] = d_true.qvel.copy()
+        ddq_ref[k + 1] = d_true.qacc.copy()
+
+    # Trim boundary steps + validate joint limits
+    trim = max(n_steps // 20, 1)
+    q_ref = q_ref[trim:-trim]
+    dq_ref = dq_ref[trim:-trim]
+    ddq_ref = ddq_ref[trim:-trim]
+    t_vid = t_vid[trim:-trim]
+    n_steps = len(t_vid)
+
+    # Clip to limits and skip boundary steps where inverse dynamics is ill-defined
+    q_min = true_model_c.jnt_range[: true_model_c.nv, 0] + 0.08
+    q_max = true_model_c.jnt_range[: true_model_c.nv, 1] - 0.08
+    at_limit = (q_ref <= q_min) | (q_ref >= q_max)
+    q_ref = np.clip(q_ref, q_min, q_max)
+    dq_ref[at_limit] = 0.0
+    ddq_ref[at_limit] = 0.0
+    keep = ~at_limit.any(axis=1)
+    q_ref = q_ref[keep]
+    dq_ref = dq_ref[keep]
+    ddq_ref = ddq_ref[keep]
+    t_vid = t_vid[keep]
+    n_steps = len(t_vid)
+    print(f"  Reference: {n_steps} steps, q=[{q_ref.min():.2f},{q_ref.max():.2f}]")
+
+    # mj_inverse on each model
+    models_id = [
+        ("True", true_model_c),
+        ("Nominal", init_model_c),
+        ("Optimized", opt_model_c),
+    ]
+    torque_id = {}
+
+    for label, model in models_id:
+        data = mujoco.MjData(model)
+        tau = np.zeros((n_steps, model.nv))
+        for k in range(n_steps):
+            data.qpos[:] = q_ref[k]
+            data.qvel[:] = dq_ref[k]
+            data.qacc[:] = ddq_ref[k]
+            mujoco.mj_inverse(model, data)
+            tau[k] = data.qfrc_inverse.copy()
+        torque_id[label] = tau
+
+    # Use common valid steps
+    common_len = min(t.shape[0] for t in torque_id.values())
+    for label in torque_id:
+        torque_id[label] = torque_id[label][:common_len]
+    t_tau = t_vid[:common_len]
+
+    # ---- Plot: inverse dynamics torque per joint ----
+    fig, axes = plt.subplots(5, 1, figsize=(12, 10), sharex=True)
+    colors = {"True": "green", "Nominal": "red", "Optimized": "blue"}
+    for j in range(5):
+        ax = axes[j]
+        for label in ["True", "Nominal", "Optimized"]:
+            ax.plot(
+                t_tau,
+                torque_id[label][:, j],
+                color=colors[label],
+                lw=1.0 if label != "True" else 1.5,
+                ls="-" if label == "True" else ("--" if label == "Nominal" else "-."),
+                label=label,
+            )
+        ax.set_ylabel(f"J{13 + j} torque (Nm)")
+        ax.legend(fontsize=7, loc="upper right")
+        ax.grid(True, alpha=0.3)
+    axes[-1].set_xlabel("Time (s)")
+    plt.suptitle("Inverse Dynamics Torque — Same (q,dq,ddq) on Each Model", y=1.01)
+    plt.tight_layout()
+    plt.savefig("torque_tracking.png", dpi=150)
+    plt.close()
+    print("  → saved torque_tracking.png")
+
+    # ---- Torque RMSE bar chart ----
+    rmse_t_init = np.sqrt(
+        np.mean((torque_id["Nominal"] - torque_id["True"]) ** 2, axis=0)
+    )
+    rmse_t_opt = np.sqrt(
+        np.mean((torque_id["Optimized"] - torque_id["True"]) ** 2, axis=0)
+    )
+    fig, ax = plt.subplots(figsize=(8, 4))
+    x = np.arange(5)
+    w = 0.35
+    ax.bar(x - w / 2, rmse_t_init, w, color="red", alpha=0.7, label="Nominal")
+    ax.bar(x + w / 2, rmse_t_opt, w, color="blue", alpha=0.7, label="Optimized")
+    for i in range(5):
+        ax.text(
+            i - w / 2,
+            rmse_t_init[i] + 0.02,
+            f"{rmse_t_init[i]:.2f}",
+            ha="center",
+            fontsize=7,
+        )
+        ax.text(
+            i + w / 2,
+            rmse_t_opt[i] + 0.02,
+            f"{rmse_t_opt[i]:.2f}",
+            ha="center",
+            fontsize=7,
+        )
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"J{13 + j}" for j in range(5)])
+    ax.set_ylabel("Torque RMSE (Nm)")
+    ax.set_title("Tracking Torque RMSE vs Ground Truth")
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis="y")
+    plt.tight_layout()
+    plt.savefig("torque_rmse.png", dpi=150)
+    plt.close()
+    print("  → saved torque_rmse.png")
 
 
 if __name__ == "__main__":
