@@ -121,26 +121,22 @@ def parallel_axis_shift(I_diag, mass, old_com, new_com):
 
 
 def make_valid_inertia(Ixx, Iyy, Izz):
-    """Ensure triangle inequality on the ABSOLUTE values, then restore signs."""
+    """Ensure positive-definite inertia satisfying triangle inequality."""
     arr = np.array([Ixx, Iyy, Izz], dtype=float)
-    signs = np.sign(arr)
-    pos = np.abs(arr)
-    pos = np.maximum(pos, 1e-12)
-    for _ in range(5):
+    # MuJoCo requires positive diagonal elements and A+B >= C for all permutations.
+    arr = np.maximum(arr, 1e-10)
+    for _ in range(10):
         changed = False
-        for largest_idx in range(3):
-            others = [i for i in range(3) if i != largest_idx]
-            deficit = pos[largest_idx] - (pos[others[0]] + pos[others[1]])
-            if deficit > 1e-15:
-                scale = (pos[largest_idx] + 1e-10) / max(
-                    pos[others[0]] + pos[others[1]], 1e-15
-                )
-                pos[others[0]] *= scale
-                pos[others[1]] *= scale
+        for i, j, k in [(0, 1, 2), (0, 2, 1), (1, 2, 0)]:
+            deficit = arr[k] - (arr[i] + arr[j])
+            if deficit > 1e-12:
+                scale = (arr[k] + 1e-10) / max(arr[i] + arr[j], 1e-15)
+                arr[i] *= scale
+                arr[j] *= scale
                 changed = True
         if not changed:
             break
-    return pos * signs
+    return arr
 
 
 def apply_balances_to_spec(spec, balance_vectors):
