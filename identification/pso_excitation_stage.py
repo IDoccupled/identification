@@ -13,7 +13,9 @@ Results saved to trajectory_coefficients/pso_{stage}.yaml
 
 import sys
 import yaml
+import time
 import numpy as np
+from datetime import datetime
 from pathlib import Path
 
 from identification.fourier_trajectory import FourierTrajectory
@@ -38,9 +40,12 @@ N_HARMONICS = 5
 TRAJ_PERIOD = 5.0
 SAMPLE_RATE = 100.0
 
-# Quick validation: small population & iterations
-POP_SIZE = 20
-MAX_ITER = 30
+# Per-stage PSO parameters (overnight run)
+STAGE_CONFIG = {
+    "balance": {"pop": 150, "iter": 800, "amp_scale": 1.0},
+    "armature": {"pop": 120, "iter": 1000, "amp_scale": 3.0},
+    "friction": {"pop": 120, "iter": 700, "amp_scale": 1.0},
+}
 PSO_W = 0.7
 PSO_C1 = 1.5
 PSO_C2 = 1.5
@@ -162,8 +167,10 @@ def compute_fitness(
         if len(ddq_list) < 10:
             return 1e9
         ddq_all = np.array(ddq_list)
-        # Reward: RMS acceleration (large |ddq| → high armature sensitivity)
-        reward = float(np.sqrt(np.mean(ddq_all**2)))
+        # Reward: max |ddq| per joint (push peak acceleration, not average)
+        # This directly maximizes armature identifiability since sensitivity ∝ ddq
+        peak_ddq = np.max(np.abs(ddq_all), axis=0)
+        reward = float(np.mean(peak_ddq))  # average peak across joints
 
     elif stage == "friction":
         if len(dq_list) < 10:
@@ -194,8 +201,13 @@ def compute_fitness(
 
 
 # ---------------------------------------------------------------------------
-def build_bounds(ft: FourierTrajectory, reg: TargetLimbRegressor):
-    """Build PSO bounds for Fourier coefficients respecting joint limits."""
+def build_bounds(
+    ft: FourierTrajectory, reg: TargetLimbRegressor, amp_scale: float = 1.0
+):
+    """Build PSO bounds for Fourier coefficients respecting joint limits.
+
+    amp_scale > 1.0 allows larger accelerations (useful for armature stage).
+    """
     dim, harmonics = ft.dim, ft.n_harmonics
     omega_f = ft.omega_f
     n_coeffs = harmonics * 2 + 1
@@ -210,12 +222,13 @@ def build_bounds(ft: FourierTrajectory, reg: TargetLimbRegressor):
 
         for k in range(harmonics):
             wk = omega_f * (k + 1)
-            # Bound: coefficient a_k produces amplitude a_k/w_k in q
-            # Conservative: split range across harmonics
-            amp_bound = wk * q_range / (2.0 * harmonics)
+            amp_bound = wk * q_range / (2.0 * harmonics) * amp_scale
             idx_a = i * n_coeffs + k * 2
             idx_b = i * n_coeffs + k * 2 + 1
             lb[idx_a] = -amp_bound
+            ub[idx_a] = amp_bound
+            lb[idx_b] = -amp_bound
+            ub[idx_b] = amp_bound
             ub[idx_a] = amp_bound
             lb[idx_b] = -amp_bound
             ub[idx_b] = amp_bound
@@ -245,7 +258,13 @@ def _coeffs_to_yaml_dict(coeffs: np.ndarray, dim: int, n_harmonics: int) -> dict
 
 
 def run_stage(stage: str):
+    cfg = STAGE_CONFIG[stage]
+    pop = cfg["pop"]
+    max_iter = cfg["iter"]
+    amp_scale = cfg["amp_scale"]
+
     print(f"\n{'=' * 60}\n  PSO Stage: {stage}\n{'=' * 60}")
+    print(f"  pop={pop}, iter={max_iter}, amp_scale={amp_scale}")
 
     reg = TargetLimbRegressor(
         urdf_path=URDF_PATH, group_to_identify="left_arm", print_info=False
@@ -256,9 +275,12 @@ def run_stage(stage: str):
         0, TRAJ_PERIOD, int(TRAJ_PERIOD * SAMPLE_RATE), endpoint=False
     )
 
-    lb, ub = build_bounds(ft, reg)
+    lb, ub = build_bounds(ft, reg, amp_scale=amp_scale)
     dim_total = ft.dim * (ft.n_harmonics * 2 + 1)
-    print(f"PSO dim={dim_total}, pop={POP_SIZE}, iter={MAX_ITER}")
+    print(f"PSO dim={dim_total}")
+
+    t_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ts = time.time()
 
     def fitness(x):
         return compute_fitness(x, ft, reg, stage)
@@ -268,8 +290,8 @@ def run_stage(stage: str):
     pso = PSO(
         func=fitness,
         dim=dim_total,
-        pop=POP_SIZE,
-        max_iter=MAX_ITER,
+        pop=pop,
+        max_iter=max_iter,
         w=PSO_W,
         c1=PSO_C1,
         c2=PSO_C2,
@@ -279,12 +301,30 @@ def run_stage(stage: str):
     )
     pso.run()
 
+    elapsed = time.time() - ts
+    t_end = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"Elapsed: {elapsed:.0f}s ({elapsed / 60:.1f}min)")
+
     coeffs_best = pso.gbest_x.flatten()
     print(f"Best fitness: {pso.gbest_y}")
 
-    # ---- Save to YAML ----
+    # ---- Save to YAML with timestamp and unique suffix ----
     yaml_dict = _coeffs_to_yaml_dict(coeffs_best, ft.dim, ft.n_harmonics)
-    yaml_path = YAML_DIR / f"pso_{stage}.yaml"
+    yaml_dict["_meta"] = {
+        "stage": stage,
+        "started": t_start,
+        "finished": t_end,
+        "elapsed_s": round(elapsed, 1),
+        "pop": pop,
+        "iter": max_iter,
+        "amp_scale": amp_scale,
+        "best_fitness": float(pso.gbest_y[0])
+        if hasattr(pso.gbest_y, "__iter__")
+        else float(pso.gbest_y),
+    }
+    # Unique filename: pso_{stage}_{YYMMDD_HHMMSS}.yaml
+    uid = datetime.now().strftime("%y%m%d_%H%M%S")
+    yaml_path = YAML_DIR / f"pso_{stage}_{uid}.yaml"
     yaml_path.parent.mkdir(parents=True, exist_ok=True)
     with open(yaml_path, "w") as f:
         yaml.dump(yaml_dict, f, default_flow_style=False, sort_keys=False)
@@ -321,7 +361,7 @@ def run_stage(stage: str):
         )
 
     if stage == "armature":
-        print(f"RMS ddq: {np.sqrt(np.mean(np.array(a) ** 2)):.2f}")
+        print(f"Peak |ddq|: {np.abs(a).max():.1f}")
 
     if stage == "friction":
         dq_arr = np.array(dq_all)
