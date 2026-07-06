@@ -5,7 +5,7 @@
     <body name="torso" pos="0 0 0.9"><inertial pos="0 0 0" mass="1e-3" diaginertia="1e-12 1e-12 1e-12"/>
       <body name="LINK_SHOULDER_PITCH_L" pos="-0.027105 0.12916 0.21549">
         <inertial pos="-0.0068739 0.0562468 -0.0156415" quat="0.526158 0.836720 -0.143374 0.0500143" mass="0.932155" diaginertia="0.00125198 0.00108471 0.000622336"/>
-        <joint name="J13_SHOULDER_PITCH_L" type="hinge" axis="0 0.998027 0.0627908" range="-2.9671 2.7925" armature="0.039175" damping="0.07" frictionloss="0.29"/>
+        <joint name="J13_SHOULDER_PITCH_L" type="hinge" axis="0 0.998027 0.0627908" range="-2.9671 2.7925" armature="0.039175" damping="0.08" frictionloss="0.30"/>
         <geom type="capsule" fromto="0 0 0 0 0.08 0" size="0.04" rgba="0.2 0.4 0.8 1"/>
         <body name="LINK_SHOULDER_ROLL_L" pos="-0.0371 0.066941 -0.020838">
           <inertial pos="0.037412 0.00677175 -0.0267801" quat="0.694988 -0.115505 0.0954646 0.703233" mass="0.510813" diaginertia="0.0013316 0.000992823 0.000901346"/>
@@ -31,17 +31,17 @@
     </body>
   </worldbody>
   <actuator>
-    <motor name="motor_J13" joint="J13_SHOULDER_PITCH_L" ctrllimited="true" ctrlrange="-61 61"/>
-    <motor name="motor_J14" joint="J14_SHOULDER_ROLL_L" ctrllimited="true" ctrlrange="-61 61"/>
-    <motor name="motor_J15" joint="J15_SHOULDER_YAW_L" ctrllimited="true" ctrlrange="-61 61"/>
-    <motor name="motor_J16" joint="J16_ELBOW_PITCH_L" ctrllimited="true" ctrlrange="-61 61"/>
-    <motor name="motor_J17" joint="J17_ELBOW_YAW_L" ctrllimited="true" ctrlrange="-61 61"/>
+    <motor name="motor_J13" joint="J13_SHOULDER_PITCH_L" gear="1" ctrllimited="true" ctrlrange="-61 61"/>
+    <motor name="motor_J14" joint="J14_SHOULDER_ROLL_L" gear="1" ctrllimited="true" ctrlrange="-61 61"/>
+    <motor name="motor_J15" joint="J15_SHOULDER_YAW_L" gear="1" ctrllimited="true" ctrlrange="-61 61"/>
+    <motor name="motor_J16" joint="J16_ELBOW_PITCH_L" gear="1" ctrllimited="true" ctrlrange="-61 61"/>
+    <motor name="motor_J17" joint="J17_ELBOW_YAW_L" gear="1" ctrllimited="true" ctrlrange="-61 61"/>
   </actuator>
   <sensor>
-    <jointpos name="J13_pos" joint="J13_SHOULDER_PITCH_L"/><jointvel name="J13_vel" joint="J13_SHOULDER_PITCH_L"/>
-    <jointpos name="J14_pos" joint="J14_SHOULDER_ROLL_L"/><jointvel name="J14_vel" joint="J14_SHOULDER_ROLL_L"/>
-    <jointpos name="J15_pos" joint="J15_SHOULDER_YAW_L"/><jointvel name="J15_vel" joint="J15_SHOULDER_YAW_L"/>
-    <jointpos name="J16_pos" joint="J16_ELBOW_PITCH_L"/><jointvel name="J16_vel" joint="J16_ELBOW_PITCH_L"/>
-    <jointpos name="J17_pos" joint="J17_ELBOW_YAW_L"/><jointvel name="J17_vel" joint="J17_ELBOW_YAW_L"/>
+    <jointpos name="J13_pos" joint="J13_SHOULDER_PITCH_L"/><jointvel name="J13_vel" joint="J13_SHOULDER_PITCH_L"/><jointtorque name="J13_torque" joint="J13_SHOULDER_PITCH_L"/>
+    <jointpos name="J14_pos" joint="J14_SHOULDER_ROLL_L"/><jointvel name="J14_vel" joint="J14_SHOULDER_ROLL_L"/><jointtorque name="J14_torque" joint="J14_SHOULDER_ROLL_L"/>
+    <jointpos name="J15_pos" joint="J15_SHOULDER_YAW_L"/><jointvel name="J15_vel" joint="J15_SHOULDER_YAW_L"/><jointtorque name="J15_torque" joint="J15_SHOULDER_YAW_L"/>
+    <jointpos name="J16_pos" joint="J16_ELBOW_PITCH_L"/><jointvel name="J16_vel" joint="J16_ELBOW_PITCH_L"/><jointtorque name="J16_torque" joint="J16_ELBOW_PITCH_L"/>
+    <jointpos name="J17_pos" joint="J17_ELBOW_YAW_L"/><jointvel name="J17_vel" joint="J17_ELBOW_YAW_L"/><jointtorque name="J17_torque" joint="J17_ELBOW_YAW_L"/>
   </sensor>
 </mujoco>
