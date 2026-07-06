@@ -51,6 +51,32 @@ TRUE_INERTIA = {
     },
 }
 
+# Nominal (perturbed) inertia values — must match NOMINAL_LEFT_ARM_XML exactly.
+# mass × 0.75, ipos × 1.25 (adjust MASS_PERTURB / IPOS_PERTURB below to
+# re-generate the nominal XML when needed).
+NOMINAL_INERTIA = {
+    "LINK_SHOULDER_PITCH_L": {
+        "mass": 0.699116,
+        "ipos": [-0.0085924, 0.0703085, -0.0195519],
+    },
+    "LINK_SHOULDER_ROLL_L": {
+        "mass": 0.383110,
+        "ipos": [0.0467650, 0.0084647, -0.0334751],
+    },
+    "LINK_SHOULDER_YAW_L": {
+        "mass": 0.681854,
+        "ipos": [-0.0010568, 0.0027424, -0.0570813],
+    },
+    "LINK_ELBOW_PITCH_L": {
+        "mass": 1.035457,
+        "ipos": [0.0037280, 0.0023339, -0.0814807],
+    },
+    "LINK_ELBOW_YAW_L": {
+        "mass": 0.350639,
+        "ipos": [0.0252314, 0.0002719, -0.1125180],
+    },
+}
+
 MASS_PERTURB = 0.75  # CAD is 25% lighter
 IPOS_PERTURB = 1.25  # CoM scaled by 25% (preserves sign direction)
 INERTIA_PERTURB = 1.0  # rotational inertia unchanged
@@ -117,23 +143,23 @@ NOMINAL_LEFT_ARM_XML = """\
     <body name="torso" pos="0 0 0.9"><inertial pos="0 0 0" mass="1e-3" diaginertia="1e-12 1e-12 1e-12"/>
       <body name="LINK_SHOULDER_PITCH_L" pos="-0.027105 0.12916 0.21549">
         <inertial pos="-0.0085924 0.0703085 -0.0195519" quat="0.526158 0.836720 -0.143374 0.0500143" mass="0.699116" diaginertia="0.00125198 0.00108471 0.000622336"/>
-        <joint name="J13_SHOULDER_PITCH_L" type="hinge" axis="0 0.998027 0.0627908" range="-2.9671 2.7925" armature="0.039175" damping="0.07" frictionloss="0.29"/>
+        <joint name="J13_SHOULDER_PITCH_L" type="hinge" axis="0 0.998027 0.0627908" range="-2.9671 2.7925" armature="0.01" damping="0.01" frictionloss="0.01"/>
         <geom type="capsule" fromto="0 0 0 0 0.08 0" size="0.04" rgba="0.2 0.4 0.8 1"/>
         <body name="LINK_SHOULDER_ROLL_L" pos="-0.0371 0.066941 -0.020838">
           <inertial pos="0.0467650 0.0084647 -0.0334751" quat="0.694988 -0.115505 0.0954646 0.703233" mass="0.383110" diaginertia="0.0013316 0.000992823 0.000901346"/>
-          <joint name="J14_SHOULDER_ROLL_L" type="hinge" axis="1 0 0" range="-0.6108 2.3562" armature="0.039175" damping="0.08" frictionloss="0.30"/>
+          <joint name="J14_SHOULDER_ROLL_L" type="hinge" axis="1 0 0" range="-0.6108 2.3562" armature="0.01" damping="0.01" frictionloss="0.01"/>
           <geom type="capsule" fromto="0 0 0 0.06 0 0" size="0.035" rgba="0.2 0.5 0.9 1"/>
           <body name="LINK_SHOULDER_YAW_L" pos="0.0371 0.017645 -0.070132">
             <inertial pos="-0.0010568 0.0027424 -0.0570813" quat="0.999922 -0.00834297 -0.00593057 0.00715565" mass="0.681854" diaginertia="0.00162177 0.00150888 0.000787082"/>
-            <joint name="J15_SHOULDER_YAW_L" type="hinge" axis="0 -0.0628027 0.998026" range="-2.618 2.618" armature="0.039175" damping="0.08" frictionloss="0.30"/>
+            <joint name="J15_SHOULDER_YAW_L" type="hinge" axis="0 -0.0628027 0.998026" range="-2.618 2.618" armature="0.01" damping="0.01" frictionloss="0.01"/>
             <geom type="capsule" fromto="0 0 -0.04 0 0 0.04" size="0.03" rgba="0.3 0.6 1.0 1"/>
             <body name="LINK_ELBOW_PITCH_L" pos="0 0.0065994 -0.10487">
               <inertial pos="0.0037280 0.0023339 -0.0814807" quat="0.850602 -0.0227837 0.0480929 0.52311" mass="1.035457" diaginertia="0.00600679 0.00586987 0.000776466"/>
-              <joint name="J16_ELBOW_PITCH_L" type="hinge" axis="0.00272431 0.998022 0.0628031" range="-2.1948 0.7374" armature="0.039175" damping="0.08" frictionloss="0.30"/>
+              <joint name="J16_ELBOW_PITCH_L" type="hinge" axis="0.00272431 0.998022 0.0628031" range="-2.1948 0.7374" armature="0.01" damping="0.01" frictionloss="0.01"/>
               <geom type="capsule" fromto="0 0 0 0 0 -0.12" size="0.035" rgba="0.4 0.7 1.0 1"/>
               <body name="LINK_ELBOW_YAW_L" pos="0.013817 0.0097723 -0.1547">
                 <inertial pos="0.0252314 0.0002719 -0.1125180" quat="0.993617 -0.0142345 -0.111507 -0.00947408" mass="0.350639" diaginertia="0.00174612 0.00173484 0.000322726"/>
-                <joint name="J17_ELBOW_YAW_L" type="hinge" axis="-0.214789 -0.0619207 0.974696" range="-2.618 2.618" armature="0.039175" damping="0.08" frictionloss="0.30"/>
+                <joint name="J17_ELBOW_YAW_L" type="hinge" axis="-0.214789 -0.0619207 0.974696" range="-2.618 2.618" armature="0.01" damping="0.01" frictionloss="0.01"/>
                 <geom type="capsule" fromto="0 0 0 0.08 0 0" size="0.025" rgba="0.5 0.8 1.0 1"/>
               </body>
             </body>
@@ -375,7 +401,7 @@ def main():
     params = sysid.ParameterDict()
     for bn in BODY_NAMES:
         true_m = TRUE_INERTIA[bn]["mass"]
-        nominal_m = true_m * MASS_PERTURB
+        nominal_m = NOMINAL_INERTIA[bn]["mass"]
         known_dm = true_m - nominal_m  # known mass gap
         p = sysid.Parameter(
             f"balance_{bn}",
@@ -426,7 +452,8 @@ def main():
 
         # Unfreeze this body's balance, using known mass diff as initial guess
         true_m = TRUE_INERTIA[bn]["mass"]
-        known_dm = true_m - true_m * MASS_PERTURB
+        nominal_m = NOMINAL_INERTIA[bn]["mass"]
+        known_dm = true_m - nominal_m
         params[f"balance_{bn}"].frozen = False
         params[f"balance_{bn}"].value[:] = [
             known_dm * 1.05,
@@ -488,7 +515,7 @@ def main():
         val = params[f"balance_{bn}"].value
         m, px, py, pz, sx, sy, sz = val
         true_m = TRUE_INERTIA[bn]["mass"]
-        nominal_m = true_m * MASS_PERTURB
+        nominal_m = NOMINAL_INERTIA[bn]["mass"]
         print(f"\n  [{bn}]  true={true_m:.4f}, nominal={nominal_m:.4f}")
         print(f"    mass={m:+.4f} kg  (expect ≈{true_m - nominal_m:+.4f})")
         print(f"    pos=({px:+.4f}, {py:+.4f}, {pz:+.4f}) m")
@@ -612,11 +639,14 @@ def main():
         ax.legend(fontsize=7, loc="upper right")
         ax.grid(True, alpha=0.3)
     axes[-1].set_xlabel("Time (s)")
+
+    import time
+
     plt.suptitle("Inverse Dynamics Torque — Same (q,dq,ddq) on Each Model", y=1.01)
     plt.tight_layout()
-    plt.savefig("torque_tracking.png", dpi=150)
+    plt.savefig(f"torque_tracking_{time.time():.2f}.png", dpi=150)
     plt.close()
-    print("  → saved torque_tracking.png")
+    print(f"  → saved torque_tracking_{time.time():.2f}.png")
 
     # ---- Torque RMSE bar chart ----
     rmse_t_init = np.sqrt(
@@ -652,9 +682,9 @@ def main():
     ax.legend()
     ax.grid(True, alpha=0.3, axis="y")
     plt.tight_layout()
-    plt.savefig("torque_rmse.png", dpi=150)
+    plt.savefig(f"torque_rmse_{time.time():.2f}.png", dpi=150)
     plt.close()
-    print("  → saved torque_rmse.png")
+    print(f"  → saved torque_rmse_{time.time():.2f}.png")
 
 
 if __name__ == "__main__":
