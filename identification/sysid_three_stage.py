@@ -114,6 +114,9 @@ def _load_xml(filename):
 
 LEFT_ARM_XML = _load_xml("left_arm_true.xml")
 NOMINAL_LEFT_ARM_XML = _load_xml("left_arm_nominal.xml")
+LEFT_ARM_XML_20PCT = _load_xml("left_arm_20pct.xml")
+USED_XML = LEFT_ARM_XML_20PCT
+# USED_XML = NOMINAL_LEFT_ARM_XML
 
 
 def _read_true_joint_params():
@@ -130,7 +133,7 @@ def _read_true_joint_params():
 
 
 def _read_nominal_joint_params():
-    spec = mujoco.MjSpec.from_string(NOMINAL_LEFT_ARM_XML)
+    spec = mujoco.MjSpec.from_string(USED_XML)
     out = {}
     for jn in JOINT_NAMES:
         j = spec.joint(jn)
@@ -223,7 +226,6 @@ def apply_balances_to_spec(spec, balance_vectors):
 def load_trajectory(yaml_name):
     """Load (q, dq, ddq, tau_true) from a Fourier YAML, using the TRUE model."""
     ft = FourierTrajectory(dim=5, sample_rate=500)
-    ft.omega_f = 2.0 * np.pi / 5.0
     ft.t_array = np.linspace(0, 5.0, int(5.0 * 500), endpoint=False)
 
     q_traj, dq_traj, ddq_traj = ft.generate_trajectory_from_yaml(yaml_name)
@@ -324,7 +326,7 @@ def compute_rmse(nominal_base, params, q, dq, ddq, tau_true):
 def main():
     true_joint = _read_true_joint_params()
     nom_joint = _read_nominal_joint_params()
-    nominal_base = mujoco.MjSpec.from_string(NOMINAL_LEFT_ARM_XML)
+    nominal_base = mujoco.MjSpec.from_string(USED_XML)
 
     a_true = true_joint[JOINT_NAMES[0]]["armature"]
     d_true = true_joint[JOINT_NAMES[0]]["damping"]
@@ -405,7 +407,7 @@ def main():
         p = sysid.Parameter(
             f"balance_{bn}",
             nominal=np.zeros(7),
-            min_value=np.array([-0.15, -0.1, -0.1, -0.1, 0.005, 0.005, 0.005]),
+            min_value=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
             max_value=np.array([0.5, 0.1, 0.1, 0.1, 0.25, 0.25, 0.25]),
         )
         p.value[:] = [gap * 1.05, 0, 0, 0, 0.06, 0.06, 0.06]
@@ -510,7 +512,7 @@ def main():
     # ---- Round 1 ----
     a1, d1, f1 = run_round(1)
 
-    # ---- Round 2: subtract round-1 joint estimates ----
+    # ---- Round 2 ----
     # a2, d2, f2 = run_round(2, sub_a=a1, sub_d=d1, sub_f=f1)
 
     # ---- Plot RMSE progression ----
@@ -533,7 +535,9 @@ def main():
     ax.set_xticks(x + (n - 1) * w / 2)
     ax.set_xticklabels([f"J{13 + j}" for j in range(5)])
     ax.set_ylabel("Torque RMSE (Nm)")
-    ax.set_title("2-Round Iterative ID: RMSE Progression")
+    ax.set_title(
+        f"RMSE Progression: {'20pct' if USED_XML == LEFT_ARM_XML_20PCT else 'Nominal'}"
+    )
     ax.legend(fontsize=7, ncol=2)
     ax.grid(True, alpha=0.3, axis="y")
     plt.tight_layout()
@@ -564,7 +568,8 @@ def main():
         print(
             f"{bn:<28s} {v[0]:>+7.4f}  {nm:>8.4f}  {total:>8.4f}  {tm:>8.4f}  {err:>6.1f}%"
         )
-    print("\nDone.")
+    print("\nDone. Plotting RMSE progression …")
+    plt.show()
 
 
 if __name__ == "__main__":
