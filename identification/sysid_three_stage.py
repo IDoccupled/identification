@@ -337,6 +337,13 @@ def main():
     print("Loading per-stage trajectories …")
     trajs = {}
     for stage_key, yaml_name in STAGE_YAMLS.items():
+        msg = f"  {stage_key}: {yaml_name}"
+        if stage_key == "balance":
+            print(f"\033[92m{msg}\033[0m")
+        elif stage_key == "armature":
+            print(f"\033[93m{msg}\033[0m")
+        else:
+            print(f"\033[94m{msg}\033[0m")
         q, dq, ddq, tau = load_trajectory(yaml_name)
         trajs[stage_key] = (q, dq, ddq, tau)
         print(
@@ -416,6 +423,12 @@ def main():
             rmse_history["Joint"].append(f"J{13 + j}")
             rmse_history["RMSE"].append(rmse[j])
         return rmse
+
+    # ---- Baseline: nominal model RMSE before any identification ----
+    rmse_nom = record_rmse("0.Nominal", params)
+    print(
+        f"\n  [Baseline] Nominal model RMSE: {[round(float(x), 3) for x in rmse_nom]}"
+    )
 
     # ---- Helper: run one round of Balance → Armature → Friction ----
     def run_round(round_num, sub_a=0.0, sub_d=0.0, sub_f=0.0):
@@ -498,7 +511,7 @@ def main():
     a1, d1, f1 = run_round(1)
 
     # ---- Round 2: subtract round-1 joint estimates ----
-    a2, d2, f2 = run_round(2, sub_a=a1, sub_d=d1, sub_f=f1)
+    # a2, d2, f2 = run_round(2, sub_a=a1, sub_d=d1, sub_f=f1)
 
     # ---- Plot RMSE progression ----
     stage_rmse = {}
@@ -512,7 +525,8 @@ def main():
     x = np.arange(5)
     n = len(all_stages)
     w = 0.8 / n
-    colors = plt.cm.viridis(np.linspace(0, 1, n))
+    # First bar (Nominal) in gray, rest in viridis
+    colors = [(0.5, 0.5, 0.5)] + [plt.cm.viridis(i / (n - 2)) for i in range(n - 1)]
     for i, st in enumerate(all_stages):
         vals = [stage_rmse[st].get(f"J{13 + j}", 0) for j in range(5)]
         ax.bar(x + i * w, vals, w, color=colors[i], alpha=0.85, label=st)
@@ -523,22 +537,19 @@ def main():
     ax.legend(fontsize=7, ncol=2)
     ax.grid(True, alpha=0.3, axis="y")
     plt.tight_layout()
-    plt.savefig("three_stage_rmse.png", dpi=150)
-    plt.close()
-    print("\n  -> saved three_stage_rmse.png")
 
     # ---- Final summary ----
     print("\n" + "=" * 66)
     print("  Final Results")
     print("=" * 66)
     print(
-        f"  armature     = {a2:.6f}  (true = {a_true:.6f}, err = {abs(a2 - a_true) / a_true * 100:.1f}%)"
+        f"  armature     = {a1:.6f}  (true = {a_true:.6f}, err = {abs(a1 - a_true) / a_true * 100:.1f}%)"
     )
     print(
-        f"  damping      = {d2:.6f}  (true = {d_true:.6f}, err = {abs(d2 - d_true) / d_true * 100:.1f}%)"
+        f"  damping      = {d1:.6f}  (true = {d_true:.6f}, err = {abs(d1 - d_true) / d_true * 100:.1f}%)"
     )
     print(
-        f"  frictionloss = {f2:.6f}  (true = {f_true:.6f}, err = {abs(f2 - f_true) / f_true * 100:.1f}%)"
+        f"  frictionloss = {f1:.6f}  (true = {f_true:.6f}, err = {abs(f1 - f_true) / f_true * 100:.1f}%)"
     )
     print(
         f"\n{'Body':<28s} {'Balance':>8s} {'+Nominal':>10s} {'=Total':>10s} {'True':>10s} {'Err%':>8s}"
