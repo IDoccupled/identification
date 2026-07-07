@@ -1,3 +1,4 @@
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -10,8 +11,6 @@ from std_msgs.msg import Header
 
 from interface_protocol.msg import JointCommand, JointState, MotionState  # type: ignore
 from identification.fourier_trajectory import FourierTrajectory
-
-TRAJ = "pso_armature_260707_103212.yaml"
 
 LEFT_LEG_Q_INDICES = [0, 1, 2, 3, 4, 5]
 RIGHT_LEG_Q_INDICES = [6, 7, 8, 9, 10, 11]
@@ -249,10 +248,32 @@ class FourierTrajectoryNode(Node):
 
 
 def main(argv=None):
-    rclpy.init(args=argv)
-    yaml_name = TRAJ
-    node = FourierTrajectoryNode(yaml_name=yaml_name, group="left_arm")
-    print("Using YAML:", yaml_name)
+    parser = argparse.ArgumentParser(
+        description="Run Fourier trajectory identification node."
+    )
+    parser.add_argument(
+        "--type",
+        type=str,
+        required=True,
+        choices=list(FourierTrajectory.VALID_TYPES.keys()),
+        help="Identification type: balance, armature, or friction.",
+    )
+    parser.add_argument(
+        "--group",
+        type=str,
+        default=DEFAULT_GROUP_TO_IDENTIFY,
+        help=f"Limb group to identify (default: {DEFAULT_GROUP_TO_IDENTIFY}).",
+    )
+    # Parse known args so ROS2 args are forwarded to rclpy.init
+    parsed_args, unknown_args = parser.parse_known_args(argv)
+
+    # Auto-resolve the latest YAML for the given type
+    yaml_name = FourierTrajectory.find_latest_yaml(parsed_args.type)
+    print(f"Identification type: {parsed_args.type}")
+    print(f"Using YAML: {yaml_name}")
+
+    rclpy.init(args=unknown_args)
+    node = FourierTrajectoryNode(yaml_name=yaml_name, group=parsed_args.group)
 
     if not node.initialize():
         node.get_logger().error("Failed to initialize, exiting")
