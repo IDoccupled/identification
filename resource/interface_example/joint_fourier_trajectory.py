@@ -254,9 +254,17 @@ def main(argv=None):
     parser.add_argument(
         "--type",
         type=str,
-        required=True,
+        default=None,
         choices=list(FourierTrajectory.VALID_TYPES.keys()),
-        help="Identification type: balance, armature, or friction.",
+        help="Identification type: balance, armature, or friction "
+        "(auto-resolves the latest matching YAML).",
+    )
+    parser.add_argument(
+        "--yaml",
+        type=str,
+        default=None,
+        help="Directly specify a YAML filename from trajectory_coefficients/ "
+        "(e.g. 'pso_friction_260707_150335.yaml').",
     )
     parser.add_argument(
         "--group",
@@ -267,9 +275,18 @@ def main(argv=None):
     # Parse known args so ROS2 args are forwarded to rclpy.init
     parsed_args, unknown_args = parser.parse_known_args(argv)
 
-    # Auto-resolve the latest YAML for the given type
-    yaml_name = FourierTrajectory.find_latest_yaml(parsed_args.type)
-    print(f"Identification type: {parsed_args.type}")
+    # Resolve YAML: --yaml takes priority, otherwise --type auto-resolves
+    if parsed_args.yaml:
+        yaml_path = FourierTrajectory._coeffs_dir / parsed_args.yaml
+        if not yaml_path.is_file():
+            print(f"ERROR: YAML file not found: {yaml_path}")
+            return 1
+        yaml_name = parsed_args.yaml
+    elif parsed_args.type:
+        yaml_name = FourierTrajectory.find_latest_yaml(parsed_args.type)
+    else:
+        parser.error("Either --type or --yaml must be specified.")
+
     print(f"Using YAML: {yaml_name}")
 
     rclpy.init(args=unknown_args)
