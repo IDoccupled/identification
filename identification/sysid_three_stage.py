@@ -11,6 +11,7 @@ All 5 joints share the same motor → armature/damping/frictionloss are TIED.
 
 import os
 import pathlib
+from pathlib import Path
 import numpy as np
 import mujoco
 from mujoco import sysid
@@ -26,55 +27,6 @@ BODY_NAMES = [
     "LINK_ELBOW_PITCH_L",
     "LINK_ELBOW_YAW_L",
 ]
-
-TRUE_INERTIA = {
-    "LINK_SHOULDER_PITCH_L": {
-        "mass": 0.932155,
-        "ipos": [-0.0068739, 0.0562468, -0.0156415],
-    },
-    "LINK_SHOULDER_ROLL_L": {
-        "mass": 0.510813,
-        "ipos": [0.037412, 0.00677175, -0.0267801],
-    },
-    "LINK_SHOULDER_YAW_L": {
-        "mass": 0.909138,
-        "ipos": [-0.00084545, 0.00219391, -0.045665],
-    },
-    "LINK_ELBOW_PITCH_L": {
-        "mass": 1.38061,
-        "ipos": [0.00298237, 0.00186711, -0.0651846],
-    },
-    "LINK_ELBOW_YAW_L": {
-        "mass": 0.467519,
-        "ipos": [0.0201851, 0.000217483, -0.0900144],
-    },
-}
-
-# Nominal (perturbed) inertia values — must match NOMINAL_LEFT_ARM_XML exactly.
-# mass × 0.75, ipos × 1.25 (adjust MASS_PERTURB / IPOS_PERTURB below to
-# re-generate the nominal XML when needed).
-NOMINAL_INERTIA = {
-    "LINK_SHOULDER_PITCH_L": {
-        "mass": 0.699116,
-        "ipos": [-0.0085924, 0.0703085, -0.0195519],
-    },
-    "LINK_SHOULDER_ROLL_L": {
-        "mass": 0.383110,
-        "ipos": [0.0467650, 0.0084647, -0.0334751],
-    },
-    "LINK_SHOULDER_YAW_L": {
-        "mass": 0.681854,
-        "ipos": [-0.0010568, 0.0027424, -0.0570813],
-    },
-    "LINK_ELBOW_PITCH_L": {
-        "mass": 1.035457,
-        "ipos": [0.0037280, 0.0023339, -0.0814807],
-    },
-    "LINK_ELBOW_YAW_L": {
-        "mass": 0.350639,
-        "ipos": [0.0252314, 0.0002719, -0.1125180],
-    },
-}
 
 JOINT_NAMES = [
     "J13_SHOULDER_PITCH_L",
@@ -165,25 +117,6 @@ def parallel_axis_shift(I_diag, mass, old_com, new_com):
     return np.array(I_diag) + mass * (d2_sum - d**2)
 
 
-def make_valid_inertia(Ixx, Iyy, Izz):
-    """Ensure positive-definite inertia satisfying triangle inequality."""
-    arr = np.array([Ixx, Iyy, Izz], dtype=float)
-    # MuJoCo requires positive diagonal elements and A+B >= C for all permutations.
-    arr = np.maximum(arr, 1e-10)
-    for _ in range(10):
-        changed = False
-        for i, j, k in [(0, 1, 2), (0, 2, 1), (1, 2, 0)]:
-            deficit = arr[k] - (arr[i] + arr[j])
-            if deficit > 1e-12:
-                scale = (arr[k] + 1e-10) / max(arr[i] + arr[j], 1e-15)
-                arr[i] *= scale
-                arr[j] *= scale
-                changed = True
-        if not changed:
-            break
-    return arr
-
-
 def apply_balances_to_spec(spec, balance_vectors):
     """Apply balance weights: adjust mass, CoM, and rotational inertia.
     balance_vectors: dict body_name -> [mass, px, py, pz, sx, sy, sz]
@@ -213,14 +146,21 @@ def apply_balances_to_spec(spec, balance_vectors):
         old_I_shifted = parallel_axis_shift(old_I, old_mass, old_ipos, new_ipos)
         box_I_shifted = parallel_axis_shift(box_I, m, balance_pos, new_ipos)
 
-        # Combine, make physically valid, and ensure strictly positive
+        # Combine and validate
         combined = old_I_shifted + box_I_shifted
-        valid_I = make_valid_inertia(*combined)
-        valid_I = np.maximum(valid_I, 1e-10)
+        Ixx, Iyy, Izz = combined
+        if Ixx <= 0 or Iyy <= 0 or Izz <= 0:
+            raise ValueError(
+                f"Negative inertia for {bn}: [{Ixx:.6g}, {Iyy:.6g}, {Izz:.6g}]"
+            )
+        if (Ixx + Iyy < Izz) or (Ixx + Izz < Iyy) or (Iyy + Izz < Ixx):
+            raise ValueError(
+                f"Triangle inequality violated for {bn}: [{Ixx:.6g}, {Iyy:.6g}, {Izz:.6g}]"
+            )
 
         b.mass = new_mass
         b.ipos = new_ipos
-        b.inertia = valid_I
+        b.inertia = np.array(combined)
 
 
 def load_trajectory(yaml_name):
@@ -271,8 +211,11 @@ def make_residual_fn(
             spec = nominal_base.copy()
             sysid.apply_param_modifiers_spec(pd, spec)
             bv = {bn: list(pd[f"balance_{bn}"].value) for bn in BODY_NAMES}
-            apply_balances_to_spec(spec, bv)
-            model = spec.compile()
+            try:
+                apply_balances_to_spec(spec, bv)
+                model = spec.compile()
+            except (ValueError, Exception):
+                return [np.full(len(q) * 5, 1e6)], None, None  # huge penalty
             data = mujoco.MjData(model)
             res = []
             for k in range(len(q)):
@@ -289,8 +232,12 @@ def make_residual_fn(
                 spec = nominal_base.copy()
                 sysid.apply_param_modifiers_spec(pd, spec)
                 bv = {bn: list(pd[f"balance_{bn}"].value) for bn in BODY_NAMES}
-                apply_balances_to_spec(spec, bv)
-                model = spec.compile()
+                try:
+                    apply_balances_to_spec(spec, bv)
+                    model = spec.compile()
+                except (ValueError, Exception):
+                    res_list.append(np.full(len(q) * 5, 1e6))
+                    continue
                 data = mujoco.MjData(model)
                 rk = []
                 for k in range(len(q)):
@@ -309,8 +256,11 @@ def compute_rmse(nominal_base, params, q, dq, ddq, tau_true):
     spec = nominal_base.copy()
     sysid.apply_param_modifiers_spec(params, spec)
     bv = {bn: list(params[f"balance_{bn}"].value) for bn in BODY_NAMES}
-    apply_balances_to_spec(spec, bv)
-    model = spec.compile()
+    try:
+        apply_balances_to_spec(spec, bv)
+        model = spec.compile()
+    except (ValueError, Exception):
+        return np.full(5, 1e6)
     data = mujoco.MjData(model)
     tau_pred = np.zeros_like(tau_true)
     for k in range(len(q)):
@@ -400,17 +350,85 @@ def main():
     params["frictionloss"].value[:] = f_nom
     params["frictionloss"].frozen = True
 
+    # ---- Per-body balance weight bounds ----
+    # Each body: [mass_min, mass_max, pos_min_x, pos_max_x, pos_min_y, pos_max_y,
+    #             pos_min_z, pos_max_z, size_min_x, size_max_x, size_min_y, size_max_y,
+    #             size_min_z, size_max_z, init_size_x, init_size_y, init_size_z]
+    # mass bounds are relative to the true mass gap
+    # pos bounds are in the body's local frame (meters)
+    # size bounds define the box dimensions (meters)
+    BALANCE_CFG = {
+        "LINK_SHOULDER_PITCH_L": {
+            "mass_scale": (0.0, 0.6),
+            "mass_init": 0.5,
+            "pos_x_range": (-0.08, 0.08),
+            "pos_y_range": (-0.08, 0.08),
+            "pos_z_range": (-0.08, 0.08),
+            "pos_init": (0.0, 0.0, 0.0),
+            "size_range": (0.0, 0.10),
+            "init_size": 0.06,
+        },
+        "LINK_SHOULDER_ROLL_L": {
+            "mass_scale": (0.0, 0.6),
+            "mass_init": 0.5,
+            "pos_x_range": (-0.06, 0.06),
+            "pos_y_range": (-0.06, 0.06),
+            "pos_z_range": (-0.06, 0.06),
+            "pos_init": (0.0, 0.0, 0.0),
+            "size_range": (0.0, 0.08),
+            "init_size": 0.05,
+        },
+        "LINK_SHOULDER_YAW_L": {
+            "mass_scale": (0.0, 0.6),
+            "mass_init": 0.5,
+            "pos_x_range": (-0.06, 0.06),
+            "pos_y_range": (-0.06, 0.06),
+            "pos_z_range": (-0.06, 0.06),
+            "pos_init": (0.0, 0.0, 0.0),
+            "size_range": (0.0, 0.08),
+            "init_size": 0.04,
+        },
+        "LINK_ELBOW_PITCH_L": {
+            "mass_scale": (0.0, 0.6),
+            "mass_init": 0.5,
+            "pos_x_range": (-0.10, 0.10),
+            "pos_y_range": (-0.10, 0.10),
+            "pos_z_range": (-0.10, 0.10),
+            "pos_init": (0.0, 0.0, 0.0),
+            "size_range": (0.0, 0.12),
+            "init_size": 0.07,
+        },
+        "LINK_ELBOW_YAW_L": {
+            "mass_scale": (0.0, 0.6),
+            "mass_init": 0.5,
+            "pos_x_range": (-0.08, 0.08),
+            "pos_y_range": (-0.08, 0.08),
+            "pos_z_range": (-0.08, 0.08),
+            "pos_init": (0.0, 0.0, 0.0),
+            "size_range": (0.0, 0.10),
+            "init_size": 0.05,
+        },
+    }
+
     for bn in BODY_NAMES:
         true_m = float(mujoco.MjSpec.from_string(LEFT_ARM_XML).body(bn).mass)
         nom_m = float(nominal_base.body(bn).mass)
         gap = true_m - nom_m
+        cfg = BALANCE_CFG[bn]
+        ms_lo, ms_hi = cfg["mass_scale"]
+        px_lo, px_hi = cfg["pos_x_range"]
+        py_lo, py_hi = cfg["pos_y_range"]
+        pz_lo, pz_hi = cfg["pos_z_range"]
+        sz_lo, sz_hi = cfg["size_range"]
+        isz = cfg["init_size"]
+        pxi, pyi, pzi = cfg["pos_init"]
         p = sysid.Parameter(
             f"balance_{bn}",
             nominal=np.zeros(7),
-            min_value=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-            max_value=np.array([0.5, 0.1, 0.1, 0.1, 0.25, 0.25, 0.25]),
+            min_value=np.array([gap * ms_lo, px_lo, py_lo, pz_lo, sz_lo, sz_lo, sz_lo]),
+            max_value=np.array([gap * ms_hi, px_hi, py_hi, pz_hi, sz_hi, sz_hi, sz_hi]),
         )
-        p.value[:] = [gap * 1.05, 0, 0, 0, 0.06, 0.06, 0.06]
+        p.value[:] = [gap * cfg["mass_init"], pxi, pyi, pzi, isz, isz, isz]
         p.frozen = True
         params.add(p)
 
@@ -568,7 +586,85 @@ def main():
         print(
             f"{bn:<28s} {v[0]:>+7.4f}  {nm:>8.4f}  {total:>8.4f}  {tm:>8.4f}  {err:>6.1f}%"
         )
-    print("\nDone. Plotting RMSE progression …")
+    # ---- Test trajectory: compare True vs Nominal vs Optimized ----
+    print("\nRunning test trajectory comparison …")
+    import glob as _glob
+
+    _test_files = sorted(_glob.glob(str(_YAML_DIR / "test_trajectory_*.yaml")))
+    if _test_files:
+        _test_yaml = _test_files[-1]
+        print(f"  Test trajectory: {Path(_test_yaml).name}")
+        qt, dqt, ddqt = load_trajectory(_test_yaml)[:3]  # only q,dq,ddq
+        # Recompute tau_true from true model for the test trajectory
+        _tspec = mujoco.MjSpec.from_string(LEFT_ARM_XML)
+        _tmodel = _tspec.compile()
+        _tdata = mujoco.MjData(_tmodel)
+        tau_true_test = np.zeros_like(qt)
+        for k in range(len(qt)):
+            _tdata.qpos[:] = qt[k]
+            _tdata.qvel[:] = dqt[k]
+            _tdata.qacc[:] = ddqt[k]
+            mujoco.mj_inverse(_tmodel, _tdata)
+            tau_true_test[k] = _tdata.qfrc_inverse.copy()
+
+        # Nominal (pre-ID) torques
+        _nspec = nominal_base.copy()
+        _nmodel = _nspec.compile()
+        _ndata = mujoco.MjData(_nmodel)
+        tau_nom = np.zeros_like(qt)
+        for k in range(len(qt)):
+            _ndata.qpos[:] = qt[k]
+            _ndata.qvel[:] = dqt[k]
+            _ndata.qacc[:] = ddqt[k]
+            mujoco.mj_inverse(_nmodel, _ndata)
+            tau_nom[k] = _ndata.qfrc_inverse.copy()
+
+        # Optimized (post-ID) torques
+        tau_opt = compute_rmse(nominal_base, params, qt, dqt, ddqt, tau_true_test)
+        # Actually compute_rmse returns RMSE vector, we need the full torque
+        _ospec = nominal_base.copy()
+        sysid.apply_param_modifiers_spec(params, _ospec)
+        _bv = {bn: list(params[f"balance_{bn}"].value) for bn in BODY_NAMES}
+        apply_balances_to_spec(_ospec, _bv)
+        _omodel = _ospec.compile()
+        _odata = mujoco.MjData(_omodel)
+        tau_opt_full = np.zeros_like(qt)
+        for k in range(len(qt)):
+            _odata.qpos[:] = qt[k]
+            _odata.qvel[:] = dqt[k]
+            _odata.qacc[:] = ddqt[k]
+            mujoco.mj_inverse(_omodel, _odata)
+            tau_opt_full[k] = _odata.qfrc_inverse.copy()
+
+        # Plot 5×1 torque comparison
+        _fig2, _axes2 = plt.subplots(5, 1, figsize=(12, 10), sharex=True)
+        _t_test = np.arange(len(qt)) * 0.002
+        _colors2 = {"True": "green", "Nominal": "red", "Optimized": "blue"}
+        _styles2 = {"True": "-", "Nominal": "--", "Optimized": "-."}
+        for j in range(5):
+            _ax = _axes2[j]
+            for _label, _tau in [
+                ("True", tau_true_test),
+                ("Nominal", tau_nom),
+                ("Optimized", tau_opt_full),
+            ]:
+                _ax.plot(
+                    _t_test,
+                    _tau[:, j],
+                    color=_colors2[_label],
+                    ls=_styles2[_label],
+                    lw=1.2,
+                    label=_label,
+                    alpha=0.85,
+                )
+            _ax.set_ylabel(f"J{13 + j} torque (Nm)")
+            _ax.legend(fontsize=7)
+            _ax.grid(True, alpha=0.3)
+        _axes2[-1].set_xlabel("Time (s)")
+        _fig2.suptitle("Test Trajectory: Inverse Dynamics Torque Comparison", y=1.01)
+        plt.tight_layout()
+
+    print("\nDone. Showing plots …")
     plt.show()
 
 
