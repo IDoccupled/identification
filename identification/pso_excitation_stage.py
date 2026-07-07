@@ -8,7 +8,7 @@ Usage:
   python -m identification.pso_excitation_stage friction  # Stage 3
   python -m identification.pso_excitation_stage all       # Run all three
 
-Results saved to trajectory_coefficients/pso_{stage}.yaml
+Results saved to trajectory_coefficients/pso_{stage}_{timestamp}.yaml
 """
 
 import sys
@@ -24,6 +24,8 @@ from identification.target_limb_regressor import TargetLimbRegressor
 from sko.PSO import PSO
 from sko.tools import set_run_mode
 from ament_index_python.packages import get_package_share_directory
+
+import traceback
 
 # ---------------------------------------------------------------------------
 URDF_PATH = (
@@ -41,14 +43,17 @@ TRAJ_PERIOD = 5.0
 SAMPLE_RATE = 100.0
 
 # Per-stage PSO parameters (overnight run)
+# High pop / moderate iter: better exploration coverage, avoids local minima.
+# amp_scale > 1.0 lets the optimizer explore larger accelerations within joint limits.
 STAGE_CONFIG = {
-    "balance": {"pop": 150, "iter": 800, "amp_scale": 1.0},
-    "armature": {"pop": 120, "iter": 1000, "amp_scale": 3.0},
-    "friction": {"pop": 120, "iter": 700, "amp_scale": 1.0},
+    "balance": {"pop": 800, "iter": 300, "amp_scale": 1.0},
+    "armature": {"pop": 800, "iter": 300, "amp_scale": 3.0},
+    "friction": {"pop": 300, "iter": 300, "amp_scale": 1.0},
 }
 PSO_W = 0.7
 PSO_C1 = 1.5
 PSO_C2 = 1.5
+RANDOM_SEED = 67
 
 W_Q_LIMIT = 50.0
 W_V_LIMIT = 30.0
@@ -229,9 +234,6 @@ def build_bounds(
             ub[idx_a] = amp_bound
             lb[idx_b] = -amp_bound
             ub[idx_b] = amp_bound
-            ub[idx_a] = amp_bound
-            lb[idx_b] = -amp_bound
-            ub[idx_b] = amp_bound
 
         q_center = (reg.q_lower_limit[i] + reg.q_upper_limit[i]) / 2.0
         lb[i * n_coeffs + harmonics * 2] = q_center - q_range * 0.5
@@ -257,6 +259,45 @@ def _coeffs_to_yaml_dict(coeffs: np.ndarray, dim: int, n_harmonics: int) -> dict
     return data
 
 
+def _save_yaml(
+    coeffs,
+    ft,
+    stage,
+    t_start,
+    elapsed,
+    pop,
+    max_iter,
+    amp_scale,
+    best_fitness,
+    extra_meta=None,
+):
+    """Save trajectory coefficients to YAML. Returns path."""
+    yaml_dict = _coeffs_to_yaml_dict(coeffs, ft.dim, ft.n_harmonics)
+    meta = {
+        "stage": stage,
+        "started": t_start,
+        "finished": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "elapsed_s": round(elapsed, 1),
+        "pop": pop,
+        "iter": max_iter,
+        "amp_scale": amp_scale,
+        "seed": RANDOM_SEED,
+        "best_fitness": float(best_fitness[0])
+        if hasattr(best_fitness, "__iter__")
+        else float(best_fitness),
+    }
+    if extra_meta:
+        meta.update(extra_meta)
+    yaml_dict["_meta"] = meta
+    uid = datetime.now().strftime("%y%m%d_%H%M%S")
+    yaml_path = YAML_DIR / f"pso_{stage}_{uid}.yaml"
+    yaml_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(yaml_path, "w") as f:
+        yaml.dump(yaml_dict, f, default_flow_style=False, sort_keys=False)
+    print(f"Saved to: {yaml_path}")
+    return yaml_path
+
+
 def run_stage(stage: str):
     cfg = STAGE_CONFIG[stage]
     pop = cfg["pop"]
@@ -264,7 +305,9 @@ def run_stage(stage: str):
     amp_scale = cfg["amp_scale"]
 
     print(f"\n{'=' * 60}\n  PSO Stage: {stage}\n{'=' * 60}")
-    print(f"  pop={pop}, iter={max_iter}, amp_scale={amp_scale}")
+    print(f"  pop={pop}, iter={max_iter}, amp_scale={amp_scale}, seed={RANDOM_SEED}")
+
+    np.random.seed(RANDOM_SEED)
 
     reg = TargetLimbRegressor(
         urdf_path=URDF_PATH, group_to_identify="left_arm", print_info=False
@@ -299,36 +342,45 @@ def run_stage(stage: str):
         ub=ub,
         verbose=True,
     )
-    pso.run()
+
+    try:
+        pso.run()
+        status = "completed"
+        error_info = None
+    except (KeyboardInterrupt, MemoryError, Exception) as e:
+        status = "interrupted"
+        error_info = {
+            "type": type(e).__name__,
+            "message": str(e),
+            "traceback": traceback.format_exc(),
+        }
+        print(f"\n  !!! PSO interrupted: {type(e).__name__}: {e}")
+        print("  Saving current best before exit ...")
 
     elapsed = time.time() - ts
-    t_end = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"Elapsed: {elapsed:.0f}s ({elapsed / 60:.1f}min)")
 
+    # Save whatever we have (gbest_x exists even if interrupted mid-run)
     coeffs_best = pso.gbest_x.flatten()
     print(f"Best fitness: {pso.gbest_y}")
 
-    # ---- Save to YAML with timestamp and unique suffix ----
-    yaml_dict = _coeffs_to_yaml_dict(coeffs_best, ft.dim, ft.n_harmonics)
-    yaml_dict["_meta"] = {
-        "stage": stage,
-        "started": t_start,
-        "finished": t_end,
-        "elapsed_s": round(elapsed, 1),
-        "pop": pop,
-        "iter": max_iter,
-        "amp_scale": amp_scale,
-        "best_fitness": float(pso.gbest_y[0])
-        if hasattr(pso.gbest_y, "__iter__")
-        else float(pso.gbest_y),
-    }
-    # Unique filename: pso_{stage}_{YYMMDD_HHMMSS}.yaml
-    uid = datetime.now().strftime("%y%m%d_%H%M%S")
-    yaml_path = YAML_DIR / f"pso_{stage}_{uid}.yaml"
-    yaml_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(yaml_path, "w") as f:
-        yaml.dump(yaml_dict, f, default_flow_style=False, sort_keys=False)
-    print(f"Saved to: {yaml_path}")
+    extra = {"status": status}
+    if error_info:
+        extra["error"] = error_info
+    _save_yaml(
+        coeffs_best,
+        ft,
+        stage,
+        t_start,
+        elapsed,
+        pop,
+        max_iter,
+        amp_scale,
+        pso.gbest_y,
+        extra_meta=extra,
+    )
+
+    if status == "interrupted":
+        raise  # re-raise after saving
 
     # ---- Diagnostic report ----
     q, v, a = ft.generate_trajectory(coeffs_best)
@@ -373,6 +425,10 @@ def run_stage(stage: str):
 
 
 def main():
+    import time
+
+    print("Start".center(60, "="))
+    print(time.strftime("%Y-%m-%d %H:%M:%S"))
     stages = sys.argv[1:] if len(sys.argv) > 1 else ["all"]
     if stages == ["all"]:
         stages = ["balance", "armature", "friction"]
@@ -381,7 +437,11 @@ def main():
         if s not in ("balance", "armature", "friction"):
             print(f"Unknown stage: {s}. Use: balance, armature, friction, all")
             continue
+        print(f"stage {s} start".center(60, "="))
+        print(time.strftime("%Y-%m-%d %H:%M:%S"))
         run_stage(s)
+        print(f"stage {s} finish".center(60, "="))
+        print(time.strftime("%Y-%m-%d %H:%M:%S"))
 
 
 if __name__ == "__main__":
