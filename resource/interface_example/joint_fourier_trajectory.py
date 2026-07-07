@@ -11,6 +11,8 @@ from std_msgs.msg import Header
 from interface_protocol.msg import JointCommand, JointState, MotionState  # type: ignore
 from identification.fourier_trajectory import FourierTrajectory
 
+TRAJ = "pso_armature_260707_103212.yaml"
+
 LEFT_LEG_Q_INDICES = [0, 1, 2, 3, 4, 5]
 RIGHT_LEG_Q_INDICES = [6, 7, 8, 9, 10, 11]
 WAIST_Q_INDICES = [12]
@@ -248,7 +250,7 @@ class FourierTrajectoryNode(Node):
 
 def main(argv=None):
     rclpy.init(args=argv)
-    yaml_name = "0724_2.yaml"
+    yaml_name = TRAJ
     node = FourierTrajectoryNode(yaml_name=yaml_name, group="left_arm")
     print("Using YAML:", yaml_name)
 
