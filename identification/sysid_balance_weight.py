@@ -120,25 +120,6 @@ def parallel_axis_shift(I_diag, mass, old_com, new_com):
     return np.array(I_diag) + mass * (d2_sum - d**2)
 
 
-def make_valid_inertia(Ixx, Iyy, Izz):
-    """Ensure positive-definite inertia satisfying triangle inequality."""
-    arr = np.array([Ixx, Iyy, Izz], dtype=float)
-    # MuJoCo requires positive diagonal elements and A+B >= C for all permutations.
-    arr = np.maximum(arr, 1e-10)
-    for _ in range(10):
-        changed = False
-        for i, j, k in [(0, 1, 2), (0, 2, 1), (1, 2, 0)]:
-            deficit = arr[k] - (arr[i] + arr[j])
-            if deficit > 1e-12:
-                scale = (arr[k] + 1e-10) / max(arr[i] + arr[j], 1e-15)
-                arr[i] *= scale
-                arr[j] *= scale
-                changed = True
-        if not changed:
-            break
-    return arr
-
-
 def apply_balances_to_spec(spec, balance_vectors):
     """Apply balance weights: adjust mass, CoM, and rotational inertia.
     balance_vectors: dict body_name -> [mass, px, py, pz, sx, sy, sz]
@@ -168,14 +149,21 @@ def apply_balances_to_spec(spec, balance_vectors):
         old_I_shifted = parallel_axis_shift(old_I, old_mass, old_ipos, new_ipos)
         box_I_shifted = parallel_axis_shift(box_I, m, balance_pos, new_ipos)
 
-        # Combine, make physically valid, and ensure strictly positive
+        # Combine and validate
         combined = old_I_shifted + box_I_shifted
-        valid_I = make_valid_inertia(*combined)
-        valid_I = np.maximum(valid_I, 1e-10)
+        Ixx, Iyy, Izz = combined
+        if Ixx <= 0 or Iyy <= 0 or Izz <= 0:
+            raise ValueError(
+                f"Negative inertia for {bn}: [{Ixx:.6g}, {Iyy:.6g}, {Izz:.6g}]"
+            )
+        if (Ixx + Iyy < Izz) or (Ixx + Izz < Iyy) or (Iyy + Izz < Ixx):
+            raise ValueError(
+                f"Triangle inequality violated for {bn}: [{Ixx:.6g}, {Iyy:.6g}, {Izz:.6g}]"
+            )
 
         b.mass = new_mass
         b.ipos = new_ipos
-        b.inertia = valid_I
+        b.inertia = np.array(combined)
 
 
 def rollout_spec(spec, init_state, ctrl):
