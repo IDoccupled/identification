@@ -37,7 +37,6 @@ URDF_PATH = (
 ).resolve()
 
 YAML_DIR = Path(__file__).resolve().parent.parent / "trajectory_coefficients"
-
 N_HARMONICS = 5
 TRAJ_PERIOD = 5.0
 SAMPLE_RATE = 100.0
@@ -46,23 +45,23 @@ SAMPLE_RATE = 100.0
 # High pop / moderate iter: better exploration coverage, avoids local minima.
 # amp_scale > 1.0 lets the optimizer explore larger accelerations within joint limits.
 STAGE_CONFIG = {
-    "balance": {"pop": 800, "iter": 300, "amp_scale": 1.0},
-    "armature": {"pop": 800, "iter": 300, "amp_scale": 3.0},
-    "friction": {"pop": 300, "iter": 300, "amp_scale": 1.0},
+    "balance": {"pop": 100, "iter": 50, "amp_scale": 1.0},
+    "armature": {"pop": 100, "iter": 50, "amp_scale": 3.0},
+    "friction": {"pop": 100, "iter": 50, "amp_scale": 1.0},
 }
 PSO_W = 0.7
 PSO_C1 = 1.5
 PSO_C2 = 1.5
 RANDOM_SEED = 67
 
-W_Q_LIMIT = 50.0
-W_V_LIMIT = 30.0
-W_TAU_LIMIT = 500.0
-W_COLLISION = 1000.0
+W_Q_LIMIT = 2000.0
+W_V_LIMIT = 500.0
+W_TAU_LIMIT = 1000.0
+W_COLLISION = 100000.0
 
-Q_MARGIN = 0.15
-V_MARGIN = 0.1
-TAU_MARGIN = 0.1
+Q_MARGIN = 0.2
+V_MARGIN = 0.2
+TAU_MARGIN = 0.2
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +90,7 @@ def compute_fitness(
         result = reg.compute_regressor(q=q_traj[:, t], v=v_traj[:, t], a=a_traj[:, t])
         (
             Y_aug,
+            Y_target_inertial,
             tau_aug,
             pi_aug,
             pi_inertia,
@@ -108,30 +108,25 @@ def compute_fitness(
             collision_count += 1
             penalty += W_COLLISION
             continue
-
-        # Limit violations
-        if q_excess_norm > 0:
+        if q_excess_norm:
             penalty += W_Q_LIMIT * q_excess_norm
-        if v_excess_norm > 0:
-            penalty += W_V_LIMIT * v_excess_norm
-        if tau_excess_norm > 0:
+        if tau_excess_norm:
             penalty += W_TAU_LIMIT * tau_excess_norm
-
-        if q_excess_norm > 50 or v_excess_norm > 50 or tau_excess_norm > 50:
-            continue  # skip severely violating steps
+        if v_excess_norm:
+            penalty += W_V_LIMIT * v_excess_norm
 
         # Collect regressor data
         # Y_aug is the full augmented regressor (inertial + friction)
-        # For balance: use Y_inertial = Y_aug[:, :-2] (exclude damping, friction cols)
+        # For balance: use Y_inertial = Y_target_inertial (exclude damping, friction cols)
         # For friction: use dq and sign(dq)
         if stage == "balance":
-            Y_inertial = Y_aug[:, :-2]  # drop damping and frictionloss columns
+            Y_inertial = Y_target_inertial  # drop damping and frictionloss columns
             Y_list.append(Y_inertial)
         elif stage == "armature":
             ddq_list.append(a_traj[:, t])
         elif stage == "friction":
             dq_list.append(v_traj[:, t])
-            sign_dq_list.append(np.sign(v_traj[:, t]))
+            sign_dq_list.append(np.tanh(v_traj[:, t] * 1000))
 
     # ---- Compute reward ----
     reward = 0.0
