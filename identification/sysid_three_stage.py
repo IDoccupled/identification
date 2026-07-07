@@ -10,20 +10,71 @@ All 5 joints share the same motor → armature/damping/frictionloss are TIED.
 """
 
 import os
-
-os.environ["MUJOCO_GL"] = "egl"
+import pathlib
 import numpy as np
 import mujoco
 from mujoco import sysid
 import matplotlib.pyplot as plt
-
-from identification.sysid_balance_weight import (
-    LEFT_ARM_XML,
-    NOMINAL_LEFT_ARM_XML,
-    BODY_NAMES,
-    apply_balances_to_spec,
-)
 from identification.fourier_trajectory import FourierTrajectory
+
+os.environ["MUJOCO_GL"] = "egl"
+
+BODY_NAMES = [
+    "LINK_SHOULDER_PITCH_L",
+    "LINK_SHOULDER_ROLL_L",
+    "LINK_SHOULDER_YAW_L",
+    "LINK_ELBOW_PITCH_L",
+    "LINK_ELBOW_YAW_L",
+]
+
+TRUE_INERTIA = {
+    "LINK_SHOULDER_PITCH_L": {
+        "mass": 0.932155,
+        "ipos": [-0.0068739, 0.0562468, -0.0156415],
+    },
+    "LINK_SHOULDER_ROLL_L": {
+        "mass": 0.510813,
+        "ipos": [0.037412, 0.00677175, -0.0267801],
+    },
+    "LINK_SHOULDER_YAW_L": {
+        "mass": 0.909138,
+        "ipos": [-0.00084545, 0.00219391, -0.045665],
+    },
+    "LINK_ELBOW_PITCH_L": {
+        "mass": 1.38061,
+        "ipos": [0.00298237, 0.00186711, -0.0651846],
+    },
+    "LINK_ELBOW_YAW_L": {
+        "mass": 0.467519,
+        "ipos": [0.0201851, 0.000217483, -0.0900144],
+    },
+}
+
+# Nominal (perturbed) inertia values — must match NOMINAL_LEFT_ARM_XML exactly.
+# mass × 0.75, ipos × 1.25 (adjust MASS_PERTURB / IPOS_PERTURB below to
+# re-generate the nominal XML when needed).
+NOMINAL_INERTIA = {
+    "LINK_SHOULDER_PITCH_L": {
+        "mass": 0.699116,
+        "ipos": [-0.0085924, 0.0703085, -0.0195519],
+    },
+    "LINK_SHOULDER_ROLL_L": {
+        "mass": 0.383110,
+        "ipos": [0.0467650, 0.0084647, -0.0334751],
+    },
+    "LINK_SHOULDER_YAW_L": {
+        "mass": 0.681854,
+        "ipos": [-0.0010568, 0.0027424, -0.0570813],
+    },
+    "LINK_ELBOW_PITCH_L": {
+        "mass": 1.035457,
+        "ipos": [0.0037280, 0.0023339, -0.0814807],
+    },
+    "LINK_ELBOW_YAW_L": {
+        "mass": 0.350639,
+        "ipos": [0.0252314, 0.0002719, -0.1125180],
+    },
+}
 
 JOINT_NAMES = [
     "J13_SHOULDER_PITCH_L",
@@ -32,9 +83,10 @@ JOINT_NAMES = [
     "J16_ELBOW_PITCH_L",
     "J17_ELBOW_YAW_L",
 ]
-
 # Auto-discover latest PSO YAML per stage
 _YAML_DIR = FourierTrajectory._coeffs_dir
+
+_RESOURCE_DIR = pathlib.Path(__file__).resolve().parent.parent / "resource"
 
 
 def _latest_yaml(stage: str) -> str:
@@ -53,6 +105,15 @@ STAGE_YAMLS = {
     "armature": _latest_yaml("armature"),
     "friction": _latest_yaml("friction"),
 }
+
+
+def _load_xml(filename):
+    """Read an XML model file from the resource directory."""
+    return (_RESOURCE_DIR / filename).read_text()
+
+
+LEFT_ARM_XML = _load_xml("left_arm_true.xml")
+NOMINAL_LEFT_ARM_XML = _load_xml("left_arm_nominal.xml")
 
 
 def _read_true_joint_params():
@@ -79,6 +140,84 @@ def _read_nominal_joint_params():
             "frictionloss": float(j.frictionloss),
         }
     return out
+
+
+def box_inertia(m, sx, sy, sz):
+    """Rotational inertia of a box (mass m, size sx×sy×sz) about its own CoM.
+    Returns [Ixx, Iyy, Izz]."""
+    return [
+        m / 12 * (sy**2 + sz**2),
+        m / 12 * (sx**2 + sz**2),
+        m / 12 * (sx**2 + sy**2),
+    ]
+
+
+def parallel_axis_shift(I_diag, mass, old_com, new_com):
+    """Shift diagonal inertia tensor I_diag from old_com to new_com.
+    Returns new diagonal [Ixx, Iyy, Izz] (drops off-diagonals)."""
+    d = np.array(old_com) - np.array(new_com)
+    # Parallel axis theorem: I_new = I_old + mass * (dᵀd·I - ddᵀ)
+    # For diagonal: I_ii_new = I_ii_old + mass * (sum(d²) - d_i²)
+    d2_sum = np.dot(d, d)
+    return np.array(I_diag) + mass * (d2_sum - d**2)
+
+
+def make_valid_inertia(Ixx, Iyy, Izz):
+    """Ensure positive-definite inertia satisfying triangle inequality."""
+    arr = np.array([Ixx, Iyy, Izz], dtype=float)
+    # MuJoCo requires positive diagonal elements and A+B >= C for all permutations.
+    arr = np.maximum(arr, 1e-10)
+    for _ in range(10):
+        changed = False
+        for i, j, k in [(0, 1, 2), (0, 2, 1), (1, 2, 0)]:
+            deficit = arr[k] - (arr[i] + arr[j])
+            if deficit > 1e-12:
+                scale = (arr[k] + 1e-10) / max(arr[i] + arr[j], 1e-15)
+                arr[i] *= scale
+                arr[j] *= scale
+                changed = True
+        if not changed:
+            break
+    return arr
+
+
+def apply_balances_to_spec(spec, balance_vectors):
+    """Apply balance weights: adjust mass, CoM, and rotational inertia.
+    balance_vectors: dict body_name -> [mass, px, py, pz, sx, sy, sz]
+
+    Computes the combined inertia of the original body + a box-shaped balance weight
+    at position (px,py,pz).  Uses parallel axis theorem to shift both inertias to
+    the new combined CoM, then sums diagonals and enforces triangle inequality.
+    """
+    for bn in BODY_NAMES:
+        m, px, py, pz, sx, sy, sz = balance_vectors[bn]
+        if abs(m) < 1e-9:
+            continue
+        b = spec.body(bn)
+        old_mass = b.mass
+        old_ipos = np.array(b.ipos)
+        old_I = np.array(b.inertia)
+        balance_pos = np.array([px, py, pz])
+
+        # Combined mass and CoM
+        new_mass = old_mass + m
+        new_ipos = (old_mass * old_ipos + m * balance_pos) / new_mass
+
+        # Box inertia about its own CoM
+        box_I = np.array(box_inertia(m, sx, sy, sz))
+
+        # Shift both inertias to the new combined CoM
+        old_I_shifted = parallel_axis_shift(old_I, old_mass, old_ipos, new_ipos)
+        box_I_shifted = parallel_axis_shift(box_I, m, balance_pos, new_ipos)
+
+        # Combine, make physically valid, and ensure strictly positive
+        combined = old_I_shifted + box_I_shifted
+        valid_I = make_valid_inertia(*combined)
+        valid_I = np.maximum(valid_I, 1e-10)
+
+        b.mass = new_mass
+        b.ipos = new_ipos
+        b.inertia = valid_I
 
 
 def load_trajectory(yaml_name):
