@@ -1,6 +1,6 @@
 <mujoco model="pm_v2_left_arm">
   <compiler angle="radian" autolimits="true"/>
-  <option integrator="implicitfast" timestep="0.002"><flag contact="disable"/></option>
+  <option integrator="implicitfast" timestep="0.002" gravity="-9.81 0 0"><flag contact="disable"/></option>
   <worldbody>
     <body name="torso" pos="0 0 0.9"><inertial pos="0 0 0" mass="1e-3" diaginertia="1e-12 1e-12 1e-12"/>
       <body name="LINK_SHOULDER_PITCH_L" pos="-0.027105 0.12916 0.21549">

@@ -1,6 +1,6 @@
 <mujoco model="pm_v2_left_arm_nominal">
   <compiler angle="radian" autolimits="true"/>
-  <option integrator="implicitfast" timestep="0.002"><flag contact="disable"/></option>
+  <option integrator="implicitfast" timestep="0.002" gravity="-9.81 0 0"><flag contact="disable"/></option>
   <worldbody>
     <body name="torso" pos="0 0 0.9"><inertial pos="0 0 0" mass="1e-3" diaginertia="1e-12 1e-12 1e-12"/>
       <body name="LINK_SHOULDER_PITCH_L" pos="-0.027105 0.12916 0.21549">
@@ -16,7 +16,7 @@
             <joint name="J15_SHOULDER_YAW_L" type="hinge" axis="0 -0.0628027 0.998026" range="-2.618 2.618" armature="0.02" damping="0.01" frictionloss="0.5"/>
             <geom type="capsule" fromto="0 0 -0.04 0 0 0.04" size="0.03" rgba="0.3 0.6 1.0 1"/>
             <body name="LINK_ELBOW_PITCH_L" pos="0 0.0065994 -0.10487">
-              <inertial pos="0.002714 0.002016 -0.060622" quat="0.850602 -0.0227837 0.0480929 0.52311" mass="1.297773" diaginertia="0.006427 0.005400 0.000846"/>
+              <inertial pos="0.002714 0.002016 -0.060622" quat="0.850602 -0.0227837 0.0480929 0.52311" mass="1.297773" diaginertia="0.006427 0.00555648 0.00087052"/>
               <joint name="J16_ELBOW_PITCH_L" type="hinge" axis="0.00272431 0.998022 0.0628031" range="-2.1948 0.7374" armature="0.02" damping="0.01" frictionloss="0.5"/>
               <geom type="capsule" fromto="0 0 0 0 0 -0.12" size="0.035" rgba="0.4 0.7 1.0 1"/>
               <body name="LINK_ELBOW_YAW_L" pos="0.013817 0.0097723 -0.1547">
