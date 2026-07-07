@@ -458,6 +458,7 @@ class TargetLimbRegressor:
 
         return (
             self.Y_aug,
+            self.Y_target_inertial,
             self.tau_aug,
             self.pi_aug,
             self.pi_inertia,
