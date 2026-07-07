@@ -49,6 +49,8 @@ class FourierTrajectory:
 
         coeffs_list = []
         for joint_key in sorted(data.keys()):
+            if not joint_key.startswith("joint_"):
+                continue  # skip _meta
             joint = data[joint_key]
             a = joint["a"]
             b = joint["b"]
