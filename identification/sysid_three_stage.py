@@ -67,8 +67,8 @@ def _load_xml(filename):
 LEFT_ARM_XML = _load_xml("left_arm_true.xml")
 NOMINAL_LEFT_ARM_XML = _load_xml("left_arm_nominal.xml")
 LEFT_ARM_XML_20PCT = _load_xml("left_arm_20pct.xml")
-# USED_XML = LEFT_ARM_XML_20PCT
-USED_XML = NOMINAL_LEFT_ARM_XML
+USED_XML = LEFT_ARM_XML_20PCT
+# USED_XML = NOMINAL_LEFT_ARM_XML
 
 
 def _read_true_joint_params():
@@ -350,7 +350,7 @@ def main():
     # mass bounds are relative to the true mass gap
     # pos bounds are in the body's local frame (meters)
     # size bounds define the box dimensions (meters)
-    BALANCE_CFG = {
+    BALANCE_CFG_old = {
         "LINK_SHOULDER_PITCH_L": {
             "mass_scale": (0.0, 0.2),
             "mass_init": 0.1,
@@ -413,6 +413,69 @@ def main():
         },
     }
 
+    BALANCE_CFG = {
+        "LINK_SHOULDER_PITCH_L": {
+            "mass_scale": (0.168 * 0.5, 0.168 * 1.5),
+            "mass_init": 0.168,
+            "pos_x_range": (-0.034 * 1.5, -0.034 * 0.5),
+            "pos_y_range": (0.186 * 0.5, 0.186 * 1.5),
+            "pos_z_range": (0.2 * 0.5, 0.2 * 1.5),
+            "pos_init": (-0.034, 0.186, 0.2),
+            "size_x_range": (0.0, 0.034 * 2),
+            "size_y_range": (0.0, 0.186 * 2),
+            "size_z_range": (0.0, 0.2 * 2),
+            "size_init": (0.034, 0.186, 0.2),
+        },
+        "LINK_SHOULDER_ROLL_L": {
+            "mass_scale": (0.1 * 0.5, 0.1 * 1.5),
+            "mass_init": 0.1,
+            "pos_x_range": (-0.0003 * 1.5, -0.0003 * 0.5),
+            "pos_y_range": (0.0737 * 0.5, 0.0737 * 1.5),
+            "pos_z_range": (-0.0476 * 1.5, -0.0476 * 0.5),
+            "pos_init": (0.0003, 0.0737, -0.0476),
+            "size_x_range": (0.0, 0.037 * 2),
+            "size_y_range": (0.0, 0.0737 * 2),
+            "size_z_range": (0.0, 0.0476 * 2),
+            "size_init": (0.0003, 0.0737, 0.0476),
+        },
+        "LINK_SHOULDER_YAW_L": {
+            "mass_scale": (0.16 * 0.5, 0.16 * 1.5),
+            "mass_init": 0.16,
+            "pos_x_range": (0.037 * 0.5, 0.037 * 1.5),
+            "pos_y_range": (0.01985 * 0.5, 0.01985 * 1.5),
+            "pos_z_range": (-0.12 * 1.5, -0.12 * 0.5),
+            "pos_init": (0.037, 0.01985, -0.12),
+            "size_x_range": (0.0, 0.037 * 2),
+            "size_y_range": (0.0, 0.01985 * 2),
+            "size_z_range": (0.0, 0.12 * 2),
+            "size_init": (0.037, 0.01985, 0.12),
+        },
+        "LINK_ELBOW_PITCH_L": {
+            "mass_scale": (0.29 * 0.5, 0.29 * 1.5),
+            "mass_init": 0.29,
+            "pos_x_range": (0.003 * 0.5, 0.003 * 1.5),
+            "pos_y_range": (0.085 * 0.5, 0.085 * 1.5),
+            "pos_z_range": (-0.17 * 1.5, -0.17 * 0.5),
+            "pos_init": (0.003, 0.085, -0.17),
+            "size_x_range": (0.0, 0.003 * 2),
+            "size_y_range": (0.0, 0.085 * 2),
+            "size_z_range": (0.0, 0.17 * 2),
+            "size_init": (0.003, 0.085, 0.17),
+        },
+        "LINK_ELBOW_YAW_L": {
+            "mass_scale": (0.1 * 0.5, 0.1 * 1.5),
+            "mass_init": 0.1,
+            "pos_x_range": (0.038 * 0.5, 0.038 * 1.5),
+            "pos_y_range": (0.01 * 0.5, 0.01 * 1.5),
+            "pos_z_range": (-0.26 * 1.5, -0.26 * 0.5),
+            "pos_init": (0.038, 0.01, -0.26),
+            "size_x_range": (0.0, 0.038 * 2),
+            "size_y_range": (0.0, 0.01 * 2),
+            "size_z_range": (0.0, 0.26 * 2),
+            "size_init": (0.038, 0.01, 0.26),
+        },
+    }
+
     def _build_balance_params(cfg_dict):
         """Build/add balance parameters from a config dict."""
         for bn in BODY_NAMES:
@@ -460,8 +523,23 @@ def main():
             rmse_history["RMSE"].append(rmse[j])
         return rmse
 
-    # ---- Baseline: nominal model RMSE before any identification ----
-    rmse_nom = record_rmse("0.Nominal", params)
+    # ---- Baseline: raw XML model, zero modifications ----
+    _nspec = mujoco.MjSpec.from_string(USED_XML)
+    _nmodel = _nspec.compile()
+    _ndata = mujoco.MjData(_nmodel)
+    qb_ref, dqb_ref, ddqb_ref, taub_ref = trajs["balance"]
+    _tau_nom = np.zeros_like(taub_ref)
+    for k in range(len(qb_ref)):
+        _ndata.qpos[:] = qb_ref[k]
+        _ndata.qvel[:] = dqb_ref[k]
+        _ndata.qacc[:] = ddqb_ref[k]
+        mujoco.mj_inverse(_nmodel, _ndata)
+        _tau_nom[k] = _ndata.qfrc_inverse.copy()
+    rmse_nom = np.sqrt(np.mean((_tau_nom - taub_ref) ** 2, axis=0))
+    for j in range(5):
+        rmse_history["Stage"].append("0.Nominal")
+        rmse_history["Joint"].append(f"J{13 + j}")
+        rmse_history["RMSE"].append(rmse_nom[j])
     print(
         f"\n  [Baseline] Nominal model RMSE: {[round(float(x), 3) for x in rmse_nom]}"
     )
@@ -691,6 +769,7 @@ def main():
                 f"{v:.3f}",
                 ha="center",
                 fontsize=9,
+                rotation=45,
             )
     ax.set_xticks(x + (n - 1) * w / 2)
     ax.set_xticklabels([f"J{13 + j}" for j in range(5)])
@@ -799,7 +878,7 @@ def main():
                     ls=_styles2[_label],
                     lw=1.2,
                     label=_label,
-                    alpha=0.85,
+                    alpha=0.9,
                 )
             _ax.set_ylabel(f"J{13 + j} torque (Nm)")
             _ax.legend(fontsize=7)
@@ -833,6 +912,7 @@ def main():
                     f"{_val:.3f}",
                     ha="center",
                     fontsize=9,
+                    rotation=90,
                 )
         _ax3.set_xticks(_x3)
         _ax3.set_xticklabels([f"J{13 + j}" for j in range(5)])
