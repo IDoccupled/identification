@@ -67,8 +67,8 @@ def _load_xml(filename):
 LEFT_ARM_XML = _load_xml("left_arm_true.xml")
 NOMINAL_LEFT_ARM_XML = _load_xml("left_arm_nominal.xml")
 LEFT_ARM_XML_20PCT = _load_xml("left_arm_20pct.xml")
-USED_XML = LEFT_ARM_XML_20PCT
-# USED_XML = NOMINAL_LEFT_ARM_XML
+# USED_XML = LEFT_ARM_XML_20PCT
+USED_XML = NOMINAL_LEFT_ARM_XML
 
 
 def _read_true_joint_params():
@@ -359,76 +359,87 @@ def main():
     # size bounds define the box dimensions (meters)
     BALANCE_CFG = {
         "LINK_SHOULDER_PITCH_L": {
-            "mass_scale": (0.0, 0.6),
-            "mass_init": 0.5,
-            "pos_x_range": (-0.08, 0.08),
-            "pos_y_range": (-0.08, 0.08),
-            "pos_z_range": (-0.08, 0.08),
-            "pos_init": (0.0, 0.0, 0.0),
-            "size_range": (0.0, 0.10),
-            "init_size": 0.06,
+            "mass_scale": (0.0, 0.2),
+            "mass_init": 0.1,
+            "pos_x_range": (-0.027 * 1.5, -0.027 * 0.5),
+            "pos_y_range": (0.13 * 0.5, 0.13 * 1.5),
+            "pos_z_range": (0.22 * 0.5, 0.22 * 1.5),
+            "pos_init": (-0.027, 0.13, 0.22),
+            "size_x_range": (0.0, 0.027 * 2),
+            "size_y_range": (0.0, 0.13 * 2),
+            "size_z_range": (0.0, 0.22 * 2),
+            "size_init": (0.0027, 0.13, 0.22),
         },
         "LINK_SHOULDER_ROLL_L": {
-            "mass_scale": (0.0, 0.6),
-            "mass_init": 0.5,
-            "pos_x_range": (-0.06, 0.06),
-            "pos_y_range": (-0.06, 0.06),
-            "pos_z_range": (-0.06, 0.06),
-            "pos_init": (0.0, 0.0, 0.0),
-            "size_range": (0.0, 0.08),
-            "init_size": 0.05,
+            "mass_scale": (0.0, 0.1),
+            "mass_init": 0.05,
+            "pos_x_range": (-0.037 * 1.5, -0.037 * 0.5),
+            "pos_y_range": (0.067 * 0.5, 0.067 * 1.5),
+            "pos_z_range": (-0.02 * 1.5, -0.02 * 0.5),
+            "pos_init": (-0.037, 0.067, -0.02),
+            "size_x_range": (0.0, 0.037 * 2),
+            "size_y_range": (0.0, 0.067 * 2),
+            "size_z_range": (0.0, 0.02 * 2),
+            "size_init": (0.037, 0.067, 0.02),
         },
         "LINK_SHOULDER_YAW_L": {
-            "mass_scale": (0.0, 0.6),
-            "mass_init": 0.5,
-            "pos_x_range": (-0.06, 0.06),
-            "pos_y_range": (-0.06, 0.06),
-            "pos_z_range": (-0.06, 0.06),
-            "pos_init": (0.0, 0.0, 0.0),
-            "size_range": (0.0, 0.08),
-            "init_size": 0.04,
+            "mass_scale": (0.0, 0.2),
+            "mass_init": 0.1,
+            "pos_x_range": (0.037 * 0.5, 0.037 * 1.5),
+            "pos_y_range": (0.0176 * 0.5, 0.0176 * 1.5),
+            "pos_z_range": (-0.12 * 1.5, -0.12 * 0.5),
+            "pos_init": (0.037, 0.0176, -0.12),
+            "size_x_range": (0.0, 0.037 * 2),
+            "size_y_range": (0.0, 0.0176 * 2),
+            "size_z_range": (0.0, 0.12 * 2),
+            "size_init": (0.037, 0.0176, 0.12),
         },
         "LINK_ELBOW_PITCH_L": {
-            "mass_scale": (0.0, 0.6),
-            "mass_init": 0.5,
-            "pos_x_range": (-0.10, 0.10),
-            "pos_y_range": (-0.10, 0.10),
-            "pos_z_range": (-0.10, 0.10),
-            "pos_init": (0.0, 0.0, 0.0),
-            "size_range": (0.0, 0.12),
-            "init_size": 0.07,
+            "mass_scale": (0.0, 0.28),
+            "mass_init": 0.14,
+            "pos_x_range": (0.0025 * 0.5, 0.0025 * 1.5),
+            "pos_y_range": (0.01 * 0.5, 0.01 * 1.5),
+            "pos_z_range": (-0.16 * 1.5, -0.16 * 0.5),
+            "pos_init": (0.0025, 0.01, -0.16),
+            "size_x_range": (0.0, 0.0025 * 2),
+            "size_y_range": (0.0, 0.01 * 2),
+            "size_z_range": (0.0, 0.16 * 2),
+            "size_init": (0.0025, 0.01, 0.16),
         },
         "LINK_ELBOW_YAW_L": {
-            "mass_scale": (0.0, 0.6),
-            "mass_init": 0.5,
-            "pos_x_range": (-0.08, 0.08),
-            "pos_y_range": (-0.08, 0.08),
-            "pos_z_range": (-0.08, 0.08),
-            "pos_init": (0.0, 0.0, 0.0),
-            "size_range": (0.0, 0.10),
-            "init_size": 0.05,
+            "mass_scale": (0.0, 0.1),
+            "mass_init": 0.05,
+            "pos_x_range": (0.034 * 0.5, 0.034 * 1.5),
+            "pos_y_range": (0.1 * 0.5, 0.1 * 1.5),
+            "pos_z_range": (-0.2447 * 1.5, -0.2447 * 0.5),
+            "pos_init": (0.034, 0.1, -0.2447),
+            "size_x_range": (0.0, 0.034 * 2),
+            "size_y_range": (0.0, 0.1 * 2),
+            "size_z_range": (0.0, 0.2447 * 2),
+            "size_init": (0.034, 0.1, 0.2447),
         },
     }
 
     for bn in BODY_NAMES:
-        true_m = float(mujoco.MjSpec.from_string(LEFT_ARM_XML).body(bn).mass)
-        nom_m = float(nominal_base.body(bn).mass)
-        gap = true_m - nom_m
+        # true_m = float(mujoco.MjSpec.from_string(LEFT_ARM_XML).body(bn).mass)
+        # nom_m = float(nominal_base.body(bn).mass)
         cfg = BALANCE_CFG[bn]
         ms_lo, ms_hi = cfg["mass_scale"]
         px_lo, px_hi = cfg["pos_x_range"]
         py_lo, py_hi = cfg["pos_y_range"]
         pz_lo, pz_hi = cfg["pos_z_range"]
-        sz_lo, sz_hi = cfg["size_range"]
-        isz = cfg["init_size"]
+        sx_lo, sx_hi = cfg["size_x_range"]
+        sy_lo, sy_hi = cfg["size_y_range"]
+        sz_lo, sz_hi = cfg["size_z_range"]
+        isx, isy, isz = cfg["size_init"]
         pxi, pyi, pzi = cfg["pos_init"]
         p = sysid.Parameter(
             f"balance_{bn}",
             nominal=np.zeros(7),
-            min_value=np.array([gap * ms_lo, px_lo, py_lo, pz_lo, sz_lo, sz_lo, sz_lo]),
-            max_value=np.array([gap * ms_hi, px_hi, py_hi, pz_hi, sz_hi, sz_hi, sz_hi]),
+            min_value=np.array([ms_lo, px_lo, py_lo, pz_lo, sx_lo, sy_lo, sz_lo]),
+            max_value=np.array([ms_hi, px_hi, py_hi, pz_hi, sx_hi, sy_hi, sz_hi]),
         )
-        p.value[:] = [gap * cfg["mass_init"], pxi, pyi, pzi, isz, isz, isz]
+        p.value[:] = [cfg["mass_init"], pxi, pyi, pzi, isx, isy, isz]
         p.frozen = True
         params.add(p)
 
@@ -620,7 +631,7 @@ def main():
             tau_nom[k] = _ndata.qfrc_inverse.copy()
 
         # Optimized (post-ID) torques
-        tau_opt = compute_rmse(nominal_base, params, qt, dqt, ddqt, tau_true_test)
+        # tau_opt = compute_rmse(nominal_base, params, qt, dqt, ddqt, tau_true_test)
         # Actually compute_rmse returns RMSE vector, we need the full torque
         _ospec = nominal_base.copy()
         sysid.apply_param_modifiers_spec(params, _ospec)
