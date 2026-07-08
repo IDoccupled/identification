@@ -192,7 +192,7 @@ def load_trajectory(yaml_name):
 
 
 def make_residual_fn(
-    nominal_base,
+    init_base,
     params,
     q,
     dq,
@@ -214,7 +214,7 @@ def make_residual_fn(
     def fn(x, pd):
         if x.ndim == 1:
             pd.update_from_vector(x)
-            spec = nominal_base.copy()
+            spec = init_base.copy()
             sysid.apply_param_modifiers_spec(pd, spec)
             bv = {bn: list(pd[f"balance_{bn}"].value) for bn in BODY_NAMES}
             try:
@@ -235,7 +235,7 @@ def make_residual_fn(
             res_list = []
             for ki in range(x.shape[1]):
                 pd.update_from_vector(x[:, ki])
-                spec = nominal_base.copy()
+                spec = init_base.copy()
                 sysid.apply_param_modifiers_spec(pd, spec)
                 bv = {bn: list(pd[f"balance_{bn}"].value) for bn in BODY_NAMES}
                 try:
@@ -258,8 +258,8 @@ def make_residual_fn(
     return fn
 
 
-def compute_rmse(nominal_base, params, q, dq, ddq, tau_true):
-    spec = nominal_base.copy()
+def compute_rmse(init_base, params, q, dq, ddq, tau_true):
+    spec = init_base.copy()
     sysid.apply_param_modifiers_spec(params, spec)
     bv = {bn: list(params[f"balance_{bn}"].value) for bn in BODY_NAMES}
     try:
@@ -282,7 +282,7 @@ def compute_rmse(nominal_base, params, q, dq, ddq, tau_true):
 def main():
     true_joint = _read_true_joint_params()
     nom_joint = _read_nominal_joint_params()
-    nominal_base = mujoco.MjSpec.from_string(USED_XML)
+    init_base = mujoco.MjSpec.from_string(USED_XML)
 
     a_true = true_joint[JOINT_NAMES[0]]["armature"]
     d_true = true_joint[JOINT_NAMES[0]]["damping"]
@@ -295,7 +295,7 @@ def main():
     print("Loading per-stage trajectories …")
     trajs = {}
     for stage_key, yaml_name in STAGE_YAMLS.items():
-        msg = f"  {stage_key}: {yaml_name}"
+        msg = f"{stage_key}: {yaml_name}"
         if stage_key == "balance":
             print(f"\033[92m{msg}\033[0m")
         elif stage_key == "armature":
@@ -305,23 +305,23 @@ def main():
         q, dq, ddq, tau = load_trajectory(yaml_name)
         trajs[stage_key] = (q, dq, ddq, tau)
         print(
-            f"  {stage_key}: {len(q)} steps, |ddq|max={np.abs(ddq).max():.1f}, "
+            f"{len(q)} steps, |ddq|max={np.abs(ddq).max():.1f}, "
             f"|dq|max={np.abs(dq).max():.1f}"
         )
 
     # ---- Build parameters ----
     params = sysid.ParameterDict()
 
-    def _damp_shared_mod(s, p):
-        for jn in JOINT_NAMES:
-            s.joint(jn).damping = np.array([[p.value[0]], [0.0], [0.0]])
+    # def _damp_shared_mod(s, p):
+    #     for jn in JOINT_NAMES:
+    #         s.joint(jn).damping = np.array([[p.value[0]], [0.0], [0.0]])
 
     params.add(
         sysid.Parameter(
             "armature",
             nominal=a_true,
-            min_value=0.001,
-            max_value=0.2,
+            min_value=0.02,
+            max_value=0.06,
             modifier=lambda s, p: [
                 setattr(s.joint(jn), "armature", p.value[0]) for jn in JOINT_NAMES
             ],
@@ -334,9 +334,12 @@ def main():
         sysid.Parameter(
             "damping",
             nominal=d_true,
-            min_value=0.001,
-            max_value=0.5,
-            modifier=_damp_shared_mod,
+            min_value=0.04,
+            max_value=0.12,
+            modifier=lambda s, p: [
+                setattr(s.joint(jn), "damping", np.array([[p.value[0]], [0.0], [0.0]]))
+                for jn in JOINT_NAMES
+            ],
         )
     )
     params["damping"].value[:] = d_nom
@@ -346,8 +349,8 @@ def main():
         sysid.Parameter(
             "frictionloss",
             nominal=f_true,
-            min_value=0.001,
-            max_value=1.0,
+            min_value=0.2,
+            max_value=0.4,
             modifier=lambda s, p: [
                 setattr(s.joint(jn), "frictionloss", p.value[0]) for jn in JOINT_NAMES
             ],
@@ -428,7 +431,7 @@ def main():
 
     for bn in BODY_NAMES:
         # true_m = float(mujoco.MjSpec.from_string(LEFT_ARM_XML).body(bn).mass)
-        # nom_m = float(nominal_base.body(bn).mass)
+        # nom_m = float(init_base.body(bn).mass)
         cfg = BALANCE_CFG[bn]
         ms_lo, ms_hi = cfg["mass_scale"]
         px_lo, px_hi = cfg["pos_x_range"]
@@ -454,7 +457,7 @@ def main():
     rmse_history = {"Stage": [], "Joint": [], "RMSE": []}
 
     def record_rmse(label, pd):
-        rmse = compute_rmse(nominal_base, pd, *trajs["balance"])
+        rmse = compute_rmse(init_base, pd, *trajs["balance"])
         for j in range(5):
             rmse_history["Stage"].append(label)
             rmse_history["Joint"].append(f"J{13 + j}")
@@ -475,7 +478,7 @@ def main():
         print(f"\n  [R{round_num}] Stage: Balance Weights")
         qb, dqb, ddqb, taub = trajs["balance"]
         rf = make_residual_fn(
-            nominal_base, params, qb, dqb, ddqb, taub, sub_a, sub_d, sub_f
+            init_base, params, qb, dqb, ddqb, taub, sub_a, sub_d, sub_f
         )
         for bn in reversed(BODY_NAMES):
             params[f"balance_{bn}"].frozen = False
@@ -488,13 +491,14 @@ def main():
                 eps=0.005,
                 x_scale=np.tile(x_scale_7, n_bal),
                 max_iters=50,
+                check_conditioning=True,
             )
             for b in BODY_NAMES:
                 params[f"balance_{b}"].value[:] = opt_p[f"balance_{b}"].value
             params[f"balance_{bn}"].frozen = True
             v = params[f"balance_{bn}"].value
             tm = float(mujoco.MjSpec.from_string(LEFT_ARM_XML).body(bn).mass)
-            nm = float(nominal_base.body(bn).mass)
+            nm = float(init_base.body(bn).mass)
             print(f"  -> mass={v[0]:+.4f} (true={tm:.4f}, nom={nm:.4f})")
         rmse = record_rmse(f"R{round_num}.Balance", params)
         print(f"  RMSE: {[round(float(x), 4) for x in rmse]}")
@@ -503,7 +507,7 @@ def main():
         print(f"\n  [R{round_num}] Stage: Armature")
         qa, dqa, ddqa, taua = trajs["armature"]
         rf = make_residual_fn(
-            nominal_base, params, qa, dqa, ddqa, taua, sub_a, sub_d, sub_f
+            init_base, params, qa, dqa, ddqa, taua, sub_a, sub_d, sub_f
         )
         params["armature"].frozen = False
         opt_p, _ = sysid.optimize(
@@ -520,7 +524,7 @@ def main():
         print(f"\n  [R{round_num}] Stage: Damping + Frictionloss")
         qf, dqf, ddqf, tauf = trajs["friction"]
         rf = make_residual_fn(
-            nominal_base, params, qf, dqf, ddqf, tauf, sub_a, sub_d, sub_f
+            init_base, params, qf, dqf, ddqf, tauf, sub_a, sub_d, sub_f
         )
         params["damping"].frozen = False
         params["frictionloss"].frozen = False
@@ -596,7 +600,7 @@ def main():
     print("-" * 76)
     for bn in BODY_NAMES:
         v = params[f"balance_{bn}"].value
-        nm = float(nominal_base.body(bn).mass)
+        nm = float(init_base.body(bn).mass)
         tm = float(mujoco.MjSpec.from_string(LEFT_ARM_XML).body(bn).mass)
         total = nm + v[0]
         err = abs(total - tm) / tm * 100
@@ -625,7 +629,7 @@ def main():
             tau_true_test[k] = _tdata.qfrc_inverse.copy()
 
         # Nominal (pre-ID) torques
-        _nspec = nominal_base.copy()
+        _nspec = init_base.copy()
         _nmodel = _nspec.compile()
         _ndata = mujoco.MjData(_nmodel)
         tau_nom = np.zeros_like(qt)
@@ -637,9 +641,9 @@ def main():
             tau_nom[k] = _ndata.qfrc_inverse.copy()
 
         # Optimized (post-ID) torques
-        # tau_opt = compute_rmse(nominal_base, params, qt, dqt, ddqt, tau_true_test)
+        # tau_opt = compute_rmse(init_base, params, qt, dqt, ddqt, tau_true_test)
         # Actually compute_rmse returns RMSE vector, we need the full torque
-        _ospec = nominal_base.copy()
+        _ospec = init_base.copy()
         sysid.apply_param_modifiers_spec(params, _ospec)
         _bv = {bn: list(params[f"balance_{bn}"].value) for bn in BODY_NAMES}
         apply_balances_to_spec(_ospec, _bv)
