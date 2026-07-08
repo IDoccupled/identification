@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 from identification.fourier_trajectory import FourierTrajectory
-from identification.sysid_balance_weight import LEFT_ARM_XML
+from identification.sysid_three_stage import LEFT_ARM_XML
 
 # Default: use latest PSO YAMLs
 _YAML_DIR = FourierTrajectory._coeffs_dir
