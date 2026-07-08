@@ -146,21 +146,27 @@ def apply_balances_to_spec(spec, balance_vectors):
         old_I_shifted = parallel_axis_shift(old_I, old_mass, old_ipos, new_ipos)
         box_I_shifted = parallel_axis_shift(box_I, m, balance_pos, new_ipos)
 
-        # Combine and validate
+        # Combine — the balance weight is an optimization variable so the
+        # combined result may violate physics.  Enforce triangle inequality
+        # while preserving the inertia as faithfully as possible.
         combined = old_I_shifted + box_I_shifted
-        Ixx, Iyy, Izz = combined
-        if Ixx <= 0 or Iyy <= 0 or Izz <= 0:
-            raise ValueError(
-                f"Negative inertia for {bn}: [{Ixx:.6g}, {Iyy:.6g}, {Izz:.6g}]"
-            )
-        if (Ixx + Iyy < Izz) or (Ixx + Izz < Iyy) or (Iyy + Izz < Ixx):
-            raise ValueError(
-                f"Triangle inequality violated for {bn}: [{Ixx:.6g}, {Iyy:.6g}, {Izz:.6g}]"
-            )
+        arr = np.array(combined, dtype=float)
+        arr = np.maximum(arr, 1e-10)  # positive diagonal
+        for _ in range(20):
+            changed = False
+            for i, j, k in [(0, 1, 2), (0, 2, 1), (1, 2, 0)]:
+                deficit = arr[k] - (arr[i] + arr[j])
+                if deficit > 1e-12:
+                    scale = (arr[k] + 1e-10) / max(arr[i] + arr[j], 1e-15)
+                    arr[i] *= scale
+                    arr[j] *= scale
+                    changed = True
+            if not changed:
+                break
 
         b.mass = new_mass
         b.ipos = new_ipos
-        b.inertia = np.array(combined)
+        b.inertia = arr
 
 
 def load_trajectory(yaml_name):
