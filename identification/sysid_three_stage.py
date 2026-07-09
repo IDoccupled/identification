@@ -15,7 +15,6 @@ MuJoCo handles the full-6DoF rigid-body inertia computation natively.
 
 import os
 import pathlib
-from pathlib import Path
 import numpy as np
 import mujoco
 from mujoco import sysid
@@ -468,29 +467,12 @@ def main():
     r1_rmse_by_stage["balance"] = compute_rmse(
         init_base, q_bal, dq_bal, ddq_bal, tau_bal, params
     )
-    print(f"\n  Balance RMSE after R1 balance:")
+    print("\n  Balance RMSE after R1 balance:")
     for jn, e in zip(JOINT_NAMES, r1_rmse_by_stage["balance"]):
         print(f"    {jn}: {e:.4f}")
 
-    # ---- Stage 2: Frictionloss ----
-    print("\n--- Stage 2: Frictionloss ---")
-    params["frictionloss"].frozen = False
-    q_fr, dq_fr, ddq_fr, tau_fr = trajs["friction"]
-    params, _ = sysid.optimize(
-        params,
-        res_fns["friction"],
-        max_iters=10,
-    )
-    print(f"  frictionloss = {params['frictionloss'].value[0]:.6f}  (true={f_true})")
-    r1_rmse_by_stage["friction"] = compute_rmse(
-        init_base, q_fr, dq_fr, ddq_fr, tau_fr, params
-    )
-    print("  Friction RMSE after R1 friction:")
-    for jn, e in zip(JOINT_NAMES, r1_rmse_by_stage["friction"]):
-        print(f"    {jn}: {e:.4f}")
-
-    # ---- Stage 3: Armature + Damping ----
-    print("\n--- Stage 3: Armature + Damping ---")
+    # ---- Stage 2: Armature + Damping ----
+    print("\n--- Stage 2: Armature + Damping ---")
     params["armature"].frozen = False
     params["damping"].frozen = False
     q_arm, dq_arm, ddq_arm, tau_arm = trajs["armature"]
@@ -506,6 +488,23 @@ def main():
     )
     print("  Armature+Damping RMSE after R1:")
     for jn, e in zip(JOINT_NAMES, r1_rmse_by_stage["armature"]):
+        print(f"    {jn}: {e:.4f}")
+
+    # ---- Stage 3: Frictionloss ----
+    print("\n--- Stage 3: Frictionloss ---")
+    params["frictionloss"].frozen = False
+    q_fr, dq_fr, ddq_fr, tau_fr = trajs["friction"]
+    params, _ = sysid.optimize(
+        params,
+        res_fns["friction"],
+        max_iters=10,
+    )
+    print(f"  frictionloss = {params['frictionloss'].value[0]:.6f}  (true={f_true})")
+    r1_rmse_by_stage["friction"] = compute_rmse(
+        init_base, q_fr, dq_fr, ddq_fr, tau_fr, params
+    )
+    print("  Friction RMSE after R1 friction:")
+    for jn, e in zip(JOINT_NAMES, r1_rmse_by_stage["friction"]):
         print(f"    {jn}: {e:.4f}")
 
     # ---- Round 2: tight bounds using R1 results as priors ----
@@ -588,21 +587,8 @@ def main():
         init_base, q_bal, dq_bal, ddq_bal, tau_bal, params
     )
 
-    # ---- R2 Stage 2: Frictionloss (tight bounds) ----
-    print("\n--- R2 Stage 2: Frictionloss ---")
-    params["frictionloss"].frozen = False
-    params, _ = sysid.optimize(
-        params,
-        res_fns["friction"],
-        max_iters=10,
-    )
-    print(f"  frictionloss = {params['frictionloss'].value[0]:.6f}  (true={f_true})")
-    r2_rmse_by_stage["friction"] = compute_rmse(
-        init_base, q_fr, dq_fr, ddq_fr, tau_fr, params
-    )
-
-    # ---- R2 Stage 3: Armature + Damping (tight bounds) ----
-    print("\n--- R2 Stage 3: Armature + Damping ---")
+    # ---- R2 Stage 2: Armature + Damping (tight bounds) ----
+    print("\n--- R2 Stage 2: Armature + Damping ---")
     params["armature"].frozen = False
     params["damping"].frozen = False
     params, _ = sysid.optimize(
@@ -614,6 +600,19 @@ def main():
     print(f"  damping  = {params['damping'].value[0]:.6f}  (true={d_true})")
     r2_rmse_by_stage["armature"] = compute_rmse(
         init_base, q_arm, dq_arm, ddq_arm, tau_arm, params
+    )
+
+    # ---- R2 Stage 3: Frictionloss (tight bounds) ----
+    print("\n--- R2 Stage 3: Frictionloss ---")
+    params["frictionloss"].frozen = False
+    params, _ = sysid.optimize(
+        params,
+        res_fns["friction"],
+        max_iters=10,
+    )
+    print(f"  frictionloss = {params['frictionloss'].value[0]:.6f}  (true={f_true})")
+    r2_rmse_by_stage["friction"] = compute_rmse(
+        init_base, q_fr, dq_fr, ddq_fr, tau_fr, params
     )
 
     # ---- Summary ----
@@ -675,6 +674,7 @@ def main():
         ax.set_xticklabels(categories)
         ax.set_ylabel("RMSE (Nm)")
         ax.legend(fontsize=6)
+        ax.grid(axis="y", linestyle="--", alpha=0.5)
     fig.suptitle("RMSE Progression: Nominal → Round 1 → Round 2")
     plt.tight_layout()
     # plt.savefig("rmse_progression.png", dpi=150)
@@ -684,63 +684,84 @@ def main():
     fig, axes = plt.subplots(3, 5, figsize=(20, 12))
     for row, stage in enumerate(["balance", "armature", "friction"]):
         q, dq, ddq, tau_true = trajs[stage]
+        # Optimized (R2) torque
         spec_tmp = init_base.copy()
         sysid.apply_param_modifiers_spec(params, spec_tmp)
+        spec_tmp.compiler.balanceinertia = True
         model = spec_tmp.compile()
         data = mujoco.MjData(model)
-        tau_pred = np.zeros_like(tau_true)
+        tau_opt = np.zeros_like(tau_true)
         for k in range(len(q)):
             data.qpos[:] = q[k]
             data.qvel[:] = dq[k]
             data.qacc[:] = ddq[k]
             mujoco.mj_inverse(model, data)
-            tau_pred[k] = data.qfrc_inverse.copy()
+            tau_opt[k] = data.qfrc_inverse.copy()
+        # Nominal torque (fresh parse from XML)
+        spec_nom = mujoco.MjSpec.from_string(USED_XML)
+        model_nom = spec_nom.compile()
+        data_nom = mujoco.MjData(model_nom)
+        tau_nom = np.zeros_like(tau_true)
+        for k in range(len(q)):
+            data_nom.qpos[:] = q[k]
+            data_nom.qvel[:] = dq[k]
+            data_nom.qacc[:] = ddq[k]
+            mujoco.mj_inverse(model_nom, data_nom)
+            tau_nom[k] = data_nom.qfrc_inverse.copy()
+
         t = np.arange(len(q)) / 500.0
         for col in range(5):
             ax = axes[row, col]
             ax.plot(t, tau_true[:, col], "k-", label="true", lw=1.5)
-            ax.plot(t, tau_pred[:, col], "r--", label="pred", lw=1.5)
+            ax.plot(t, tau_nom[:, col], "b--", label="nominal", lw=1.0, alpha=0.7)
+            ax.plot(t, tau_opt[:, col], "r--", label="optimized", lw=1.5)
             ax.set_title(f"{stage} | {JOINT_NAMES[col]}")
             if row == 2:
                 ax.set_xlabel("t (s)")
             if col == 0:
                 ax.set_ylabel("τ (Nm)")
             ax.legend(fontsize=6)
-    fig.suptitle("Torque Comparison: True vs Predicted (after R2)")
+            ax.grid(axis="both", linestyle="--", alpha=0.5)
+    fig.suptitle("Torque Comparison: True vs Nominal vs Optimized (after R2)")
     plt.tight_layout()
     # plt.savefig("torque_comparison.png", dpi=150)
     # print("Saved torque_comparison.png")
 
-    # ---- Test Trajectory RMSE Bar Chart ----
-    fig, ax = plt.subplots(figsize=(10, 5))
-    all_rmse = {}
-    for stage_key in ["balance", "armature", "friction"]:
-        q, dq, ddq, tau = trajs[stage_key]
-        all_rmse[stage_key] = compute_rmse(init_base, q, dq, ddq, tau, params)
-
-    x = np.arange(len(JOINT_NAMES))
-    width = 0.25
-    for i, (stage, color) in enumerate(
-        zip(["balance", "armature", "friction"], ["green", "orange", "blue"])
-    ):
-        bars = ax.bar(x + i * width, all_rmse[stage], width, label=stage, color=color)
-        for bar in bars:
-            h = bar.get_height()
-            ax.text(
-                bar.get_x() + bar.get_width() / 2.0,
-                h,
-                f"{h:.3f}",
-                ha="center",
-                va="bottom",
-                fontsize=7,
-                rotation=90,
-            )
-    ax.set_xlabel("Joint")
-    ax.set_ylabel("RMSE (Nm)")
-    ax.set_title("Test Trajectory RMSE (after R2)")
-    ax.set_xticks(x + width)
-    ax.set_xticklabels(JOINT_NAMES)
-    ax.legend()
+    # ---- Test Trajectory RMSE Bar Chart (Nominal vs R1 vs R2) ----
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    for idx, stage in enumerate(["balance", "armature", "friction"]):
+        ax = axes[idx]
+        q, dq, ddq, tau = trajs[stage]
+        rmses = np.array(
+            [
+                nom_rmse[stage],
+                r1_rmse_by_stage[stage],
+                compute_rmse(init_base, q, dq, ddq, tau, params),
+            ]
+        )
+        x = np.arange(len(JOINT_NAMES))
+        width = 0.25
+        colors = ["gray", "orange", "green"]
+        for i, (label, color) in enumerate(zip(["Nominal", "R1", "R2"], colors)):
+            bars = ax.bar(x + i * width, rmses[i], width, label=label, color=color)
+            for bar in bars:
+                h = bar.get_height()
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    h,
+                    f"{h:.3f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=6,
+                    rotation=90,
+                )
+        ax.set_title(f"{stage} trajectory")
+        ax.set_xticks(x + width)
+        ax.set_xticklabels(JOINT_NAMES, fontsize=7)
+        ax.set_ylabel("RMSE (Nm)")
+        ax.legend(fontsize=7)
+        ax.grid(axis="y", linestyle="--", alpha=0.5)
+    fig.suptitle("Test Trajectory RMSE: Nominal → R1 → R2")
     plt.tight_layout()
     # plt.savefig("test_rmse_bar.png", dpi=150)
     # print("Saved test_rmse_bar.png")
