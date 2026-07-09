@@ -67,8 +67,8 @@ def _load_xml(filename):
 LEFT_ARM_XML = _load_xml("left_arm_true.xml")
 NOMINAL_LEFT_ARM_XML = _load_xml("left_arm_nominal.xml")
 LEFT_ARM_XML_20PCT = _load_xml("left_arm_20pct.xml")
-USED_XML = LEFT_ARM_XML_20PCT
-# USED_XML = NOMINAL_LEFT_ARM_XML
+# USED_XML = LEFT_ARM_XML_20PCT
+USED_XML = NOMINAL_LEFT_ARM_XML
 
 
 def _read_true_joint_params():
@@ -139,34 +139,30 @@ def apply_balances_to_spec(spec, balance_vectors):
         new_mass = old_mass + m
         new_ipos = (old_mass * old_ipos + m * balance_pos) / new_mass
 
-        # Box inertia about its own CoM
+        # Box inertia about its own CoM — must satisfy triangle inequality
         box_I = np.array(box_inertia(m, sx, sy, sz))
+        box_I = np.maximum(box_I, 1e-10)
+        for _ in range(20):
+            changed = False
+            for i, j, k in [(0, 1, 2), (0, 2, 1), (1, 2, 0)]:
+                deficit = box_I[k] - (box_I[i] + box_I[j])
+                if deficit > 1e-12:
+                    scale = (box_I[k] + 1e-10) / max(box_I[i] + box_I[j], 1e-15)
+                    box_I[i] *= scale
+                    box_I[j] *= scale
+                    changed = True
+            if not changed:
+                break
 
         # Shift both inertias to the new combined CoM
         old_I_shifted = parallel_axis_shift(old_I, old_mass, old_ipos, new_ipos)
         box_I_shifted = parallel_axis_shift(box_I, m, balance_pos, new_ipos)
 
-        # Combine — the balance weight is an optimization variable so the
-        # combined result may violate physics.  Enforce triangle inequality
-        # while preserving the inertia as faithfully as possible.
         combined = old_I_shifted + box_I_shifted
-        arr = np.array(combined, dtype=float)
-        arr = np.maximum(arr, 1e-10)  # positive diagonal
-        for _ in range(20):
-            changed = False
-            for i, j, k in [(0, 1, 2), (0, 2, 1), (1, 2, 0)]:
-                deficit = arr[k] - (arr[i] + arr[j])
-                if deficit > 1e-12:
-                    scale = (arr[k] + 1e-10) / max(arr[i] + arr[j], 1e-15)
-                    arr[i] *= scale
-                    arr[j] *= scale
-                    changed = True
-            if not changed:
-                break
 
         b.mass = new_mass
         b.ipos = new_ipos
-        b.inertia = arr
+        b.inertia = np.array(combined)
 
 
 def load_trajectory(yaml_name):
@@ -200,11 +196,8 @@ def make_residual_fn(init_base, q, dq, ddq, tau_true):
             spec = init_base.copy()
             sysid.apply_param_modifiers_spec(pd, spec)
             bv = {bn: list(pd[f"balance_{bn}"].value) for bn in BODY_NAMES}
-            try:
-                apply_balances_to_spec(spec, bv)
-                model = spec.compile()
-            except (ValueError, Exception):
-                return [np.full(len(q) * 5, 1e6)], None, None  # huge penalty
+            apply_balances_to_spec(spec, bv)
+            model = spec.compile()
             data = mujoco.MjData(model)
             res = []
             for k in range(len(q)):
@@ -221,12 +214,8 @@ def make_residual_fn(init_base, q, dq, ddq, tau_true):
                 spec = init_base.copy()
                 sysid.apply_param_modifiers_spec(pd, spec)
                 bv = {bn: list(pd[f"balance_{bn}"].value) for bn in BODY_NAMES}
-                try:
-                    apply_balances_to_spec(spec, bv)
-                    model = spec.compile()
-                except (ValueError, Exception):
-                    res_list.append(np.full(len(q) * 5, 1e6))
-                    continue
+                apply_balances_to_spec(spec, bv)
+                model = spec.compile()
                 data = mujoco.MjData(model)
                 rk = []
                 for k in range(len(q)):
@@ -245,11 +234,8 @@ def compute_rmse(init_base, params, q, dq, ddq, tau_true):
     spec = init_base.copy()
     sysid.apply_param_modifiers_spec(params, spec)
     bv = {bn: list(params[f"balance_{bn}"].value) for bn in BODY_NAMES}
-    try:
-        apply_balances_to_spec(spec, bv)
-        model = spec.compile()
-    except (ValueError, Exception):
-        return np.full(5, 1e6)
+    apply_balances_to_spec(spec, bv)
+    model = spec.compile()
     data = mujoco.MjData(model)
     tau_pred = np.zeros_like(tau_true)
     for k in range(len(q)):
