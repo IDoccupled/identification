@@ -2,11 +2,15 @@
 """
 Two-round iterative identification for PM-V2 Left Arm.
 
-  Round 1: Balance → Armature → Frictionloss (wide bounds, URDF prior)
-  Round 2: Balance → Armature → Frictionloss (R1 prior, tight bounds)
+  Round 1: Balance → Frictionloss → Armature+Damping (wide bounds, URDF prior)
+  Round 2: Balance → Frictionloss → Armature+Damping (R1 prior, tight bounds)
 
 Each stage uses a PSO-optimized Fourier trajectory tailored to its parameters.
 All 5 joints share the same motor → armature/damping/frictionloss are TIED.
+
+Balance weights: each BODY has a child body `bal_{NAME}` with a box geom and
+mass.  Parameter modifiers set body.mass, body.pos, body.geoms[0].size directly.
+MuJoCo handles the full-6DoF rigid-body inertia computation natively.
 """
 
 import os
@@ -97,72 +101,37 @@ def _read_nominal_joint_params():
     return out
 
 
-def box_inertia(m, sx, sy, sz):
-    """Rotational inertia of a box (mass m, size sx×sy×sz) about its own CoM.
-    Returns [Ixx, Iyy, Izz]."""
-    return [
-        m / 12 * (sy**2 + sz**2),
-        m / 12 * (sx**2 + sz**2),
-        m / 12 * (sx**2 + sy**2),
-    ]
-
-
-def parallel_axis_shift(I_diag, mass, old_com, new_com):
-    """Shift diagonal inertia tensor I_diag from old_com to new_com.
-    Returns new diagonal [Ixx, Iyy, Izz] (drops off-diagonals)."""
-    d = np.array(old_com) - np.array(new_com)
-    # Parallel axis theorem: I_new = I_old + mass * (dᵀd·I - ddᵀ)
-    # For diagonal: I_ii_new = I_ii_old + mass * (sum(d²) - d_i²)
-    d2_sum = np.dot(d, d)
-    return np.array(I_diag) + mass * (d2_sum - d**2)
-
-
-def apply_balances_to_spec(spec, balance_vectors):
-    """Apply balance weights: adjust mass, CoM, and rotational inertia.
-    balance_vectors: dict body_name -> [mass, px, py, pz, sx, sy, sz]
-
-    Computes the combined inertia of the original body + a box-shaped balance weight
-    at position (px,py,pz).  Uses parallel axis theorem to shift both inertias to
-    the new combined CoM, then sums diagonals and enforces triangle inequality.
+# ---------------------------------------------------------------------------
+# MuJoCo-native balance weight: add a child body + box geom to each link body
+# ---------------------------------------------------------------------------
+def _add_balance_child_body(spec, body_name: str):
+    """Add a zero-mass child body `bal_{body_name}` with a tiny box geom.
+    A Parameter modifier will later set mass, pos, geom size to the fitted values.
     """
-    for bn in BODY_NAMES:
-        m, px, py, pz, sx, sy, sz = balance_vectors[bn]
-        if abs(m) < 1e-9:
-            continue
-        b = spec.body(bn)
-        old_mass = b.mass
-        old_ipos = np.array(b.ipos)
-        old_I = np.array(b.inertia)
-        balance_pos = np.array([px, py, pz])
+    parent = spec.body(body_name)
+    child_name = f"bal_{body_name}"
+    child = parent.add_body(name=child_name, pos=[0.0, 0.0, 0.0])
+    child.add_geom(
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        size=[0.001, 0.001, 0.001],
+    )
+    child.mass = 0.0  # zero by default; modifier sets actual mass
+    return child_name
 
-        # Combined mass and CoM
-        new_mass = old_mass + m
-        new_ipos = (old_mass * old_ipos + m * balance_pos) / new_mass
 
-        # Box inertia about its own CoM — must satisfy triangle inequality
-        box_I = np.array(box_inertia(m, sx, sy, sz))
-        box_I = np.maximum(box_I, 1e-10)
-        for _ in range(20):
-            changed = False
-            for i, j, k in [(0, 1, 2), (0, 2, 1), (1, 2, 0)]:
-                deficit = box_I[k] - (box_I[i] + box_I[j])
-                if deficit > 1e-12:
-                    scale = (box_I[k] + 1e-10) / max(box_I[i] + box_I[j], 1e-15)
-                    box_I[i] *= scale
-                    box_I[j] *= scale
-                    changed = True
-            if not changed:
-                break
+def _make_balance_modifier(child_name: str):
+    """Return a modifier that sets mass, pos, and box size on a balance child body.
+    Parameter layout: [mass, px, py, pz, sx, sy, sz].
+    """
 
-        # Shift both inertias to the new combined CoM
-        old_I_shifted = parallel_axis_shift(old_I, old_mass, old_ipos, new_ipos)
-        box_I_shifted = parallel_axis_shift(box_I, m, balance_pos, new_ipos)
+    def mod(s, p):
+        v = p.value
+        b = s.body(child_name)
+        b.mass = max(v[0], 0.0)
+        b.pos = v[1:4]
+        b.geoms[0].size = np.maximum(np.abs(v[4:7]), 1e-9)
 
-        combined = old_I_shifted + box_I_shifted
-
-        b.mass = new_mass
-        b.ipos = new_ipos
-        b.inertia = np.array(combined)
+    return mod
 
 
 def load_trajectory(yaml_name):
@@ -188,63 +157,65 @@ def load_trajectory(yaml_name):
 
 
 def make_residual_fn(init_base, q, dq, ddq, tau_true):
-    """Build residual: τ_pred(params) - τ_true."""
+    """Build residual: τ_pred(params) - τ_true.
+    All modifiers (joint params + balance bodies) are applied via
+    sysid.apply_param_modifiers_spec — no manual post-processing needed.
+    """
+
+    def _eval_one(xi, pd):
+        """Compute residual for a single 1D parameter vector, return as (m, 1)."""
+        pd.update_from_vector(xi)
+        spec = init_base.copy()
+        sysid.apply_param_modifiers_spec(pd, spec)
+        spec.compiler.balanceinertia = True
+        model = spec.compile()
+        data = mujoco.MjData(model)
+        y = np.zeros(len(q) * 5)
+        for k in range(len(q)):
+            data.qpos[:] = q[k]
+            data.qvel[:] = dq[k]
+            data.qacc[:] = ddq[k]
+            mujoco.mj_inverse(model, data)
+            y[k * 5 : (k + 1) * 5] = data.qfrc_inverse.copy()
+        return (y.ravel() - tau_true.ravel()).reshape(-1, 1)
 
     def fn(x, pd):
-        if x.ndim == 1:
-            pd.update_from_vector(x)
-            spec = init_base.copy()
-            sysid.apply_param_modifiers_spec(pd, spec)
-            bv = {bn: list(pd[f"balance_{bn}"].value) for bn in BODY_NAMES}
-            apply_balances_to_spec(spec, bv)
-            model = spec.compile()
-            data = mujoco.MjData(model)
-            res = []
-            for k in range(len(q)):
-                data.qpos[:] = q[k]
-                data.qvel[:] = dq[k]
-                data.qacc[:] = ddq[k]
-                mujoco.mj_inverse(model, data)
-                res.append(data.qfrc_inverse - tau_true[k])
-            return [np.array(res).ravel()], None, None
+        """Residual compatible with sysid.optimize.
+        Handles single (1D or (n,1)) and batch ((n,n) FD Jacobian) inputs.
+        Single: returns [(m, 1)] so r is column vector expected by jacobian_fd.
+        Batch: returns [(m, n)] directly for the Jacobian.
+        """
+        if x.ndim == 2 and x.shape[1] > 1:
+            # Batch: (n_params, n_params) from finite-difference Jacobian
+            cols = [_eval_one(x[:, i], pd) for i in range(x.shape[1])]
+            # Each col is (m, 1); hstack gives (m, n)
+            return [np.hstack(cols)], None, None
         else:
-            res_list = []
-            for ki in range(x.shape[1]):
-                pd.update_from_vector(x[:, ki])
-                spec = init_base.copy()
-                sysid.apply_param_modifiers_spec(pd, spec)
-                bv = {bn: list(pd[f"balance_{bn}"].value) for bn in BODY_NAMES}
-                apply_balances_to_spec(spec, bv)
-                model = spec.compile()
-                data = mujoco.MjData(model)
-                rk = []
-                for k in range(len(q)):
-                    data.qpos[:] = q[k]
-                    data.qvel[:] = dq[k]
-                    data.qacc[:] = ddq[k]
-                    mujoco.mj_inverse(model, data)
-                    rk.append(data.qfrc_inverse - tau_true[k])
-                res_list.append(np.array(rk).ravel())
-            return [np.column_stack(res_list)], None, None
+            # Single: 1D or (n_params, 1) → column vector (m, 1)
+            return [_eval_one(x.ravel(), pd)], None, None
 
     return fn
 
 
-def compute_rmse(init_base, params, q, dq, ddq, tau_true):
-    spec = init_base.copy()
-    sysid.apply_param_modifiers_spec(params, spec)
-    bv = {bn: list(params[f"balance_{bn}"].value) for bn in BODY_NAMES}
-    apply_balances_to_spec(spec, bv)
+def compute_rmse(init_base, q, dq, ddq, tau_true, pd, nominal: bool = False):
+    """Compute per-joint RMSE. If nominal=True, uses a fresh parse from XML."""
+    if nominal:
+        spec = mujoco.MjSpec.from_string(USED_XML)
+    else:
+        spec = init_base.copy()
+        sysid.apply_param_modifiers_spec(pd, spec)
+    spec.compiler.balanceinertia = True
     model = spec.compile()
     data = mujoco.MjData(model)
-    tau_pred = np.zeros_like(tau_true)
+    y = np.zeros_like(tau_true)
     for k in range(len(q)):
         data.qpos[:] = q[k]
         data.qvel[:] = dq[k]
         data.qacc[:] = ddq[k]
         mujoco.mj_inverse(model, data)
-        tau_pred[k] = data.qfrc_inverse.copy()
-    return np.sqrt(np.mean((tau_pred - tau_true) ** 2, axis=0))
+        y[k] = data.qfrc_inverse.copy()
+    err = y - tau_true
+    return np.sqrt(np.mean(err**2, axis=0))
 
 
 # =========================================================================
@@ -252,6 +223,7 @@ def main():
     true_joint = _read_true_joint_params()
     nom_joint = _read_nominal_joint_params()
     init_base = mujoco.MjSpec.from_string(USED_XML)
+    init_base.compiler.balanceinertia = True
 
     a_true = true_joint[JOINT_NAMES[0]]["armature"]
     d_true = true_joint[JOINT_NAMES[0]]["damping"]
@@ -259,6 +231,13 @@ def main():
     a_nom = nom_joint[JOINT_NAMES[0]]["armature"]
     d_nom = nom_joint[JOINT_NAMES[0]]["damping"]
     f_nom = nom_joint[JOINT_NAMES[0]]["frictionloss"]
+
+    # ---- Add balance weight child bodies to init_base ----
+    bal_child_names = {}
+    for bn in BODY_NAMES:
+        child_name = _add_balance_child_body(init_base, bn)
+        bal_child_names[bn] = child_name
+    print(f"Added balance child bodies: {list(bal_child_names.values())}")
 
     # ---- Load per-stage trajectories ----
     print("Loading per-stage trajectories …")
@@ -280,10 +259,6 @@ def main():
 
     # ---- Build parameters ----
     params = sysid.ParameterDict()
-
-    # def _damp_shared_mod(s, p):
-    #     for jn in JOINT_NAMES:
-    #         s.joint(jn).damping = np.array([[p.value[0]], [0.0], [0.0]])
 
     # Shared joint parameters (all 5 joints tied)
     params.add(
@@ -329,76 +304,10 @@ def main():
     params["frictionloss"].value[:] = f_nom
     params["frictionloss"].frozen = True
 
-    # ---- Per-body balance weight bounds ----
-    # Each body: [mass_min, mass_max, pos_min_x, pos_max_x, pos_min_y, pos_max_y,
-    #             pos_min_z, pos_max_z, size_min_x, size_max_x, size_min_y, size_max_y,
-    #             size_min_z, size_max_z, init_size_x, init_size_y, init_size_z]
-    # mass bounds are relative to the true mass gap
-    # pos bounds are in the body's local frame (meters)
-    # size bounds define the box dimensions (meters)
-    BALANCE_CFG_old = {
-        "LINK_SHOULDER_PITCH_L": {
-            "mass_scale": (0.0, 0.2),
-            "mass_init": 0.1,
-            "pos_x_range": (-0.027 * 1.5, -0.027 * 0.5),
-            "pos_y_range": (0.13 * 0.5, 0.13 * 1.5),
-            "pos_z_range": (0.22 * 0.5, 0.22 * 1.5),
-            "pos_init": (-0.027, 0.13, 0.22),
-            "size_x_range": (0.0, 0.027 * 2),
-            "size_y_range": (0.0, 0.13 * 2),
-            "size_z_range": (0.0, 0.22 * 2),
-            "size_init": (0.0027, 0.13, 0.22),
-        },
-        "LINK_SHOULDER_ROLL_L": {
-            "mass_scale": (0.0, 0.1),
-            "mass_init": 0.05,
-            "pos_x_range": (-0.037 * 1.5, -0.037 * 0.5),
-            "pos_y_range": (0.067 * 0.5, 0.067 * 1.5),
-            "pos_z_range": (-0.02 * 1.5, -0.02 * 0.5),
-            "pos_init": (-0.037, 0.067, -0.02),
-            "size_x_range": (0.0, 0.037 * 2),
-            "size_y_range": (0.0, 0.067 * 2),
-            "size_z_range": (0.0, 0.02 * 2),
-            "size_init": (0.037, 0.067, 0.02),
-        },
-        "LINK_SHOULDER_YAW_L": {
-            "mass_scale": (0.0, 0.2),
-            "mass_init": 0.1,
-            "pos_x_range": (0.037 * 0.5, 0.037 * 1.5),
-            "pos_y_range": (0.0176 * 0.5, 0.0176 * 1.5),
-            "pos_z_range": (-0.12 * 1.5, -0.12 * 0.5),
-            "pos_init": (0.037, 0.0176, -0.12),
-            "size_x_range": (0.0, 0.037 * 2),
-            "size_y_range": (0.0, 0.0176 * 2),
-            "size_z_range": (0.0, 0.12 * 2),
-            "size_init": (0.037, 0.0176, 0.12),
-        },
-        "LINK_ELBOW_PITCH_L": {
-            "mass_scale": (0.0, 0.28),
-            "mass_init": 0.14,
-            "pos_x_range": (0.0025 * 0.5, 0.0025 * 1.5),
-            "pos_y_range": (0.01 * 0.5, 0.01 * 1.5),
-            "pos_z_range": (-0.16 * 1.5, -0.16 * 0.5),
-            "pos_init": (0.0025, 0.01, -0.16),
-            "size_x_range": (0.0, 0.0025 * 2),
-            "size_y_range": (0.0, 0.01 * 2),
-            "size_z_range": (0.0, 0.16 * 2),
-            "size_init": (0.0025, 0.01, 0.16),
-        },
-        "LINK_ELBOW_YAW_L": {
-            "mass_scale": (0.0, 0.1),
-            "mass_init": 0.05,
-            "pos_x_range": (0.034 * 0.5, 0.034 * 1.5),
-            "pos_y_range": (0.1 * 0.5, 0.1 * 1.5),
-            "pos_z_range": (-0.2447 * 1.5, -0.2447 * 0.5),
-            "pos_init": (0.034, 0.1, -0.2447),
-            "size_x_range": (0.0, 0.034 * 2),
-            "size_y_range": (0.0, 0.1 * 2),
-            "size_z_range": (0.0, 0.2447 * 2),
-            "size_init": (0.034, 0.1, 0.2447),
-        },
-    }
-
+    # ---- Per-body balance weight config ----
+    # Each body: [mass, px, py, pz, sx, sy, sz]
+    # mass bounds are absolute (kg)
+    # pos/size bounds are in the body's local frame (meters)
     BALANCE_CFG = {
         "LINK_SHOULDER_PITCH_L": {
             "mass_scale": (0.168 * 0.5, 0.168 * 1.5),
@@ -463,7 +372,10 @@ def main():
     }
 
     def _build_balance_params(cfg_dict):
-        """Build/add balance parameters from a config dict."""
+        """Build/add balance parameters from a config dict.
+        Each parameter controls a child body bal_{NAME}: [mass, px, py, pz, sx, sy, sz].
+        Mass bounds are from cfg mass_scale (absolute), pos/size from cfg ranges.
+        """
         for bn in BODY_NAMES:
             cfg = cfg_dict[bn]
             ms_lo, ms_hi = cfg["mass_scale"]
@@ -473,442 +385,365 @@ def main():
             sx_lo, sx_hi = cfg["size_x_range"]
             sy_lo, sy_hi = cfg["size_y_range"]
             sz_lo, sz_hi = cfg["size_z_range"]
-            isx, isy, isz = cfg["size_init"]
-            pxi, pyi, pzi = cfg["pos_init"]
-            if f"balance_{bn}" in params:
-                p = params[f"balance_{bn}"]
-                p.min_value[:] = [ms_lo, px_lo, py_lo, pz_lo, sx_lo, sy_lo, sz_lo]
-                p.max_value[:] = [ms_hi, px_hi, py_hi, pz_hi, sx_hi, sy_hi, sz_hi]
-                p.value[:] = [cfg["mass_init"], pxi, pyi, pzi, isx, isy, isz]
-            else:
-                p = sysid.Parameter(
-                    f"balance_{bn}",
-                    nominal=np.zeros(7),
-                    min_value=np.array(
-                        [ms_lo, px_lo, py_lo, pz_lo, sx_lo, sy_lo, sz_lo]
-                    ),
-                    max_value=np.array(
-                        [ms_hi, px_hi, py_hi, pz_hi, sx_hi, sy_hi, sz_hi]
-                    ),
-                )
-                p.value[:] = [cfg["mass_init"], pxi, pyi, pzi, isx, isy, isz]
-                p.frozen = True
-                params.add(p)
+
+            nominal = np.array(
+                [
+                    cfg["mass_init"],
+                    cfg["pos_init"][0],
+                    cfg["pos_init"][1],
+                    cfg["pos_init"][2],
+                    cfg["size_init"][0],
+                    cfg["size_init"][1],
+                    cfg["size_init"][2],
+                ]
+            )
+            lower = np.array([ms_lo, px_lo, py_lo, pz_lo, sx_lo, sy_lo, sz_lo])
+            upper = np.array([ms_hi, px_hi, py_hi, pz_hi, sx_hi, sy_hi, sz_hi])
+
+            child_name = bal_child_names[bn]
+            name = f"balance_{bn}"
+            p = sysid.Parameter(
+                name=name,
+                nominal=nominal,
+                min_value=lower,
+                max_value=upper,
+                modifier=_make_balance_modifier(child_name),
+            )
+            p.value[:] = nominal.copy()
+            params.add(p)
 
     _build_balance_params(BALANCE_CFG)
-
-    x_scale_7 = np.array([0.1, 0.06, 0.06, 0.06, 0.12, 0.12, 0.12])
-
-    rmse_history = {"Stage": [], "Joint": [], "RMSE": []}
-
-    def record_rmse(label, pd):
-        rmse = compute_rmse(init_base, pd, *trajs["balance"])
-        for j in range(5):
-            rmse_history["Stage"].append(label)
-            rmse_history["Joint"].append(f"J{13 + j}")
-            rmse_history["RMSE"].append(rmse[j])
-        return rmse
-
-    # ---- Baseline: raw XML model, zero modifications ----
-    _nspec = mujoco.MjSpec.from_string(USED_XML)
-    _nmodel = _nspec.compile()
-    _ndata = mujoco.MjData(_nmodel)
-    qb_ref, dqb_ref, ddqb_ref, taub_ref = trajs["balance"]
-    _tau_nom = np.zeros_like(taub_ref)
-    for k in range(len(qb_ref)):
-        _ndata.qpos[:] = qb_ref[k]
-        _ndata.qvel[:] = dqb_ref[k]
-        _ndata.qacc[:] = ddqb_ref[k]
-        mujoco.mj_inverse(_nmodel, _ndata)
-        _tau_nom[k] = _ndata.qfrc_inverse.copy()
-    rmse_nom = np.sqrt(np.mean((_tau_nom - taub_ref) ** 2, axis=0))
-    for j in range(5):
-        rmse_history["Stage"].append("0.Nominal")
-        rmse_history["Joint"].append(f"J{13 + j}")
-        rmse_history["RMSE"].append(rmse_nom[j])
-    print(
-        f"\n  [Baseline] Nominal model RMSE: {[round(float(x), 3) for x in rmse_nom]}"
-    )
-
-    def run_round(round_num):
-        print(f"\n{'#' * 60}\n  ROUND {round_num}\n{'#' * 60}")
-
-        # --- Balance ---
-        print(f"\n  [R{round_num}] Stage: Balance Weights")
-        qb, dqb, ddqb, taub = trajs["balance"]
-        for bn in reversed(BODY_NAMES):
-            params[
-                f"balance_{bn}"
-            ].frozen = False  # unfreeze current + keep all downstream unfrozen
-            n_bal = sum(1 for b in BODY_NAMES if not params[f"balance_{b}"].frozen)
-            rf = make_residual_fn(init_base, qb, dqb, ddqb, taub)
-            print(f"\n  --- {bn} ({n_bal} body(s) free, {7 * n_bal} active params) ---")
-            opt_p, _ = sysid.optimize(
-                params,
-                rf,
-                optimizer="mujoco",
-                verbose=True,
-                eps=0.005,
-                x_scale=np.tile(x_scale_7, n_bal),
-                max_iters=50,
-            )
-            for b in BODY_NAMES:
-                params[f"balance_{b}"].value[:] = opt_p[f"balance_{b}"].value
-            # DON'T freeze — keep all downstream bodies free for next iteration
-            v = params[f"balance_{bn}"].value
-            tm = float(mujoco.MjSpec.from_string(LEFT_ARM_XML).body(bn).mass)
-            nm = float(init_base.body(bn).mass)
-            print(f"  -> mass={v[0]:+.4f} (true={tm:.4f}, nom={nm:.4f})")
-        # Freeze all after final iteration
-        for bn in BODY_NAMES:
-            params[f"balance_{bn}"].frozen = True
-        rmse = record_rmse(f"R{round_num}.Balance", params)
-        print(f"  RMSE: {[round(float(x), 4) for x in rmse]}")
-
-        # --- Armature ---
-        print(f"\n  [R{round_num}] Stage: Armature")
-        qa, dqa, ddqa, taua = trajs["armature"]
-        rf = make_residual_fn(init_base, qa, dqa, ddqa, taua)
-        params["armature"].frozen = False
-        opt_p, _ = sysid.optimize(
-            params, rf, optimizer="mujoco", verbose=True, eps=0.005, max_iters=20
-        )
-        params["armature"].value[:] = opt_p["armature"].value
-        params["armature"].frozen = True
-        a_val = params["armature"].value[0]
-        print(f"  -> armature = {a_val:.6f} (true = {a_true:.6f})")
-        rmse = record_rmse(f"R{round_num}.Armature", params)
-        print(f"  RMSE: {[round(float(x), 4) for x in rmse]}")
-
-        # --- Damping + Frictionloss ---
-        print(f"\n  [R{round_num}] Stage: Damping + Frictionloss")
-        qf, dqf, ddqf, tauf = trajs["friction"]
-        rf = make_residual_fn(init_base, qf, dqf, ddqf, tauf)
-        params["damping"].frozen = False
-        params["frictionloss"].frozen = False
-        opt_p, _ = sysid.optimize(
-            params, rf, optimizer="mujoco", verbose=True, eps=0.005, max_iters=50
-        )
-        params["damping"].value[:] = opt_p["damping"].value
-        params["frictionloss"].value[:] = opt_p["frictionloss"].value
-        params["damping"].frozen = True
-        params["frictionloss"].frozen = True
-        d_val = params["damping"].value[0]
-        f_val = params["frictionloss"].value[0]
-        print(f"  -> damping = {d_val:.6f} (true = {d_true:.6f})")
-        print(f"  -> frictionloss = {f_val:.6f} (true = {f_true:.6f})")
-        rmse = record_rmse(f"R{round_num}.Friction", params)
-        print(f"  RMSE: {[round(float(x), 4) for x in rmse]}")
-
-        return (
-            params["armature"].value[0],
-            params["damping"].value[0],
-            params["frictionloss"].value[0],
-        )
-
-    # ---- Round 1 ----
-    a1, d1, f1 = run_round(1)
-
-    # ---- Round 2 ----
-    print(f"\n{'#' * 60}\n  ROUND 2 \n{'#' * 60}")
-    # Build config from R1 results: init=R1 value, range=±30% of R1 value
-    r2_cfg = {}
-    for bn in BODY_NAMES:
-        v = params[f"balance_{bn}"].value
-        m1, px1, py1, pz1, sx1, sy1, sz1 = v
-
-        def _tight(v_lo, v_hi, ctr):
-            return (min(v_lo, ctr * 0.7), max(v_hi, ctr * 1.3))
-
-        r2_cfg[bn] = {
-            "mass_scale": _tight(
-                BALANCE_CFG[bn]["mass_scale"][0], BALANCE_CFG[bn]["mass_scale"][1], m1
-            ),
-            "mass_init": float(m1),
-            "pos_x_range": _tight(
-                BALANCE_CFG[bn]["pos_x_range"][0],
-                BALANCE_CFG[bn]["pos_x_range"][1],
-                px1,
-            ),
-            "pos_y_range": _tight(
-                BALANCE_CFG[bn]["pos_y_range"][0],
-                BALANCE_CFG[bn]["pos_y_range"][1],
-                py1,
-            ),
-            "pos_z_range": _tight(
-                BALANCE_CFG[bn]["pos_z_range"][0],
-                BALANCE_CFG[bn]["pos_z_range"][1],
-                pz1,
-            ),
-            "pos_init": (float(px1), float(py1), float(pz1)),
-            "size_x_range": _tight(
-                BALANCE_CFG[bn]["size_x_range"][0],
-                BALANCE_CFG[bn]["size_x_range"][1],
-                sx1,
-            ),
-            "size_y_range": _tight(
-                BALANCE_CFG[bn]["size_y_range"][0],
-                BALANCE_CFG[bn]["size_y_range"][1],
-                sy1,
-            ),
-            "size_z_range": _tight(
-                BALANCE_CFG[bn]["size_z_range"][0],
-                BALANCE_CFG[bn]["size_z_range"][1],
-                sz1,
-            ),
-            "size_init": (float(sx1), float(sy1), float(sz1)),
-        }
-    _build_balance_params(r2_cfg)
-
-    print("\n  [R2] Stage: Balance Weights (R1 prior, tight ranges)")
-    qb, dqb, ddqb, taub = trajs["balance"]
-    for bn in reversed(BODY_NAMES):
-        params[f"balance_{bn}"].frozen = False
-        n_bal = sum(1 for b in BODY_NAMES if not params[f"balance_{b}"].frozen)
-        rf = make_residual_fn(init_base, qb, dqb, ddqb, taub)
-        print(f"\n  --- {bn} ({n_bal} body(s) free, {7 * n_bal} active params) ---")
-        opt_p, _ = sysid.optimize(
-            params,
-            rf,
-            optimizer="mujoco",
-            verbose=True,
-            eps=0.005,
-            x_scale=np.tile(x_scale_7, n_bal),
-            max_iters=50,
-        )
-        for b in BODY_NAMES:
-            params[f"balance_{b}"].value[:] = opt_p[f"balance_{b}"].value
-        v = params[f"balance_{bn}"].value
-        tm = float(mujoco.MjSpec.from_string(LEFT_ARM_XML).body(bn).mass)
-        nm = float(init_base.body(bn).mass)
-        print(f"  -> mass={v[0]:+.4f} (true={tm:.4f}, nom={nm:.4f})")
+    # All balance params start frozen; we unfreeze per-round
     for bn in BODY_NAMES:
         params[f"balance_{bn}"].frozen = True
-    rmse_r2 = record_rmse("R2.Balance", params)
-    print(f"  RMSE: {[round(float(x), 4) for x in rmse_r2]}")
 
-    # R2 Armature: tighten bounds around R1 result
-    params["armature"].min_value[:] = max(0.02, a1 * 0.7)
-    params["armature"].max_value[:] = min(0.06, a1 * 1.3)
-    params["armature"].value[:] = a1
-    print("\n  [R2] Stage: Armature (R1 prior)")
-    qa, dqa, ddqa, taua = trajs["armature"]
-    rf = make_residual_fn(init_base, qa, dqa, ddqa, taua)
-    params["armature"].frozen = False
-    opt_p, _ = sysid.optimize(
-        params, rf, optimizer="mujoco", verbose=True, eps=0.005, max_iters=20
-    )
-    params["armature"].value[:] = opt_p["armature"].value
-    params["armature"].frozen = True
-    a2 = params["armature"].value[0]
-    print(f"  -> armature = {a2:.6f} (true = {a_true:.6f})")
-    rmse_r2 = record_rmse("R2.Armature", params)
-    print(f"  RMSE: {[round(float(x), 4) for x in rmse_r2]}")
+    # ---- Build residual functions ----
+    res_fns = {}
+    for stage_key in STAGE_YAMLS:
+        q, dq, ddq, tau = trajs[stage_key]
+        res_fns[stage_key] = make_residual_fn(init_base, q, dq, ddq, tau)
 
-    # R2 Frictionloss: tighten bounds around R1 result
-    params["damping"].min_value[:] = max(0.04, d1 * 0.7)
-    params["damping"].max_value[:] = min(0.12, d1 * 1.3)
-    params["damping"].value[:] = d1
-    params["frictionloss"].min_value[:] = max(0.2, f1 * 0.7)
-    params["frictionloss"].max_value[:] = min(0.4, f1 * 1.3)
-    params["frictionloss"].value[:] = f1
-    print("\n  [R2] Stage: Damping + Frictionloss (R1 prior)")
-    qf, dqf, ddqf, tauf = trajs["friction"]
-    rf = make_residual_fn(init_base, qf, dqf, ddqf, tauf)
-    params["damping"].frozen = False
-    params["frictionloss"].frozen = False
-    opt_p, _ = sysid.optimize(
-        params, rf, optimizer="mujoco", verbose=True, eps=0.005, max_iters=50
-    )
-    params["damping"].value[:] = opt_p["damping"].value
-    params["frictionloss"].value[:] = opt_p["frictionloss"].value
-    params["damping"].frozen = True
-    params["frictionloss"].frozen = True
-    d2 = params["damping"].value[0]
-    f2 = params["frictionloss"].value[0]
-    print(f"  -> damping = {d2:.6f} (true = {d_true:.6f})")
-    print(f"  -> frictionloss = {f2:.6f} (true = {f_true:.6f})")
-    rmse_r2 = record_rmse("R2.Friction", params)
-    print(f"  RMSE: {[round(float(x), 4) for x in rmse_r2]}")
+    # ---- Round 1: wide bounds ----
+    print("\n" + "=" * 60)
+    print("ROUND 1: Balance → Frictionloss → Armature+Damping (wide bounds)")
+    print("=" * 60)
 
-    # ---- Plot RMSE progression ----
-    stage_rmse = {}
-    for st, j, r in zip(
-        rmse_history["Stage"], rmse_history["Joint"], rmse_history["RMSE"]
-    ):
-        stage_rmse.setdefault(st, {})[j] = r
-    all_stages = list(dict.fromkeys(rmse_history["Stage"]))
+    r1_rmse_by_stage = {}
 
-    fig, ax = plt.subplots(figsize=(12, 5))
-    x = np.arange(5)
-    n = len(all_stages)
-    w = 0.8 / n
-    # First bar (Nominal) in gray, rest in viridis
-    colors = [(0.5, 0.5, 0.5)] + [plt.cm.viridis(i / (n - 2)) for i in range(n - 1)]
-    for i, st in enumerate(all_stages):
-        vals = [stage_rmse[st].get(f"J{13 + j}", 0) for j in range(5)]
-        bars = ax.bar(x + i * w, vals, w, color=colors[i], alpha=0.85, label=st)
-        for bar, v in zip(bars, vals):
-            ax.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.01,
-                f"{v:.3f}",
-                ha="center",
-                fontsize=9,
-                rotation=45,
+    # ---- Stage 1: Balance (cumulatively unfreezing) ----
+    print("\n--- Stage 1: Balance (cumulatively unfreezing) ---")
+
+    # Build cumulative unfreeze order
+    cumul_groups = []
+    for i in range(len(BODY_NAMES)):
+        group = [f"balance_{BODY_NAMES[j]}" for j in range(i + 1)]
+        cumul_groups.append(group)
+
+    for group_idx, group in enumerate(cumul_groups):
+        # Freeze all, then unfreeze this group
+        for bn in BODY_NAMES:
+            params[f"balance_{bn}"].frozen = True
+        for g in group:
+            params[g].frozen = False
+
+        qb, dqb, ddqb, taub = trajs["balance"]
+        print(f"\n  Cumulative group {group_idx + 1}/{len(cumul_groups)}: {group}")
+        params, _ = sysid.optimize(
+            params,
+            res_fns["balance"],
+            max_iters=10,
+        )
+        # Collect per-body fitted vectors
+        for bn_i in range(group_idx + 1):
+            bn = BODY_NAMES[bn_i]
+            p = params[f"balance_{bn}"]
+            print(
+                f"    {bn}: mass={p.value[0]:.4f} kg, "
+                f"pos=({p.value[1]:.4f}, {p.value[2]:.4f}, {p.value[3]:.4f}), "
+                f"size=({p.value[4]:.4f}, {p.value[5]:.4f}, {p.value[6]:.4f})"
             )
-    ax.set_xticks(x + (n - 1) * w / 2)
-    ax.set_xticklabels([f"J{13 + j}" for j in range(5)])
-    ax.set_ylabel("Torque RMSE (Nm)")
-    ax.set_title(
-        f"RMSE Progression: {'20pct' if USED_XML == LEFT_ARM_XML_20PCT else 'Nominal'}"
-    )
-    ax.legend(fontsize=7, ncol=2)
-    ax.grid(True, alpha=0.3, axis="y")
-    plt.tight_layout()
 
-    # ---- Final summary ----
-    print("\n" + "=" * 66)
-    print("  Final Results  (R1 → R2)")
-    print("=" * 66)
-    print(f"  {'Param':<16s} {'R1':>10s} {'R2':>10s} {'True':>10s} {'R2 Err%':>10s}")
-    print(f"  {'-' * 56}")
-    print(
-        f"  {'armature':<16s} {a1:>10.6f} {a2:>10.6f} {a_true:>10.6f} {abs(a2 - a_true) / a_true * 100:>9.1f}%"
+    # Compute balance-stage RMSE
+    q_bal, dq_bal, ddq_bal, tau_bal = trajs["balance"]
+    r1_rmse_by_stage["balance"] = compute_rmse(
+        init_base, q_bal, dq_bal, ddq_bal, tau_bal, params
     )
-    print(
-        f"  {'damping':<16s} {d1:>10.6f} {d2:>10.6f} {d_true:>10.6f} {abs(d2 - d_true) / d_true * 100:>9.1f}%"
+    print(f"\n  Balance RMSE after R1 balance:")
+    for jn, e in zip(JOINT_NAMES, r1_rmse_by_stage["balance"]):
+        print(f"    {jn}: {e:.4f}")
+
+    # ---- Stage 2: Frictionloss ----
+    print("\n--- Stage 2: Frictionloss ---")
+    params["frictionloss"].frozen = False
+    q_fr, dq_fr, ddq_fr, tau_fr = trajs["friction"]
+    params, _ = sysid.optimize(
+        params,
+        res_fns["friction"],
+        max_iters=10,
     )
-    print(
-        f"  {'frictionloss':<16s} {f1:>10.6f} {f2:>10.6f} {f_true:>10.6f} {abs(f2 - f_true) / f_true * 100:>9.1f}%"
+    print(f"  frictionloss = {params['frictionloss'].value[0]:.6f}  (true={f_true})")
+    r1_rmse_by_stage["friction"] = compute_rmse(
+        init_base, q_fr, dq_fr, ddq_fr, tau_fr, params
     )
-    print(
-        f"\n{'Body':<28s} {'Balance':>8s} {'+Nominal':>10s} {'=Total':>10s} {'True':>10s} {'Err%':>8s}"
+    print("  Friction RMSE after R1 friction:")
+    for jn, e in zip(JOINT_NAMES, r1_rmse_by_stage["friction"]):
+        print(f"    {jn}: {e:.4f}")
+
+    # ---- Stage 3: Armature + Damping ----
+    print("\n--- Stage 3: Armature + Damping ---")
+    params["armature"].frozen = False
+    params["damping"].frozen = False
+    q_arm, dq_arm, ddq_arm, tau_arm = trajs["armature"]
+    params, _ = sysid.optimize(
+        params,
+        res_fns["armature"],
+        max_iters=10,
     )
-    print("-" * 76)
+    print(f"  armature = {params['armature'].value[0]:.6f}  (true={a_true})")
+    print(f"  damping  = {params['damping'].value[0]:.6f}  (true={d_true})")
+    r1_rmse_by_stage["armature"] = compute_rmse(
+        init_base, q_arm, dq_arm, ddq_arm, tau_arm, params
+    )
+    print("  Armature+Damping RMSE after R1:")
+    for jn, e in zip(JOINT_NAMES, r1_rmse_by_stage["armature"]):
+        print(f"    {jn}: {e:.4f}")
+
+    # ---- Round 2: tight bounds using R1 results as priors ----
+    print("\n" + "=" * 60)
+    print("ROUND 2: Balance → Frictionloss → Armature+Damping (tight bounds)")
+    print("=" * 60)
+
+    # Tighten balance bounds: ±20% around R1 values
+    for bn in BODY_NAMES:
+        p = params[f"balance_{bn}"]
+        r1_val = p.value.copy()
+        delta = np.abs(r1_val) * 0.2 + 1e-6
+        lo = r1_val - delta
+        hi = r1_val + delta
+        # mass (idx 0) and sizes (idx 4-6) must be ≥ 0
+        lo[0] = max(lo[0], 0.0)
+        lo[4:7] = np.maximum(lo[4:7], 0.0)
+        hi[0] = max(hi[0], 1e-6)
+        hi[4:7] = np.maximum(hi[4:7], 1e-9)
+        # Ensure lo < hi strictly for all components
+        for i in range(7):
+            if lo[i] >= hi[i]:
+                hi[i] = lo[i] + 1e-6
+        p.min_value = lo
+        p.max_value = hi
+        p.nominal = r1_val.copy()
+        p.frozen = True
+
+    # Tighten friction bounds
+    p_fric = params["frictionloss"]
+    r1_fric = p_fric.value[0]
+    p_fric.min_value = np.array([r1_fric * 0.8])
+    p_fric.max_value = np.array([r1_fric * 1.2])
+    p_fric.nominal = np.array([r1_fric])
+    p_fric.frozen = True
+
+    # Tighten armature bounds
+    p_arm = params["armature"]
+    r1_arm = p_arm.value[0]
+    p_arm.min_value = np.array([r1_arm * 0.8])
+    p_arm.max_value = np.array([r1_arm * 1.2])
+    p_arm.nominal = np.array([r1_arm])
+    p_arm.frozen = True
+
+    # Tighten damping bounds
+    p_dmp = params["damping"]
+    r1_dmp = p_dmp.value[0]
+    p_dmp.min_value = np.array([r1_dmp * 0.8])
+    p_dmp.max_value = np.array([r1_dmp * 1.2])
+    p_dmp.nominal = np.array([r1_dmp])
+    p_dmp.frozen = True
+
+    # ---- R2 Stage 1: Balance (tight bounds) ----
+    print("\n--- R2 Stage 1: Balance ---")
+
+    # Cumulative unfreeze again
+    for group_idx, group in enumerate(cumul_groups):
+        for bn in BODY_NAMES:
+            params[f"balance_{bn}"].frozen = True
+        for g in group:
+            params[g].frozen = False
+
+        print(f"\n  R2 Cumulative group {group_idx + 1}/{len(cumul_groups)}: {group}")
+        params, _ = sysid.optimize(
+            params,
+            res_fns["balance"],
+            max_iters=10,
+        )
+        for bn_i in range(group_idx + 1):
+            bn = BODY_NAMES[bn_i]
+            p = params[f"balance_{bn}"]
+            print(
+                f"    {bn}: mass={p.value[0]:.4f}, "
+                f"pos=({p.value[1]:.4f}, {p.value[2]:.4f}, {p.value[3]:.4f}), "
+                f"size=({p.value[4]:.4f}, {p.value[5]:.4f}, {p.value[6]:.4f})"
+            )
+
+    r2_rmse_by_stage = {}
+    r2_rmse_by_stage["balance"] = compute_rmse(
+        init_base, q_bal, dq_bal, ddq_bal, tau_bal, params
+    )
+
+    # ---- R2 Stage 2: Frictionloss (tight bounds) ----
+    print("\n--- R2 Stage 2: Frictionloss ---")
+    params["frictionloss"].frozen = False
+    params, _ = sysid.optimize(
+        params,
+        res_fns["friction"],
+        max_iters=10,
+    )
+    print(f"  frictionloss = {params['frictionloss'].value[0]:.6f}  (true={f_true})")
+    r2_rmse_by_stage["friction"] = compute_rmse(
+        init_base, q_fr, dq_fr, ddq_fr, tau_fr, params
+    )
+
+    # ---- R2 Stage 3: Armature + Damping (tight bounds) ----
+    print("\n--- R2 Stage 3: Armature + Damping ---")
+    params["armature"].frozen = False
+    params["damping"].frozen = False
+    params, _ = sysid.optimize(
+        params,
+        res_fns["armature"],
+        max_iters=10,
+    )
+    print(f"  armature = {params['armature'].value[0]:.6f}  (true={a_true})")
+    print(f"  damping  = {params['damping'].value[0]:.6f}  (true={d_true})")
+    r2_rmse_by_stage["armature"] = compute_rmse(
+        init_base, q_arm, dq_arm, ddq_arm, tau_arm, params
+    )
+
+    # ---- Summary ----
+    print("\n" + "=" * 60)
+    print("IDENTIFICATION SUMMARY")
+    print("=" * 60)
+    print(f"\n  armature:     {params['armature'].value[0]:.6f}  (true={a_true})")
+    print(f"  damping:      {params['damping'].value[0]:.6f}  (true={d_true})")
+    print(f"  frictionloss: {params['frictionloss'].value[0]:.6f}  (true={f_true})")
     for bn in BODY_NAMES:
         v = params[f"balance_{bn}"].value
-        nm = float(init_base.body(bn).mass)
-        tm = float(mujoco.MjSpec.from_string(LEFT_ARM_XML).body(bn).mass)
-        total = nm + v[0]
-        err = abs(total - tm) / tm * 100
         print(
-            f"{bn:<28s} {v[0]:>+7.4f}  {nm:>8.4f}  {total:>8.4f}  {tm:>8.4f}  {err:>6.1f}%"
+            f"  balance_{bn}: "
+            f"mass={v[0]:.4f}, pos=({v[1]:.4f},{v[2]:.4f},{v[3]:.4f}), "
+            f"size=({v[4]:.4f},{v[5]:.4f},{v[6]:.4f})"
         )
-    # ---- Test trajectory: compare True vs Nominal vs Optimized ----
-    print("\nRunning test trajectory comparison …")
-    import glob as _glob
 
-    _test_files = sorted(_glob.glob(str(_YAML_DIR / "test_trajectory_*.yaml")))
-    if _test_files:
-        _test_yaml = _test_files[-2]
-        print(f"  Test trajectory: {Path(_test_yaml).name}")
-        qt, dqt, ddqt = load_trajectory(_test_yaml)[:3]  # only q,dq,ddq
-        # Recompute tau_true from true model for the test trajectory
-        _tspec = mujoco.MjSpec.from_string(LEFT_ARM_XML)
-        _tmodel = _tspec.compile()
-        _tdata = mujoco.MjData(_tmodel)
-        tau_true_test = np.zeros_like(qt)
-        for k in range(len(qt)):
-            _tdata.qpos[:] = qt[k]
-            _tdata.qvel[:] = dqt[k]
-            _tdata.qacc[:] = ddqt[k]
-            mujoco.mj_inverse(_tmodel, _tdata)
-            tau_true_test[k] = _tdata.qfrc_inverse.copy()
+    # ---- Nominal RMSE ----
+    print("\n--- Nominal RMSE (fresh parse from XML) ---")
+    nom_rmse = {}
+    for stage_key in STAGE_YAMLS:
+        q, dq, ddq, tau = trajs[stage_key]
+        nom_rmse[stage_key] = compute_rmse(
+            init_base, q, dq, ddq, tau, params, nominal=True
+        )
+        print(f"  {stage_key}:")
+        for jn, e in zip(JOINT_NAMES, nom_rmse[stage_key]):
+            print(f"    {jn}: {e:.4f}")
 
-        # Nominal (pre-ID) torques
-        _nspec = init_base.copy()
-        _nmodel = _nspec.compile()
-        _ndata = mujoco.MjData(_nmodel)
-        tau_nom = np.zeros_like(qt)
-        for k in range(len(qt)):
-            _ndata.qpos[:] = qt[k]
-            _ndata.qvel[:] = dqt[k]
-            _ndata.qacc[:] = ddqt[k]
-            mujoco.mj_inverse(_nmodel, _ndata)
-            tau_nom[k] = _ndata.qfrc_inverse.copy()
-
-        # Optimized (post-ID) torques
-        # tau_opt = compute_rmse(init_base, params, qt, dqt, ddqt, tau_true_test)
-        # Actually compute_rmse returns RMSE vector, we need the full torque
-        _ospec = init_base.copy()
-        sysid.apply_param_modifiers_spec(params, _ospec)
-        _bv = {bn: list(params[f"balance_{bn}"].value) for bn in BODY_NAMES}
-        apply_balances_to_spec(_ospec, _bv)
-        _omodel = _ospec.compile()
-        _odata = mujoco.MjData(_omodel)
-        tau_opt_full = np.zeros_like(qt)
-        for k in range(len(qt)):
-            _odata.qpos[:] = qt[k]
-            _odata.qvel[:] = dqt[k]
-            _odata.qacc[:] = ddqt[k]
-            mujoco.mj_inverse(_omodel, _odata)
-            tau_opt_full[k] = _odata.qfrc_inverse.copy()
-
-        # Plot 5×1 torque comparison
-        _fig2, _axes2 = plt.subplots(5, 1, figsize=(12, 10), sharex=True)
-        _t_test = np.arange(len(qt)) * 0.002
-        _colors2 = {"True": "green", "Nominal": "red", "Optimized": "blue"}
-        _styles2 = {"True": "-", "Nominal": "--", "Optimized": "-."}
+    # ---- RMSE Progression Bar Chart ----
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    for idx, stage in enumerate(["balance", "armature", "friction"]):
+        ax = axes[idx]
+        categories = ["Nominal", "R1", "R2"]
+        rmses = np.array(
+            [
+                nom_rmse[stage],
+                r1_rmse_by_stage[stage],
+                r2_rmse_by_stage[stage],
+            ]
+        )
+        x = np.arange(len(categories))
+        width = 0.15
         for j in range(5):
-            _ax = _axes2[j]
-            for _label, _tau in [
-                ("True", tau_true_test),
-                ("Nominal", tau_nom),
-                ("Optimized", tau_opt_full),
-            ]:
-                _ax.plot(
-                    _t_test,
-                    _tau[:, j],
-                    color=_colors2[_label],
-                    ls=_styles2[_label],
-                    lw=1.2,
-                    label=_label,
-                    alpha=0.9,
-                )
-            _ax.set_ylabel(f"J{13 + j} torque (Nm)")
-            _ax.legend(fontsize=7)
-            _ax.grid(True, alpha=0.3)
-        _axes2[-1].set_xlabel("Time (s)")
-        _fig2.suptitle("Test Trajectory: Inverse Dynamics Torque Comparison", y=1.01)
-        plt.tight_layout()
-
-        # Test trajectory RMSE bar chart: Nominal vs Optimized
-        _rmse_nom_test = np.sqrt(np.mean((tau_nom - tau_true_test) ** 2, axis=0))
-        _rmse_opt_test = np.sqrt(np.mean((tau_opt_full - tau_true_test) ** 2, axis=0))
-        _fig3, _ax3 = plt.subplots(figsize=(8, 4))
-        _x3 = np.arange(5)
-        _w3 = 0.35
-        _b1 = _ax3.bar(
-            _x3 - _w3 / 2, _rmse_nom_test, _w3, color="red", alpha=0.7, label="Nominal"
-        )
-        _b2 = _ax3.bar(
-            _x3 + _w3 / 2,
-            _rmse_opt_test,
-            _w3,
-            color="blue",
-            alpha=0.7,
-            label="Optimized",
-        )
-        for _b, _v in [(_b1, _rmse_nom_test), (_b2, _rmse_opt_test)]:
-            for _bar, _val in zip(_b, _v):
-                _ax3.text(
-                    _bar.get_x() + _bar.get_width() / 2,
-                    _bar.get_height() + 0.01,
-                    f"{_val:.3f}",
+            bars = ax.bar(x + j * width, rmses[:, j], width, label=JOINT_NAMES[j])
+            for bar in bars:
+                h = bar.get_height()
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    h,
+                    f"{h:.3f}",
                     ha="center",
-                    fontsize=9,
+                    va="bottom",
+                    fontsize=6,
                     rotation=90,
                 )
-        _ax3.set_xticks(_x3)
-        _ax3.set_xticklabels([f"J{13 + j}" for j in range(5)])
-        _ax3.set_ylabel("Torque RMSE (Nm)")
-        _ax3.set_title("Test Trajectory RMSE: Nominal vs Optimized")
-        _ax3.legend()
-        _ax3.grid(True, alpha=0.3, axis="y")
-        plt.tight_layout()
+        ax.set_title(f"{stage} trajectory")
+        ax.set_xticks(x + width * 2)
+        ax.set_xticklabels(categories)
+        ax.set_ylabel("RMSE (Nm)")
+        ax.legend(fontsize=6)
+    fig.suptitle("RMSE Progression: Nominal → Round 1 → Round 2")
+    plt.tight_layout()
+    # plt.savefig("rmse_progression.png", dpi=150)
+    # print("\nSaved rmse_progression.png")
 
-    print("\nDone. Showing plots …")
+    # ---- Torque comparison plots for each stage ----
+    fig, axes = plt.subplots(3, 5, figsize=(20, 12))
+    for row, stage in enumerate(["balance", "armature", "friction"]):
+        q, dq, ddq, tau_true = trajs[stage]
+        spec_tmp = init_base.copy()
+        sysid.apply_param_modifiers_spec(params, spec_tmp)
+        model = spec_tmp.compile()
+        data = mujoco.MjData(model)
+        tau_pred = np.zeros_like(tau_true)
+        for k in range(len(q)):
+            data.qpos[:] = q[k]
+            data.qvel[:] = dq[k]
+            data.qacc[:] = ddq[k]
+            mujoco.mj_inverse(model, data)
+            tau_pred[k] = data.qfrc_inverse.copy()
+        t = np.arange(len(q)) / 500.0
+        for col in range(5):
+            ax = axes[row, col]
+            ax.plot(t, tau_true[:, col], "k-", label="true", lw=1.5)
+            ax.plot(t, tau_pred[:, col], "r--", label="pred", lw=1.5)
+            ax.set_title(f"{stage} | {JOINT_NAMES[col]}")
+            if row == 2:
+                ax.set_xlabel("t (s)")
+            if col == 0:
+                ax.set_ylabel("τ (Nm)")
+            ax.legend(fontsize=6)
+    fig.suptitle("Torque Comparison: True vs Predicted (after R2)")
+    plt.tight_layout()
+    # plt.savefig("torque_comparison.png", dpi=150)
+    # print("Saved torque_comparison.png")
+
+    # ---- Test Trajectory RMSE Bar Chart ----
+    fig, ax = plt.subplots(figsize=(10, 5))
+    all_rmse = {}
+    for stage_key in ["balance", "armature", "friction"]:
+        q, dq, ddq, tau = trajs[stage_key]
+        all_rmse[stage_key] = compute_rmse(init_base, q, dq, ddq, tau, params)
+
+    x = np.arange(len(JOINT_NAMES))
+    width = 0.25
+    for i, (stage, color) in enumerate(
+        zip(["balance", "armature", "friction"], ["green", "orange", "blue"])
+    ):
+        bars = ax.bar(x + i * width, all_rmse[stage], width, label=stage, color=color)
+        for bar in bars:
+            h = bar.get_height()
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                h,
+                f"{h:.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                rotation=90,
+            )
+    ax.set_xlabel("Joint")
+    ax.set_ylabel("RMSE (Nm)")
+    ax.set_title("Test Trajectory RMSE (after R2)")
+    ax.set_xticks(x + width)
+    ax.set_xticklabels(JOINT_NAMES)
+    ax.legend()
+    plt.tight_layout()
+    # plt.savefig("test_rmse_bar.png", dpi=150)
+    # print("Saved test_rmse_bar.png")
     plt.show()
 
 
