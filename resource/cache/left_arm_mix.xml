@@ -1,0 +1,47 @@
+<mujoco model="pm_v2_left_arm_mix">
+  <compiler angle="radian" autolimits="true"/>
+  <option integrator="implicitfast" timestep="0.002"><flag contact="disable"/></option>
+  <worldbody>
+    <body name="torso" pos="0 0 0.9"><inertial pos="0 0 0" mass="1e-3" diaginertia="1e-12 1e-12 1e-12"/>
+      <body name="LINK_SHOULDER_PITCH_L" pos="-0.027105 0.12916 0.21549">
+        <inertial pos="-0.006255 0.061309 -0.016580" quat="0.526158 0.836720 -0.143374 0.0500143" mass="0.997406" diaginertia="0.001352 0.000998 0.000579"/>
+        <joint name="J13_SHOULDER_PITCH_L" type="hinge" axis="0 0.998027 0.0627908" range="-2.9671 2.7925" armature="0.02" damping="0.01" frictionloss="0.5"/>
+        <geom type="capsule" fromto="0 0 0 0 0.08 0" size="0.04" rgba="0.2 0.4 0.8 1"/>
+        <body name="LINK_SHOULDER_ROLL_L" pos="-0.0371 0.066941 -0.020838">
+          <inertial pos="0.040405 0.006298 -0.024370" quat="0.694988 -0.115505 0.0954646 0.703233" mass="0.469948" diaginertia="0.001252 0.001062 0.000955"/>
+          <joint name="J14_SHOULDER_ROLL_L" type="hinge" axis="1 0 0" range="-0.6108 2.3562" armature="0.02" damping="0.01" frictionloss="0.5"/>
+          <geom type="capsule" fromto="0 0 0 0.06 0 0" size="0.035" rgba="0.2 0.5 0.9 1"/>
+          <body name="LINK_SHOULDER_YAW_L" pos="0.0371 0.017645 -0.070132">
+            <inertial pos="-0.000922 0.001996 -0.048862" quat="0.999922 -0.00834297 -0.00593057 0.00715565" mass="0.963686" diaginertia="0.001508 0.001630 0.000724"/>
+            <joint name="J15_SHOULDER_YAW_L" type="hinge" axis="0 -0.0628027 0.998026" range="-2.618 2.618" armature="0.02" damping="0.01" frictionloss="0.5"/>
+            <geom type="capsule" fromto="0 0 -0.04 0 0 0.04" size="0.03" rgba="0.3 0.6 1.0 1"/>
+            <body name="LINK_ELBOW_PITCH_L" pos="0 0.0065994 -0.10487">
+              <inertial pos="0.002714 0.002016 -0.060622" quat="0.850602 -0.0227837 0.0480929 0.52311" mass="1.297773" diaginertia="0.006427 0.005400 0.000846"/>
+              <joint name="J16_ELBOW_PITCH_L" type="hinge" axis="0.00272431 0.998022 0.0628031" range="-2.1948 0.7374" armature="0.02" damping="0.01" frictionloss="0.5"/>
+              <geom type="capsule" fromto="0 0 0 0 0 -0.12" size="0.035" rgba="0.4 0.7 1.0 1"/>
+              <body name="LINK_ELBOW_YAW_L" pos="0.013817 0.0097723 -0.1547">
+                <inertial pos="0.018772 0.000233 -0.095415" quat="0.993617 -0.0142345 -0.111507 -0.00947408" mass="0.504921" diaginertia="0.001589 0.001891 0.000303"/>
+                <joint name="J17_ELBOW_YAW_L" type="hinge" axis="-0.214789 -0.0619207 0.974696" range="-2.618 2.618" armature="0.02" damping="0.01" frictionloss="0.5"/>
+                <geom type="capsule" fromto="0 0 0 0.08 0 0" size="0.025" rgba="0.5 0.8 1.0 1"/>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="motor_J13" joint="J13_SHOULDER_PITCH_L" gear="1" ctrllimited="true" ctrlrange="-61 61"/>
+    <motor name="motor_J14" joint="J14_SHOULDER_ROLL_L" gear="1" ctrllimited="true" ctrlrange="-61 61"/>
+    <motor name="motor_J15" joint="J15_SHOULDER_YAW_L" gear="1" ctrllimited="true" ctrlrange="-61 61"/>
+    <motor name="motor_J16" joint="J16_ELBOW_PITCH_L" gear="1" ctrllimited="true" ctrlrange="-61 61"/>
+    <motor name="motor_J17" joint="J17_ELBOW_YAW_L" gear="1" ctrllimited="true" ctrlrange="-61 61"/>
+  </actuator>
+  <sensor>
+    <jointpos name="J13_pos" joint="J13_SHOULDER_PITCH_L"/><jointvel name="J13_vel" joint="J13_SHOULDER_PITCH_L"/><jointtorque name="J13_torque" joint="J13_SHOULDER_PITCH_L"/>
+    <jointpos name="J14_pos" joint="J14_SHOULDER_ROLL_L"/><jointvel name="J14_vel" joint="J14_SHOULDER_ROLL_L"/><jointtorque name="J14_torque" joint="J14_SHOULDER_ROLL_L"/>
+    <jointpos name="J15_pos" joint="J15_SHOULDER_YAW_L"/><jointvel name="J15_vel" joint="J15_SHOULDER_YAW_L"/><jointtorque name="J15_torque" joint="J15_SHOULDER_YAW_L"/>
+    <jointpos name="J16_pos" joint="J16_ELBOW_PITCH_L"/><jointvel name="J16_vel" joint="J16_ELBOW_PITCH_L"/><jointtorque name="J16_torque" joint="J16_ELBOW_PITCH_L"/>
+    <jointpos name="J17_pos" joint="J17_ELBOW_YAW_L"/><jointvel name="J17_vel" joint="J17_ELBOW_YAW_L"/><jointtorque name="J17_torque" joint="J17_ELBOW_YAW_L"/>
+  </sensor>
+</mujoco>

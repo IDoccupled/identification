@@ -17,6 +17,41 @@ class FourierTrajectory:
     # Directory where all coefficient YAML files are stored
     _coeffs_dir = Path(__file__).resolve().parent / ".." / "trajectory_coefficients"
 
+    # Valid identification types and their YAML filename prefix
+    VALID_TYPES = {
+        "balance": "pso_balance",
+        "armature": "pso_armature",
+        "friction": "pso_friction",
+    }
+
+    @staticmethod
+    def find_latest_yaml(yaml_type: str) -> str:
+        """
+        Find the latest YAML file for a given identification type.
+
+        :param yaml_type: One of 'balance', 'armature', 'friction'.
+        :return: Filename (not full path) of the latest matching YAML.
+        :raises ValueError: If yaml_type is invalid or no matching YAML found.
+        """
+        if yaml_type not in FourierTrajectory.VALID_TYPES:
+            raise ValueError(
+                f"Unknown type '{yaml_type}'. "
+                f"Must be one of: {list(FourierTrajectory.VALID_TYPES.keys())}"
+            )
+
+        prefix = FourierTrajectory.VALID_TYPES[yaml_type]
+        pattern = f"{prefix}_*.yaml"
+        matches = sorted(FourierTrajectory._coeffs_dir.glob(pattern))
+
+        if not matches:
+            raise FileNotFoundError(
+                f"No YAML files found for type '{yaml_type}' "
+                f"(pattern: {pattern} in {FourierTrajectory._coeffs_dir})"
+            )
+
+        # Sorted by name, which naturally orders by YYMMDD_HHMMSS timestamp
+        return matches[-1].name
+
     def __init__(
         self,
         dim: int,
@@ -49,6 +84,8 @@ class FourierTrajectory:
 
         coeffs_list = []
         for joint_key in sorted(data.keys()):
+            if not joint_key.startswith("joint_"):
+                continue  # skip _meta
             joint = data[joint_key]
             a = joint["a"]
             b = joint["b"]
