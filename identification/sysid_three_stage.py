@@ -105,11 +105,15 @@ def _read_nominal_joint_params():
 # ---------------------------------------------------------------------------
 def _add_balance_child_body(spec, body_name: str):
     """Add a zero-mass child body `bal_{body_name}` with a tiny box geom.
-    A Parameter modifier will later set mass, pos, geom size to the fitted values.
+    The child body's quaternion is fixed to the parent's inertial quaternion
+    so the box aligns with the inertia principal axes. Only mass, pos, and
+    geom size are fitted by the Parameter modifier.
     """
     parent = spec.body(body_name)
     child_name = f"bal_{body_name}"
     child = parent.add_body(name=child_name, pos=[0.0, 0.0, 0.0])
+    # Fix orientation to parent's inertial quaternion
+    child.quat = parent.iquat.copy()
     child.add_geom(
         type=mujoco.mjtGeom.mjGEOM_BOX,
         size=[0.001, 0.001, 0.001],
