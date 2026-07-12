@@ -12,7 +12,12 @@ def generate_launch_description():
 
     # Path to the URDF file
     urdf_file = os.path.join(
-        pkg_share, "resource", "robot", "urdf", "serial_pm_v2_identify.urdf"
+        pkg_share,
+        "resource",
+        "robot",
+        "urdf",
+        "serial_pm_v2_identify.urdf",
+        # pkg_share, "resource", "robot", "urdf", "serial_pm_v2_balance.urdf"
     )
 
     # Read URDF content
