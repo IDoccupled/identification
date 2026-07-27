@@ -139,13 +139,16 @@ class TargetLimbRegressor:
             dyn_elem = joint_elem.find("dynamics")
             damping = 0.0
             friction = 0.0
+            armature = 0.0
             if dyn_elem is not None:
                 damping = float(dyn_elem.attrib.get("damping", "0.0"))
-                friction = float(dyn_elem.attrib.get("friction", "0.0"))
+                friction = float(dyn_elem.attrib.get("frictionloss", "0.0"))
+                armature = float(dyn_elem.attrib.get("armature", "0.0"))
 
             dynamics_by_joint[name] = {
                 "damping": damping,
                 "friction": friction,
+                "armature": armature,
             }
         return dynamics_by_joint
 
@@ -193,6 +196,9 @@ class TargetLimbRegressor:
                     "friction": self.urdf_dynamics.get(
                         self.model.names[joint_id], {}
                     ).get("friction", 0.0),
+                    "armature": self.urdf_dynamics.get(
+                        self.model.names[joint_id], {}
+                    ).get("armature", 0.0),
                 }
             )
             if target_q_set.intersection([joint.idx_q]):
@@ -222,6 +228,9 @@ class TargetLimbRegressor:
                         "friction": self.urdf_dynamics.get(
                             self.model.names[joint_id], {}
                         ).get("friction", 0.0),
+                        "armature": self.urdf_dynamics.get(
+                            self.model.names[joint_id], {}
+                        ).get("armature", 0.0),
                     }
                 )
 
@@ -298,10 +307,12 @@ class TargetLimbRegressor:
         self,
         Y_target_limb,
         v_target_limb,
+        a_target_limb,
     ):
         """
-        Build target-limb regressor with 12 columns per 1-DoF joint:
+        Build target-limb regressor with 13 columns per 1-DoF joint:
         - 10 inertial columns from Pinocchio's per-joint inertial block
+        - 1 armature column [a_i]
         - 2 friction columns [v_i, sign(v_i)]
         """
 
@@ -310,7 +321,11 @@ class TargetLimbRegressor:
         Y_target_friction = np.zeros(
             (len(self.group_to_identify), 2 * len(self.group_to_identify))
         )
+        Y_target_armature = np.zeros(
+            (len(self.group_to_identify), len(self.group_to_identify))
+        )
         friction_params_from_urdf = []
+        armature_params_from_urdf = []
 
         for idx, joint in enumerate(self.group_to_identify):
             col_begin = 10 * joint
@@ -318,12 +333,14 @@ class TargetLimbRegressor:
             inertial_blocks.append(Y_target_limb[:, col_begin:col_end])
             Y_target_friction[idx, 2 * idx] = v_target_limb[idx]
             Y_target_friction[idx, 2 * idx + 1] = np.tanh(v_target_limb[idx] * 1e2)
+            Y_target_armature[idx, idx] = a_target_limb[idx]
             friction_params_from_urdf.extend(
                 [
                     self.target_joint_infos[idx]["damping"],
                     self.target_joint_infos[idx]["friction"],
                 ]
             )
+            armature_params_from_urdf.append(self.target_joint_infos[idx]["armature"])
 
         pi_inertia = np.hstack(
             [
@@ -333,23 +350,28 @@ class TargetLimbRegressor:
         )
         # +1 because universal joint took joint_id = 0
         pi_friction = np.hstack(friction_params_from_urdf)
-        pi_aug = np.hstack([pi_inertia, pi_friction])
+        pi_armature = np.hstack(armature_params_from_urdf)
+        pi_aug = np.hstack([pi_inertia, pi_armature, pi_friction])
 
         Y_target_inertial = np.hstack(inertial_blocks)
-        Y_aug = np.hstack([Y_target_inertial, Y_target_friction])
+        Y_aug = np.hstack([Y_target_inertial, Y_target_armature, Y_target_friction])
 
         tau_inertia = Y_target_inertial @ pi_inertia
+        tau_armature = Y_target_armature @ pi_armature
         tau_friction = Y_target_friction @ pi_friction
-        tau_aug = tau_inertia + tau_friction
+        tau_aug = tau_inertia + tau_armature + tau_friction
 
         return (
             Y_aug,
             Y_target_inertial,
+            Y_target_armature,
             Y_target_friction,
             tau_aug,
             tau_inertia,
+            tau_armature,
             tau_friction,
             pi_inertia,
+            pi_armature,
             pi_friction,
             pi_aug,
         )
@@ -381,19 +403,24 @@ class TargetLimbRegressor:
         Y = pin.computeJointTorqueRegressor(self.model, self.data, q, v, a)
         Y_target_limb = Y[self.group_to_identify, :]
         v_target_limb = v[self.group_to_identify]
+        a_target_limb = a[self.group_to_identify]
         (
             self.Y_aug,
             self.Y_target_inertial,
+            self.Y_target_armature,
             self.Y_target_friction,
             self.tau_aug,
             self.tau_inertia,
+            self.tau_armature,
             self.tau_friction,
             self.pi_inertia,
+            self.pi_armature,
             self.pi_friction,
             self.pi_aug,
         ) = self.build_augmented_target_regressor(
             Y_target_limb=Y_target_limb,
             v_target_limb=v_target_limb,
+            a_target_limb=a_target_limb,
         )
 
         self.subtree_mask = self.get_subtree_mask()
@@ -459,9 +486,15 @@ class TargetLimbRegressor:
         return (
             self.Y_aug,
             self.Y_target_inertial,
+            self.Y_target_armature,
+            self.Y_target_friction,
             self.tau_aug,
+            self.tau_inertia,
+            self.tau_armature,
+            self.tau_friction,
             self.pi_aug,
             self.pi_inertia,
+            self.pi_armature,
             self.pi_friction,
             self.q_excess,
             self.v_excess,
@@ -497,12 +530,14 @@ class TargetLimbRegressor:
             print(f"  effort_lim   = {self._fmt_array_lines(info['effort_limit'])}")
             print(f"  damping      = {info['damping']:.6g}")
             print(f"  friction     = {info['friction']:.6g}")
+            print(f"  armature     = {info['armature']:.6g}")
 
     def print_regressor_info(
         self,
         aug=True,
         parameters=False,
         inertial=False,
+        armature=False,
         friction=False,
         computed_torques=False,
         excess=False,
@@ -524,7 +559,7 @@ class TargetLimbRegressor:
 
         if aug:
             print(
-                "\033[93mAugmented regressor (inertia + friction)\033[0m".center(
+                "\033[93mAugmented regressor (inertia + armature + friction)\033[0m".center(
                     80, "-"
                 )
             )
@@ -542,7 +577,7 @@ class TargetLimbRegressor:
             for i in range(self.Y_target_inertial.shape[0]):
                 print(
                     f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
-                    f"{self._fmt_array_lines(self.pi_aug[i * 12 : (i + 1) * 12], per_line=12)} \n"
+                    f"{self._fmt_array_lines(self.pi_aug[i * 13 : (i + 1) * 13], per_line=13)} \n"
                 )
 
         if inertial:
@@ -552,6 +587,15 @@ class TargetLimbRegressor:
                 print(
                     f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
                     f"{self._fmt_array_lines(self.Y_target_inertial[i, :], per_line=10)} \n"
+                )
+
+        if armature:
+            print("\033[93mArmature-only regressor\033[0m".center(80, "-"))
+            print(f"Shape: {self.Y_target_armature.shape}")
+            for i in range(self.Y_target_armature.shape[0]):
+                print(
+                    f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
+                    f"{self._fmt_array_lines(self.Y_target_armature[i, :], per_line=10)} \n"
                 )
 
         if friction:
@@ -585,7 +629,8 @@ class TargetLimbRegressor:
         for i in range(len(self.group_to_identify)):
             print(
                 f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
-                f"  tau_inertia  = {self.tau_aug[i] - self.tau_friction[i]:.6g} \n"
+                f"  tau_inertia  = {self.tau_inertia[i]:.6g} \n"
+                f"  tau_armature = {self.tau_armature[i]:.6g} \n"
                 f"  tau_friction = {self.tau_friction[i]:.6g} \n"
                 f"  tau_total    = {self.tau_aug[i]:.6g}"
             )
@@ -628,9 +673,16 @@ def main():
 
     (
         Y_aug,
+        Y_target_inertial,
+        Y_target_armature,
+        Y_target_friction,
         tau_aug,
+        tau_inertia,
+        tau_armature,
+        tau_friction,
         pi_aug,
         pi_inertia,
+        pi_armature,
         pi_friction,
         q_excess,
         v_excess,
@@ -646,7 +698,11 @@ def main():
         print_info=True,
     )
     regressor.print_regressor_info(
-        computed_torques=True, parameters=True, excess=True, subtree_mask=True
+        computed_torques=True,
+        parameters=True,
+        armature=True,
+        excess=True,
+        subtree_mask=True,
     )
     regressor.print_joint_info(selected_group=True)
 
