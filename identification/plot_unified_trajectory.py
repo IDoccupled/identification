@@ -67,9 +67,9 @@ def main():
             )
             sys.exit(1)
 
-    name = Path(yaml_name).stem
+    name = Path(yaml_name).name
     print(f"Loading {name} …")
-    q, dq, ddq, tau = load_trajectory(yaml_name)
+    q, dq, ddq, tau = load_trajectory(name)
 
     ylabels = [
         "Position q (rad)",

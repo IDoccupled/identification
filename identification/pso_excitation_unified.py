@@ -63,7 +63,7 @@ W_COLLISION = 100000.0
 # Per-parameter variance reward weight.
 # Balances D-optimal (overall info) vs per-parameter precision.
 # Increase to push PSO harder toward uniform per-parameter identifiability.
-W_PARAM_PER = 8.0
+W_PARAM_PER = 50.0
 
 Q_MARGIN = 0.2
 V_MARGIN = 0.2
@@ -330,11 +330,11 @@ def compute_regressor_diagnostics(
     r_eff = int(np.sum(S > sigma_floor))
     cond = float(S[0] / S[r_eff - 1]) if r_eff >= 2 else float("inf")
 
-    # D-optimal (soft)
-    r_dopt = float(np.sum(np.log(S + sigma_floor))) - len(S) * np.log(sigma_floor)
+    # D-optimal (soft) — ensure native float
+    r_dopt = float(np.sum(np.log(S + sigma_floor)) - len(S) * np.log(sigma_floor))
 
-    # Condition-number penalty
-    r_cond = -max(0.0, cond / 1000.0) if r_eff >= 2 else 0.0
+    # Condition-number penalty — ensure native float
+    r_cond = float(-max(0.0, cond / 1000.0)) if r_eff >= 2 else 0.0
 
     # Per-parameter variance
     param_entries = []
@@ -393,19 +393,19 @@ def compute_regressor_diagnostics(
 
     return {
         "reward_breakdown": {
-            "d_opt": round(r_dopt, 2),
-            "cond_penalty": round(r_cond, 2),
-            "param_reward": round(r_param, 2),
-            "total_reward": round(r_dopt + r_cond + r_param, 2),
+            "d_opt": float(round(r_dopt, 2)),
+            "cond_penalty": float(round(r_cond, 2)),
+            "param_reward": float(round(r_param, 2)),
+            "total_reward": float(round(r_dopt + r_cond + r_param, 2)),
         },
         "regression": {
-            "total_cols": n_total,
-            "nonzero_cols": n_nz,
-            "eff_rank": r_eff,
-            "cond": round(cond, 1),
+            "total_cols": int(n_total),
+            "nonzero_cols": int(n_nz),
+            "eff_rank": int(r_eff),
+            "cond": float(round(cond, 1)),
             "sigma_floor": float(sigma_floor),
             "singular_values": [
-                round(float(s), 3) for s in S[: min(r_eff + 5, len(S))]
+                float(round(float(s), 3)) for s in S[: min(r_eff + 5, len(S))]
             ],
         },
         "param_quality": {
