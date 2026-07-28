@@ -54,8 +54,8 @@ SAMPLE_RATE = 50.0  # [Hz] trajectory sample rate (coarse for PSO speed)
 # ============================================================================
 #  PSO hyper-parameters
 # ============================================================================
-POP = 500  # population size
-MAX_ITER = 50  # maximum iterations
+POP = 500
+MAX_ITER = 50
 AMP_SCALE = 2.0  # Fourier coefficient amplitude scale
 PSO_W = 0.7  # inertia weight
 PSO_C1 = 1.5  # cognitive acceleration
@@ -94,9 +94,12 @@ class RewardConfig:
     # penalty = max(0, κ / cond_threshold)
 
     # --- Per-parameter variance reward ---
-    w_param_per: float = 50.0  # overall weight for per-param term
+    w_param_per: float = 1.0  # overall weight for per-param term
     std_good: float = 0.1  # rel_std below this → saturated +1.0 reward
     std_bad: float = 1.0  # rel_std above this → polynomial penalty
+    abs_std_good: float = (
+        0.01  # abs_std below this → always "good" (regardless of rel_std)
+    )
     score_slope: float = 1.5  # linear slope in transition zone [std_good, std_bad]
     score_baseline: float = 0.5  # penalty magnitude at std_norm = std_bad
     std_penalty_power: float = 2.0  # exponent for bad-zone: -(baseline)·(std/std_bad)^p
@@ -212,8 +215,8 @@ def compute_fitness(
             theta_nom_nz = theta_nominal[nonzero_cols]
             std_norm = std_raw_nz / (np.abs(theta_nom_nz) + 1e-8)
 
-            # Piecewise scoring per parameter
-            scores = _score_param_std(std_norm, cfg)
+            # Piecewise scoring with dual threshold (relative + absolute)
+            scores = _score_param_std(std_norm, std_raw_nz, cfg)
             r_param = cfg.w_param_per * float(np.sum(scores))
     except np.linalg.LinAlgError:
         r_dopt = -1e3
@@ -233,16 +236,25 @@ def compute_fitness(
     return total
 
 
-def _score_param_std(std_norm: np.ndarray, cfg: RewardConfig) -> np.ndarray:
-    """Piecewise per-parameter score from normalised relative std.
+def _score_param_std(
+    std_norm: np.ndarray,
+    abs_std: np.ndarray,
+    cfg: RewardConfig,
+) -> np.ndarray:
+    """Piecewise per-parameter score with dual threshold (relative + absolute).
+
+    Dual-threshold logic:
+      - If abs_std < cfg.abs_std_good → always at least "ok" (score ≥ 0)
+        even if rel_std is huge (small-nominal parameters are not unfairly penalised).
+      - Otherwise, use rel_std with the standard piecewise scoring.
 
     std < cfg.std_good            →  +1.0 (saturated)
     cfg.std_good .. cfg.std_bad   →  linear transition  +1 → -baseline
     std > cfg.std_bad             →  -baseline · (std/std_bad)^p
-                                     (p=1 linear, p=2 quadratic — larger p = more aggressive)
     """
     g, b = cfg.std_good, cfg.std_bad
-    return np.where(
+    # Standard rel_std-based score
+    score_rel = np.where(
         std_norm < g,
         1.0,
         np.where(
@@ -251,6 +263,9 @@ def _score_param_std(std_norm: np.ndarray, cfg: RewardConfig) -> np.ndarray:
             -cfg.score_baseline * (std_norm / b) ** cfg.std_penalty_power,
         ),
     )
+    # Dual-threshold: abs_std is good enough → floor score at 0 (not below)
+    abs_good_mask = abs_std < cfg.abs_std_good
+    return np.where(abs_good_mask, np.maximum(score_rel, 0.0), score_rel)
 
 
 # ---------------------------------------------------------------------------
@@ -388,8 +403,8 @@ def compute_regressor_diagnostics(
         theta_nom_nz = theta_nominal[nonzero_cols]
         std_norm = std_raw_nz / (np.abs(theta_nom_nz) + 1e-8)
 
-        # Use shared scoring function
-        scores_nz = _score_param_std(std_norm, cfg)
+        # Use shared scoring function (dual threshold: relative + absolute)
+        scores_nz = _score_param_std(std_norm, std_raw_nz, cfg)
 
         # Expand to full parameter space (fill NaN for zero columns)
         rel_std_full = np.full(n_total, np.nan)
@@ -419,6 +434,7 @@ def compute_regressor_diagnostics(
                     "nominal": float(theta_nominal[full_idx])
                     if full_idx < len(theta_nominal)
                     else 0.0,
+                    "abs_std": float(std_raw_nz[j]),
                     "rel_std": sn,
                     "score": sc,
                     "quality": quality,
@@ -488,6 +504,7 @@ def _save_yaml(
             "w_param_per": cfg.w_param_per,
             "std_good": cfg.std_good,
             "std_bad": cfg.std_bad,
+            "abs_std_good": cfg.abs_std_good,
             "score_slope": cfg.score_slope,
             "score_baseline": cfg.score_baseline,
             "std_penalty_power": cfg.std_penalty_power,
@@ -521,7 +538,7 @@ def main():
         f"w_tau={cfg.w_tau_limit}, w_coll={cfg.w_collision}, "
         f"σ_floor={cfg.sigma_floor_rel}, cond_thr={cfg.cond_threshold}, "
         f"w_param={cfg.w_param_per}, "
-        f"std_good/bad={cfg.std_good}/{cfg.std_bad}"
+        f"std_good/bad/abs={cfg.std_good}/{cfg.std_bad}/{cfg.abs_std_good}"
     )
 
     np.random.seed(RANDOM_SEED)
