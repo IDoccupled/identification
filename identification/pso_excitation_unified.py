@@ -46,8 +46,8 @@ TRAJ_PERIOD = 5.0
 SAMPLE_RATE = 50.0
 
 # PSO parameters
-POP = 800
-MAX_ITER = 300
+POP = 500
+MAX_ITER = 50
 AMP_SCALE = 2.0  # moderate amp to excite both inertial and friction
 PSO_W = 0.7
 PSO_C1 = 1.5
@@ -60,6 +60,11 @@ W_V_LIMIT = 500.0
 W_TAU_LIMIT = 1000.0
 W_COLLISION = 100000.0
 
+# Per-parameter variance reward weight.
+# Balances D-optimal (overall info) vs per-parameter precision.
+# Increase to push PSO harder toward uniform per-parameter identifiability.
+W_PARAM_PER = 8.0
+
 Q_MARGIN = 0.2
 V_MARGIN = 0.2
 TAU_MARGIN = 0.2
@@ -70,12 +75,15 @@ def compute_fitness(
     coeffs: np.ndarray,
     ft: FourierTrajectory,
     reg: TargetLimbRegressor,
-    verbose: bool = False,
+    theta_nominal: np.ndarray,
+    verbose: bool = True,
 ) -> float:
     """Fitness = -(reward) + penalties.  PSO minimizes, so we negate reward.
 
-    Reward: D-optimal (Σ log σ_i) on the identifiable subspace of Y_aug,
-    with a soft condition-number penalty.
+    Reward composition:
+      - D-optimal (Σ log σ_i) on the identifiable subspace of Y_aug
+      - Soft condition-number penalty (κ > 1000)
+      - Per-parameter variance reward (piecewise scoring by relative std)
     """
     q_traj, v_traj, a_traj = ft.generate_trajectory(coeffs)
     N = len(ft.t_array)
@@ -135,6 +143,12 @@ def compute_fitness(
         return 1e9
     Y_nz = Y_full[:, nonzero_cols]
 
+    # Track reward components for diagnostic output
+    r_dopt = 0.0  # D-optimal
+    r_cond = 0.0  # condition-number penalty (≤ 0)
+    r_param = 0.0  # per-parameter variance reward
+    scores = np.array([])  # per-param scores for diagnostics
+
     try:
         U, S, Vt = np.linalg.svd(Y_nz, full_matrices=False)
         # --- Soft-threshold D-optimal reward ---
@@ -143,8 +157,8 @@ def compute_fitness(
         # borderline σ_i upward — no discrete rank jumps.
         sigma_floor = 1e-6 * S[0]
         # Normalised so that σ=sigma_floor → contribution ≈ 0
-        reward = float(np.sum(np.log(S + sigma_floor)))
-        reward -= len(S) * np.log(sigma_floor)
+        r_dopt = float(np.sum(np.log(S + sigma_floor)))
+        r_dopt -= len(S) * np.log(sigma_floor)
 
         # --- Soft condition-number penalty ---
         # Compute effective rank by the same σ_floor, then penalise κ > 1000
@@ -153,15 +167,52 @@ def compute_fitness(
         if r_eff >= 2:
             S_eff = S[:r_eff]
             cond = S_eff[0] / S_eff[-1]
-            reward -= max(0.0, cond / 1000.0)
-    except np.linalg.LinAlgError:
-        reward = -1e3
+            r_cond = -max(0.0, cond / 1000.0)
 
+        # --- Per-parameter variance reward ---
+        # Compute each parameter's relative std via SVD: std_i ∝ sqrt([V Σ⁻² Vᵀ]_ii)
+        # Then apply piecewise scoring: reward precise params, penalise noisy ones.
+        if r_eff >= 2:
+            # Vt rows correspond to Y_nz columns → map back via nonzero_cols
+            V_r = Vt[:r_eff, :].T  # (n_nz, r_eff)
+            weighted = V_r / S_eff[np.newaxis, :]  # V_{ij} / σ_j
+            var_per_param_nz = np.sum(weighted**2, axis=1)  # (n_nz,)
+            std_raw_nz = np.sqrt(var_per_param_nz + 1e-12)
+
+            # Map nominal parameter values to the non-zero column space
+            theta_nom_nz = theta_nominal[nonzero_cols]  # (n_nz,)
+
+            # Normalised relative standard deviation (dimensionless)
+            std_norm = std_raw_nz / (np.abs(theta_nom_nz) + 1e-8)
+
+            # Piecewise scoring per parameter:
+            #   rel_std < 0.1  →  +1.0  (saturated reward)
+            #   0.1 .. 1.0     →  linear transition +1.0 → -0.5
+            #   rel_std > 1.0  →  -0.5 - log(rel_std)  (growing penalty)
+            scores = np.where(
+                std_norm < 0.1,
+                1.0,
+                np.where(
+                    std_norm < 1.0,
+                    1.0 - 1.5 * (std_norm - 0.1) / 0.9,
+                    -0.5 - np.log(std_norm),
+                ),
+            )
+            r_param = W_PARAM_PER * float(np.sum(scores))
+    except np.linalg.LinAlgError:
+        r_dopt = -1e3
+
+    reward = r_dopt + r_cond + r_param
     total = -(reward) + penalty
     if verbose and np.random.random() < 0.05:
+        n_good = int(np.sum(scores > 0.5)) if len(scores) else 0
+        n_ok = int(np.sum((scores >= -0.5) & (scores <= 0.5))) if len(scores) else 0
+        n_bad = int(np.sum(scores < -0.5)) if len(scores) else 0
         print(
-            f"  reward={reward:.3f}, penalty={penalty:.1f}, "
-            f"collisions={collision_count}, total={total:.3f}"
+            f"  d_opt={r_dopt:.1f}, cond={r_cond:.1f}, param={r_param:.1f} "
+            f"[good:{n_good} ok:{n_ok} bad:{n_bad}], "
+            f"reward={reward:.1f}, penalty={penalty:.1f}, "
+            f"coll={collision_count}, total={total:.1f}"
         )
     return total
 
@@ -217,6 +268,156 @@ def _coeffs_to_yaml_dict(coeffs: np.ndarray, dim: int, n_harmonics: int) -> dict
     return data
 
 
+# ---------------------------------------------------------------------------
+# Inertial parameter names per link (Pinocchio toDynamicParameters order)
+_INERTIAL_PARAM_NAMES = [
+    "mass",
+    "mcx",
+    "mcy",
+    "mcz",
+    "Ixx",
+    "Ixy",
+    "Iyy",
+    "Ixz",
+    "Iyz",
+    "Izz",
+]
+
+
+def _build_param_names(joint_names: list[str]) -> list[str]:
+    """Build human-readable parameter names matching Y_aug column order.
+
+    Y_aug = [50 inertial | 5 armature | 10 friction] for 5-DoF limb.
+    """
+    names = []
+    for jname in joint_names:
+        for pname in _INERTIAL_PARAM_NAMES:
+            names.append(f"{jname}/{pname}")
+    for jname in joint_names:
+        names.append(f"{jname}/armature")
+    for jname in joint_names:
+        names.append(f"{jname}/damping")
+        names.append(f"{jname}/frictionloss")
+    return names
+
+
+def compute_regressor_diagnostics(
+    Y_full: np.ndarray,
+    theta_nominal: np.ndarray,
+    param_names: list[str],
+) -> dict:
+    """Compute comprehensive diagnostics from stacked regressor Y_full.
+
+    Returns a dict suitable for YAML serialisation.
+    """
+    # Remove structurally zero columns
+    col_max = np.abs(Y_full).max(axis=0)
+    nonzero_cols = col_max > 1e-12
+    n_total = Y_full.shape[1]
+    n_nz = int(nonzero_cols.sum())
+
+    if n_nz == 0:
+        return {"error": "All columns are structurally zero"}
+
+    Y_nz = Y_full[:, nonzero_cols]
+
+    try:
+        U, S, Vt = np.linalg.svd(Y_nz, full_matrices=False)
+    except np.linalg.LinAlgError:
+        return {"error": "SVD failed"}
+
+    sigma_floor = 1e-6 * S[0]
+    r_eff = int(np.sum(S > sigma_floor))
+    cond = float(S[0] / S[r_eff - 1]) if r_eff >= 2 else float("inf")
+
+    # D-optimal (soft)
+    r_dopt = float(np.sum(np.log(S + sigma_floor))) - len(S) * np.log(sigma_floor)
+
+    # Condition-number penalty
+    r_cond = -max(0.0, cond / 1000.0) if r_eff >= 2 else 0.0
+
+    # Per-parameter variance
+    param_entries = []
+    r_param = 0.0
+    n_good = n_ok = n_bad = 0
+
+    if r_eff >= 2:
+        S_eff = S[:r_eff]
+        V_r = Vt[:r_eff, :].T
+        weighted = V_r / S_eff[np.newaxis, :]
+        var_nz = np.sum(weighted**2, axis=1)
+        std_raw_nz = np.sqrt(var_nz + 1e-12)
+        theta_nom_nz = theta_nominal[nonzero_cols]
+        std_norm = std_raw_nz / (np.abs(theta_nom_nz) + 1e-8)
+
+        # Expand to full parameter space (fill NaN for zero columns)
+        rel_std_full = np.full(n_total, np.nan)
+        score_full = np.full(n_total, np.nan)
+        nz_indices = np.where(nonzero_cols)[0]
+
+        for j, full_idx in enumerate(nz_indices):
+            rel_std_full[full_idx] = float(std_norm[j])
+            sn = float(std_norm[j])
+            if sn < 0.1:
+                sc = 1.0
+            elif sn < 1.0:
+                sc = 1.0 - 1.5 * (sn - 0.1) / 0.9
+            else:
+                sc = -0.5 - np.log(sn)
+            score_full[full_idx] = sc
+
+            quality = "good" if sc > 0.5 else ("ok" if sc >= -0.5 else "bad")
+            if quality == "good":
+                n_good += 1
+            elif quality == "ok":
+                n_ok += 1
+            else:
+                n_bad += 1
+
+            param_entries.append(
+                {
+                    "idx": int(full_idx),
+                    "name": param_names[full_idx]
+                    if full_idx < len(param_names)
+                    else f"param_{full_idx}",
+                    "nominal": float(theta_nominal[full_idx])
+                    if full_idx < len(theta_nominal)
+                    else 0.0,
+                    "rel_std": float(sn),
+                    "score": float(sc),
+                    "quality": quality,
+                }
+            )
+
+        r_param = W_PARAM_PER * float(np.sum(score_full[nz_indices]))
+
+    return {
+        "reward_breakdown": {
+            "d_opt": round(r_dopt, 2),
+            "cond_penalty": round(r_cond, 2),
+            "param_reward": round(r_param, 2),
+            "total_reward": round(r_dopt + r_cond + r_param, 2),
+        },
+        "regression": {
+            "total_cols": n_total,
+            "nonzero_cols": n_nz,
+            "eff_rank": r_eff,
+            "cond": round(cond, 1),
+            "sigma_floor": float(sigma_floor),
+            "singular_values": [
+                round(float(s), 3) for s in S[: min(r_eff + 5, len(S))]
+            ],
+        },
+        "param_quality": {
+            "n_good": n_good,
+            "n_ok": n_ok,
+            "n_bad": n_bad,
+        },
+        "per_param": param_entries,
+    }
+
+
+# ---------------------------------------------------------------------------
 def _save_yaml(
     coeffs,
     ft,
@@ -227,8 +428,9 @@ def _save_yaml(
     amp_scale,
     best_fitness,
     extra_meta=None,
+    diagnostics=None,
 ):
-    """Save trajectory coefficients to YAML. Returns path."""
+    """Save trajectory coefficients and diagnostics to YAML. Returns path."""
     yaml_dict = _coeffs_to_yaml_dict(coeffs, ft.dim, ft.n_harmonics)
     meta = {
         "stage": "unified",
@@ -239,6 +441,7 @@ def _save_yaml(
         "iter": max_iter,
         "amp_scale": amp_scale,
         "seed": RANDOM_SEED,
+        "w_param_per": W_PARAM_PER,
         "best_fitness": float(best_fitness[0])
         if hasattr(best_fitness, "__iter__")
         else float(best_fitness),
@@ -246,6 +449,8 @@ def _save_yaml(
     if extra_meta:
         meta.update(extra_meta)
     yaml_dict["_meta"] = meta
+    if diagnostics:
+        yaml_dict["_diagnostics"] = diagnostics
     uid = datetime.now().strftime("%y%m%d_%H%M%S")
     yaml_path = YAML_DIR / f"pso_unified_{uid}.yaml"
     yaml_path.parent.mkdir(parents=True, exist_ok=True)
@@ -276,6 +481,39 @@ def main():
         0, TRAJ_PERIOD, int(TRAJ_PERIOD * SAMPLE_RATE), endpoint=False
     )
 
+    # Extract nominal (CAD) parameter vector for per-param variance normalisation.
+    # pi_aug = [50 inertial | 5 armature | 10 friction], matches Y_aug columns.
+    theta_nominal = np.hstack(
+        [
+            np.hstack(
+                [
+                    reg.model.inertias[joint_id + 1].toDynamicParameters()
+                    for joint_id in reg.group_to_identify
+                ]
+            ),
+            np.hstack(
+                [reg.target_joint_infos[idx]["armature"] for idx in range(reg.dof)]
+            ),
+            np.hstack(
+                [
+                    [
+                        reg.target_joint_infos[idx]["damping"],
+                        reg.target_joint_infos[idx]["friction"],
+                    ]
+                    for idx in range(reg.dof)
+                ]
+            ),
+        ]
+    )
+    print(f"theta_nominal shape: {theta_nominal.shape}")
+
+    # Build human-readable parameter names matching Y_aug column order
+    joint_names = [reg.target_joint_infos[i]["name"] for i in range(reg.dof)]
+    param_names = _build_param_names(joint_names)
+    print(
+        f"param_names: {len(param_names)} entries, e.g. {param_names[0]}, ..., {param_names[-1]}"
+    )
+
     lb, ub = build_bounds(ft, reg, amp_scale=amp_scale)
     dim_total = ft.dim * (ft.n_harmonics * 2 + 1)
     print(f"PSO dim={dim_total}")
@@ -284,7 +522,7 @@ def main():
     ts = time.time()
 
     def fitness(x):
-        return compute_fitness(x, ft, reg)
+        return compute_fitness(x, ft, reg, theta_nominal)
 
     set_run_mode(fitness, "multithreading")
 
@@ -320,6 +558,51 @@ def main():
     coeffs_best = pso.gbest_x.flatten()
     print(f"Best fitness: {pso.gbest_y}")
 
+    # ---- Compute diagnostics on best trajectory ----
+    q, v, a = ft.generate_trajectory(coeffs_best)
+    collisions = 0
+    Y_aug_all = []
+    for t_idx in range(len(ft.t_array)):
+        res = reg.compute_regressor(q=q[:, t_idx], v=v[:, t_idx], a=a[:, t_idx])
+        if res[18]:  # collided
+            collisions += 1
+        else:
+            Y_aug_all.append(res[0])
+
+    zc = np.sum(np.diff(np.sign(v), axis=1) != 0, axis=1)
+    traj_stats = {
+        "collisions": f"{collisions}/{len(ft.t_array)}",
+        "v_max": round(float(np.abs(v).max()), 2),
+        "a_max": round(float(np.abs(a).max()), 2),
+        "zero_crossings": [int(x) for x in zc],
+    }
+
+    diagnostics = {}
+    if len(Y_aug_all) > 10:
+        Y_full = np.vstack(Y_aug_all)
+        diagnostics = compute_regressor_diagnostics(Y_full, theta_nominal, param_names)
+        diagnostics["trajectory_stats"] = traj_stats
+
+        # Console summary
+        rd = diagnostics.get("reward_breakdown", {})
+        rg = diagnostics.get("regression", {})
+        pq = diagnostics.get("param_quality", {})
+        print(
+            f"  d_opt={rd.get('d_opt', '?')}, cond_pen={rd.get('cond_penalty', '?')}, "
+            f"param={rd.get('param_reward', '?')}, "
+            f"rank={rg.get('eff_rank', '?')}/{rg.get('nonzero_cols', '?')}, "
+            f"κ={rg.get('cond', '?')}, "
+            f"good/ok/bad={pq.get('n_good', '?')}/{pq.get('n_ok', '?')}/{pq.get('n_bad', '?')}"
+        )
+        print(
+            f"  Collisions: {traj_stats['collisions']}, "
+            f"|v|max={traj_stats['v_max']}, |a|max={traj_stats['a_max']}, "
+            f"zc={traj_stats['zero_crossings']}"
+        )
+    else:
+        print("  Not enough data for diagnostics.")
+        diagnostics = {"error": "Too few valid samples"}
+
     extra = {"status": status}
     if error_info:
         extra["error"] = error_info
@@ -333,45 +616,11 @@ def main():
         amp_scale,
         pso.gbest_y,
         extra_meta=extra,
+        diagnostics=diagnostics,
     )
 
     if status == "interrupted":
         raise
-
-    # ---- Diagnostic report ----
-    q, v, a = ft.generate_trajectory(coeffs_best)
-    collisions = 0
-    Y_aug_all = []
-    for t_idx in range(len(ft.t_array)):
-        res = reg.compute_regressor(q=q[:, t_idx], v=v[:, t_idx], a=a[:, t_idx])
-        if res[18]:  # collided
-            collisions += 1
-        else:
-            Y_aug_all.append(res[0])  # Y_aug
-
-    print(f"Collisions: {collisions}/{len(ft.t_array)}")
-    print(f"|v|max={np.abs(v).max():.1f}, |a|max={np.abs(a).max():.1f}")
-
-    # Per-joint zero-crossings
-    zc = np.sum(np.diff(np.sign(v), axis=1) != 0, axis=1)
-    print(f"Zero-crossings: {list(zc)}")
-
-    if len(Y_aug_all) > 10:
-        Y_full = np.vstack(Y_aug_all)
-        Y_nz = Y_full[:, np.abs(Y_full).max(axis=0) > 1e-12]
-        _, S, _ = np.linalg.svd(Y_nz, full_matrices=False)
-        sigma_floor = 1e-6 * S[0]
-        r_eff = int(np.sum(S > sigma_floor))
-        dopt_soft = float(np.sum(np.log(S + sigma_floor))) - len(S) * np.log(
-            sigma_floor
-        )
-        cond = S[0] / S[r_eff - 1] if r_eff >= 2 else float("inf")
-        print(
-            f"Y_aug total cols: {Y_nz.shape[1]}, "
-            f"eff. rank (σ>{sigma_floor:.1e}): {r_eff}, "
-            f"D-opt (soft): {dopt_soft:.2f}, "
-            f"Cond: {cond:.1f}"
-        )
 
     print(f"\n{'=' * 60}\n  Done.\n{'=' * 60}")
 
