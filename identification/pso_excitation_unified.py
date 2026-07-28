@@ -14,8 +14,7 @@ Y_aug structure per time step (left_arm, 5 DoF):
   = 65 columns per row, 5 rows per time step.
 """
 
-# ruff: noqa: F841
-
+from dataclasses import dataclass
 import yaml
 import time
 import numpy as np
@@ -31,7 +30,9 @@ from ament_index_python.packages import get_package_share_directory
 
 import traceback
 
-# ---------------------------------------------------------------------------
+# ============================================================================
+#  Identification task setup
+# ============================================================================
 URDF_PATH = (
     Path(get_package_share_directory("identification"))
     / "resource"
@@ -41,33 +42,70 @@ URDF_PATH = (
 ).resolve()
 
 YAML_DIR = Path(__file__).resolve().parent.parent / "trajectory_coefficients"
-N_HARMONICS = 5
-TRAJ_PERIOD = 5.0
-SAMPLE_RATE = 50.0
+TARGET_GROUP = "left_arm"
 
-# PSO parameters
-POP = 500
-MAX_ITER = 50
-AMP_SCALE = 2.0  # moderate amp to excite both inertial and friction
-PSO_W = 0.7
-PSO_C1 = 1.5
-PSO_C2 = 1.5
+# ============================================================================
+#  Trajectory parameterisation
+# ============================================================================
+N_HARMONICS = 5  # number of Fourier harmonics per joint
+TRAJ_PERIOD = 5.0  # [s] trajectory duration
+SAMPLE_RATE = 50.0  # [Hz] trajectory sample rate (coarse for PSO speed)
+
+# ============================================================================
+#  PSO hyper-parameters
+# ============================================================================
+POP = 500  # population size
+MAX_ITER = 50  # maximum iterations
+AMP_SCALE = 2.0  # Fourier coefficient amplitude scale
+PSO_W = 0.7  # inertia weight
+PSO_C1 = 1.5  # cognitive acceleration
+PSO_C2 = 1.5  # social acceleration
 RANDOM_SEED = 67
 
-# Penalty weights
-W_Q_LIMIT = 2000.0
-W_V_LIMIT = 500.0
-W_TAU_LIMIT = 1000.0
-W_COLLISION = 100000.0
+# ============================================================================
+#  Constraint margins
+# ============================================================================
+Q_MARGIN = 0.2  # [rad]  position margin from joint limits
+V_MARGIN = 0.2  # [rad/s] velocity margin
+TAU_MARGIN = 0.2  # [Nm]   torque margin
 
-# Per-parameter variance reward weight.
-# Balances D-optimal (overall info) vs per-parameter precision.
-# Increase to push PSO harder toward uniform per-parameter identifiability.
-W_PARAM_PER = 50.0
 
-Q_MARGIN = 0.2
-V_MARGIN = 0.2
-TAU_MARGIN = 0.2
+# ============================================================================
+#  Reward / penalty weights  —  all independently tunable
+# ============================================================================
+@dataclass
+class RewardConfig:
+    """All tunable reward & penalty parameters in one place.
+
+    For the diagnostic function the same parameters are used.
+    """
+
+    # --- Constraint-penalty weights (applied per violation, summed over time) ---
+    w_q_limit: float = 2000.0  # position-limit violation multiplier
+    w_v_limit: float = 500.0  # velocity-limit violation multiplier
+    w_tau_limit: float = 1000.0  # torque-limit violation multiplier
+    w_collision: float = 100000.0  # per-collision penalty
+
+    # --- D-optimal: soft SVD threshold ---
+    sigma_floor_rel: float = 1e-6  # σ_floor = sigma_floor_rel · σ_max
+
+    # --- Condition-number soft penalty ---
+    cond_threshold: float = 1000.0  # κ > cond_threshold → linear penalty
+    # penalty = max(0, κ / cond_threshold)
+
+    # --- Per-parameter variance reward ---
+    w_param_per: float = 50.0  # overall weight for per-param term
+    std_good: float = 0.1  # rel_std below this → saturated +1.0 reward
+    std_bad: float = 1.0  # rel_std above this → polynomial penalty
+    score_slope: float = 1.5  # linear slope in transition zone [std_good, std_bad]
+    score_baseline: float = 0.5  # penalty magnitude at std_norm = std_bad
+    std_penalty_power: float = 2.0  # exponent for bad-zone: -(baseline)·(std/std_bad)^p
+    # p=1 → linear penalty (constant gradient)
+    # p=2 → quadratic (gradient ∝ std_norm, recommended)
+
+
+# Default config instance
+RWD = RewardConfig()
 
 
 # ---------------------------------------------------------------------------
@@ -76,14 +114,15 @@ def compute_fitness(
     ft: FourierTrajectory,
     reg: TargetLimbRegressor,
     theta_nominal: np.ndarray,
+    cfg: RewardConfig,
     verbose: bool = True,
 ) -> float:
     """Fitness = -(reward) + penalties.  PSO minimizes, so we negate reward.
 
     Reward composition:
-      - D-optimal (Σ log σ_i) on the identifiable subspace of Y_aug
-      - Soft condition-number penalty (κ > 1000)
-      - Per-parameter variance reward (piecewise scoring by relative std)
+      - D-optimal (Σ log σ_i) on the identifiable subspace of Y_aug (soft threshold)
+      - Soft condition-number penalty  (κ > cfg.cond_threshold)
+      - Per-parameter variance reward  (piecewise scoring by relative std)
     """
     q_traj, v_traj, a_traj = ft.generate_trajectory(coeffs)
     N = len(ft.t_array)
@@ -96,37 +135,37 @@ def compute_fitness(
         result = reg.compute_regressor(q=q_traj[:, t], v=v_traj[:, t], a=a_traj[:, t])
         # New API: 19 return values
         (
-            Y_aug,  # 0  (dof, dof*13) augmented regressor
-            _Y_target_inertial,  # 1
-            _Y_target_armature,  # 2
-            _Y_target_friction,  # 3
-            _tau_aug,  # 4
-            _tau_inertia,  # 5
-            _tau_armature,  # 6
-            _tau_friction,  # 7
-            _pi_aug,  # 8
-            _pi_inertia,  # 9
-            _pi_armature,  # 10
-            _pi_friction,  # 11
-            _q_excess,  # 12
-            _v_excess,  # 13
-            _tau_excess,  # 14
-            q_excess_norm,  # 15
-            v_excess_norm,  # 16
-            tau_excess_norm,  # 17
-            collided,  # 18
+            Y_aug,
+            _Y_target_inertial,
+            _Y_target_armature,
+            _Y_target_friction,
+            _tau_aug,
+            _tau_inertia,
+            _tau_armature,
+            _tau_friction,
+            _pi_aug,
+            _pi_inertia,
+            _pi_armature,
+            _pi_friction,
+            _q_excess,
+            _v_excess,
+            _tau_excess,
+            q_excess_norm,
+            v_excess_norm,
+            tau_excess_norm,
+            collided,
         ) = result
 
         if collided:
             collision_count += 1
-            penalty += W_COLLISION
+            penalty += cfg.w_collision
             continue
         if q_excess_norm:
-            penalty += W_Q_LIMIT * q_excess_norm
+            penalty += cfg.w_q_limit * q_excess_norm
         if tau_excess_norm:
-            penalty += W_TAU_LIMIT * tau_excess_norm
+            penalty += cfg.w_tau_limit * tau_excess_norm
         if v_excess_norm:
-            penalty += W_V_LIMIT * v_excess_norm
+            penalty += cfg.w_v_limit * v_excess_norm
 
         Y_aug_list.append(Y_aug)
 
@@ -144,61 +183,38 @@ def compute_fitness(
     Y_nz = Y_full[:, nonzero_cols]
 
     # Track reward components for diagnostic output
-    r_dopt = 0.0  # D-optimal
-    r_cond = 0.0  # condition-number penalty (≤ 0)
-    r_param = 0.0  # per-parameter variance reward
-    scores = np.array([])  # per-param scores for diagnostics
+    r_dopt = 0.0
+    r_cond = 0.0
+    r_param = 0.0
+    scores = np.array([])
 
     try:
         U, S, Vt = np.linalg.svd(Y_nz, full_matrices=False)
         # --- Soft-threshold D-optimal reward ---
-        # All singular values participate; small σ are "floored" instead of
-        # discarded.  This gives the optimizer continuous gradient to push
-        # borderline σ_i upward — no discrete rank jumps.
-        sigma_floor = 1e-6 * S[0]
-        # Normalised so that σ=sigma_floor → contribution ≈ 0
+        sigma_floor = cfg.sigma_floor_rel * S[0]
         r_dopt = float(np.sum(np.log(S + sigma_floor)))
         r_dopt -= len(S) * np.log(sigma_floor)
 
         # --- Soft condition-number penalty ---
-        # Compute effective rank by the same σ_floor, then penalise κ > 1000
-        # in that subspace.  Still a soft penalty (no hard rejection).
         r_eff = int(np.sum(S > sigma_floor))
         if r_eff >= 2:
             S_eff = S[:r_eff]
             cond = S_eff[0] / S_eff[-1]
-            r_cond = -max(0.0, cond / 1000.0)
+            r_cond = -max(0.0, cond / cfg.cond_threshold)
 
         # --- Per-parameter variance reward ---
-        # Compute each parameter's relative std via SVD: std_i ∝ sqrt([V Σ⁻² Vᵀ]_ii)
-        # Then apply piecewise scoring: reward precise params, penalise noisy ones.
         if r_eff >= 2:
-            # Vt rows correspond to Y_nz columns → map back via nonzero_cols
             V_r = Vt[:r_eff, :].T  # (n_nz, r_eff)
-            weighted = V_r / S_eff[np.newaxis, :]  # V_{ij} / σ_j
-            var_per_param_nz = np.sum(weighted**2, axis=1)  # (n_nz,)
+            weighted = V_r / S_eff[np.newaxis, :]
+            var_per_param_nz = np.sum(weighted**2, axis=1)
             std_raw_nz = np.sqrt(var_per_param_nz + 1e-12)
 
-            # Map nominal parameter values to the non-zero column space
-            theta_nom_nz = theta_nominal[nonzero_cols]  # (n_nz,)
-
-            # Normalised relative standard deviation (dimensionless)
+            theta_nom_nz = theta_nominal[nonzero_cols]
             std_norm = std_raw_nz / (np.abs(theta_nom_nz) + 1e-8)
 
-            # Piecewise scoring per parameter:
-            #   rel_std < 0.1  →  +1.0  (saturated reward)
-            #   0.1 .. 1.0     →  linear transition +1.0 → -0.5
-            #   rel_std > 1.0  →  -0.5 - log(rel_std)  (growing penalty)
-            scores = np.where(
-                std_norm < 0.1,
-                1.0,
-                np.where(
-                    std_norm < 1.0,
-                    1.0 - 1.5 * (std_norm - 0.1) / 0.9,
-                    -0.5 - np.log(std_norm),
-                ),
-            )
-            r_param = W_PARAM_PER * float(np.sum(scores))
+            # Piecewise scoring per parameter
+            scores = _score_param_std(std_norm, cfg)
+            r_param = cfg.w_param_per * float(np.sum(scores))
     except np.linalg.LinAlgError:
         r_dopt = -1e3
 
@@ -215,6 +231,26 @@ def compute_fitness(
             f"coll={collision_count}, total={total:.1f}"
         )
     return total
+
+
+def _score_param_std(std_norm: np.ndarray, cfg: RewardConfig) -> np.ndarray:
+    """Piecewise per-parameter score from normalised relative std.
+
+    std < cfg.std_good            →  +1.0 (saturated)
+    cfg.std_good .. cfg.std_bad   →  linear transition  +1 → -baseline
+    std > cfg.std_bad             →  -baseline · (std/std_bad)^p
+                                     (p=1 linear, p=2 quadratic — larger p = more aggressive)
+    """
+    g, b = cfg.std_good, cfg.std_bad
+    return np.where(
+        std_norm < g,
+        1.0,
+        np.where(
+            std_norm < b,
+            1.0 - cfg.score_slope * (std_norm - g) / (b - g),
+            -cfg.score_baseline * (std_norm / b) ** cfg.std_penalty_power,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -305,9 +341,11 @@ def compute_regressor_diagnostics(
     Y_full: np.ndarray,
     theta_nominal: np.ndarray,
     param_names: list[str],
+    cfg: RewardConfig,
 ) -> dict:
     """Compute comprehensive diagnostics from stacked regressor Y_full.
 
+    Uses the same RewardConfig as compute_fitness for consistent scoring.
     Returns a dict suitable for YAML serialisation.
     """
     # Remove structurally zero columns
@@ -326,15 +364,15 @@ def compute_regressor_diagnostics(
     except np.linalg.LinAlgError:
         return {"error": "SVD failed"}
 
-    sigma_floor = 1e-6 * S[0]
+    sigma_floor = cfg.sigma_floor_rel * S[0]
     r_eff = int(np.sum(S > sigma_floor))
     cond = float(S[0] / S[r_eff - 1]) if r_eff >= 2 else float("inf")
 
-    # D-optimal (soft) — ensure native float
+    # D-optimal (soft)
     r_dopt = float(np.sum(np.log(S + sigma_floor)) - len(S) * np.log(sigma_floor))
 
-    # Condition-number penalty — ensure native float
-    r_cond = float(-max(0.0, cond / 1000.0)) if r_eff >= 2 else 0.0
+    # Condition-number penalty
+    r_cond = float(-max(0.0, cond / cfg.cond_threshold)) if r_eff >= 2 else 0.0
 
     # Per-parameter variance
     param_entries = []
@@ -350,20 +388,18 @@ def compute_regressor_diagnostics(
         theta_nom_nz = theta_nominal[nonzero_cols]
         std_norm = std_raw_nz / (np.abs(theta_nom_nz) + 1e-8)
 
+        # Use shared scoring function
+        scores_nz = _score_param_std(std_norm, cfg)
+
         # Expand to full parameter space (fill NaN for zero columns)
         rel_std_full = np.full(n_total, np.nan)
         score_full = np.full(n_total, np.nan)
         nz_indices = np.where(nonzero_cols)[0]
 
         for j, full_idx in enumerate(nz_indices):
-            rel_std_full[full_idx] = float(std_norm[j])
             sn = float(std_norm[j])
-            if sn < 0.1:
-                sc = 1.0
-            elif sn < 1.0:
-                sc = 1.0 - 1.5 * (sn - 0.1) / 0.9
-            else:
-                sc = -0.5 - np.log(sn)
+            sc = float(scores_nz[j])
+            rel_std_full[full_idx] = sn
             score_full[full_idx] = sc
 
             quality = "good" if sc > 0.5 else ("ok" if sc >= -0.5 else "bad")
@@ -383,13 +419,13 @@ def compute_regressor_diagnostics(
                     "nominal": float(theta_nominal[full_idx])
                     if full_idx < len(theta_nominal)
                     else 0.0,
-                    "rel_std": float(sn),
-                    "score": float(sc),
+                    "rel_std": sn,
+                    "score": sc,
                     "quality": quality,
                 }
             )
 
-        r_param = W_PARAM_PER * float(np.sum(score_full[nz_indices]))
+        r_param = cfg.w_param_per * float(np.sum(scores_nz))
 
     return {
         "reward_breakdown": {
@@ -427,6 +463,7 @@ def _save_yaml(
     max_iter,
     amp_scale,
     best_fitness,
+    cfg: RewardConfig,
     extra_meta=None,
     diagnostics=None,
 ):
@@ -441,7 +478,20 @@ def _save_yaml(
         "iter": max_iter,
         "amp_scale": amp_scale,
         "seed": RANDOM_SEED,
-        "w_param_per": W_PARAM_PER,
+        "reward_config": {
+            "w_q_limit": cfg.w_q_limit,
+            "w_v_limit": cfg.w_v_limit,
+            "w_tau_limit": cfg.w_tau_limit,
+            "w_collision": cfg.w_collision,
+            "sigma_floor_rel": cfg.sigma_floor_rel,
+            "cond_threshold": cfg.cond_threshold,
+            "w_param_per": cfg.w_param_per,
+            "std_good": cfg.std_good,
+            "std_bad": cfg.std_bad,
+            "score_slope": cfg.score_slope,
+            "score_baseline": cfg.score_baseline,
+            "std_penalty_power": cfg.std_penalty_power,
+        },
         "best_fitness": float(best_fitness[0])
         if hasattr(best_fitness, "__iter__")
         else float(best_fitness),
@@ -462,18 +512,22 @@ def _save_yaml(
 
 # ---------------------------------------------------------------------------
 def main():
-    stage = "unified"
-    pop = POP
-    max_iter = MAX_ITER
-    amp_scale = AMP_SCALE
+    cfg = RWD  # use the default RewardConfig; edit RWD above to tune
 
     print(f"\n{'=' * 60}\n  PSO Unified Excitation Optimization\n{'=' * 60}")
-    print(f"  pop={pop}, iter={max_iter}, amp_scale={amp_scale}, seed={RANDOM_SEED}")
+    print(f"  pop={POP}, iter={MAX_ITER}, amp_scale={AMP_SCALE}, seed={RANDOM_SEED}")
+    print(
+        f"  reward cfg: w_q={cfg.w_q_limit}, w_v={cfg.w_v_limit}, "
+        f"w_tau={cfg.w_tau_limit}, w_coll={cfg.w_collision}, "
+        f"σ_floor={cfg.sigma_floor_rel}, cond_thr={cfg.cond_threshold}, "
+        f"w_param={cfg.w_param_per}, "
+        f"std_good/bad={cfg.std_good}/{cfg.std_bad}"
+    )
 
     np.random.seed(RANDOM_SEED)
 
     reg = TargetLimbRegressor(
-        urdf_path=URDF_PATH, group_to_identify="left_arm", print_info=False
+        urdf_path=URDF_PATH, group_to_identify=TARGET_GROUP, print_info=False
     )
     ft = FourierTrajectory(dim=reg.dof, sample_rate=SAMPLE_RATE)
     ft.omega_f = 2.0 * np.pi / TRAJ_PERIOD
@@ -514,7 +568,7 @@ def main():
         f"param_names: {len(param_names)} entries, e.g. {param_names[0]}, ..., {param_names[-1]}"
     )
 
-    lb, ub = build_bounds(ft, reg, amp_scale=amp_scale)
+    lb, ub = build_bounds(ft, reg, amp_scale=AMP_SCALE)
     dim_total = ft.dim * (ft.n_harmonics * 2 + 1)
     print(f"PSO dim={dim_total}")
 
@@ -522,15 +576,15 @@ def main():
     ts = time.time()
 
     def fitness(x):
-        return compute_fitness(x, ft, reg, theta_nominal)
+        return compute_fitness(x, ft, reg, theta_nominal, cfg)
 
     set_run_mode(fitness, "multithreading")
 
     pso = PSO(
         func=fitness,
         dim=dim_total,
-        pop=pop,
-        max_iter=max_iter,
+        pop=POP,
+        max_iter=MAX_ITER,
         w=PSO_W,
         c1=PSO_C1,
         c2=PSO_C2,
@@ -580,7 +634,9 @@ def main():
     diagnostics = {}
     if len(Y_aug_all) > 10:
         Y_full = np.vstack(Y_aug_all)
-        diagnostics = compute_regressor_diagnostics(Y_full, theta_nominal, param_names)
+        diagnostics = compute_regressor_diagnostics(
+            Y_full, theta_nominal, param_names, cfg
+        )
         diagnostics["trajectory_stats"] = traj_stats
 
         # Console summary
@@ -611,10 +667,11 @@ def main():
         ft,
         t_start,
         elapsed,
-        pop,
-        max_iter,
-        amp_scale,
+        POP,
+        MAX_ITER,
+        AMP_SCALE,
         pso.gbest_y,
+        cfg=cfg,
         extra_meta=extra,
         diagnostics=diagnostics,
     )
