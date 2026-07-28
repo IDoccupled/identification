@@ -16,12 +16,12 @@ SAMPLE_RATE = 50.0
 class FourierTrajectory:
     # Directory where all coefficient YAML files are stored
     _coeffs_dir = Path(__file__).resolve().parent / ".." / "trajectory_coefficients"
-
     # Valid identification types and their YAML filename prefix
     VALID_TYPES = {
         "balance": "pso_balance",
         "armature": "pso_armature",
         "friction": "pso_friction",
+        "unified": "pso_unified",
     }
 
     @staticmethod
@@ -29,7 +29,7 @@ class FourierTrajectory:
         """
         Find the latest YAML file for a given identification type.
 
-        :param yaml_type: One of 'balance', 'armature', 'friction'.
+        :param yaml_type: One of 'balance', 'armature', 'friction', 'unified'.
         :return: Filename (not full path) of the latest matching YAML.
         :raises ValueError: If yaml_type is invalid or no matching YAML found.
         """
