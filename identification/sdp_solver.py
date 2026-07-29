@@ -235,6 +235,50 @@ class ParamBounds:
         return lb, ub
 
     # ------------------------------------------------------------------
+    def configure_joint(
+        self,
+        joint_idx: int,
+        prior: np.ndarray,
+        *,
+        freeze: list[int] | None = None,
+        bounds: dict[str, tuple[float, float]] | None = None,
+        widen: dict[str, float] | None = None,
+    ):
+        """
+        Per-joint, per-parameter manual configuration.
+
+        Parameters
+        ----------
+        joint_idx : int
+            Joint index in group_to_identify order (0=most proximal).
+        prior : (13,) ndarray
+            Prior values for this joint.
+        freeze : list[int] or None
+            Indices to freeze at prior, e.g. ``[0,1,2,3]`` freezes mass+mc.
+        bounds : dict[str, (lo, hi)] or None
+            Absolute bounds by name, e.g. ``{"mass": (0.5, 2.0)}``.
+            Names match ``_PARAM_LABELS``: mass, mc_x/y/z, Ixx/Ixy/.../Izz,
+            armature, damping, friction.
+        widen : dict[str, float] or None
+            Widen relative bounds: ``{"mass": 0.8}`` gives ±80%.
+        """
+        name_to_idx = {n.strip(): i for i, n in enumerate(_PARAM_LABELS)}
+        if freeze:
+            self.set_frozen(joint_idx, freeze, prior)
+        if bounds:
+            for name, (lo, hi) in bounds.items():
+                i = name_to_idx[name]
+                self.lb_matrix[joint_idx, i] = lo
+                self.ub_matrix[joint_idx, i] = hi
+        if widen:
+            for name, rel in widen.items():
+                i = name_to_idx[name]
+                p = prior[i]
+                w = abs(p) * rel
+                self.lb_matrix[joint_idx, i] = p - w
+                self.ub_matrix[joint_idx, i] = p + w
+
+    # ------------------------------------------------------------------
     def set_frozen(self, joint_idx: int, param_indices: list[int], prior: np.ndarray):
         """Freeze specific parameters at their prior values."""
         for i in param_indices:
@@ -644,6 +688,15 @@ def main():
         rel_damping=0.3,
         rel_friction=0.3,
     )
+
+    # --- Per-joint manual overrides (example) ---
+    pi_list = split_joint_params(data["pi_prior"])
+    # Freeze mass+mc for joint 0 (most proximal, structurally weak)
+    bounds.configure_joint(0, pi_list[0], freeze=[0, 1, 2, 3])
+    # Widen mass bounds for joint 3
+    bounds.configure_joint(3, pi_list[3], widen={"mass": 0.8})
+    # Set absolute bounds for armature on joint 4
+    bounds.configure_joint(4, pi_list[4], bounds={"armature": (0.01, 0.1)})
 
     # 3. Solve
     solver = SDPSolver(solver_name="MOSEK", verbose=True)
