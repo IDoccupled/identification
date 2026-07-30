@@ -29,7 +29,6 @@ VALID_LIMB_GROUPS = {
 }
 
 DEFAULT_GROUP_TO_IDENTIFY = "left_arm"
-REPEAT_TRAJ = 1
 SOFT_START_DURATION = 3.0  # seconds
 
 CONTROL_FREQUENCY = 500.0
@@ -131,7 +130,6 @@ class FourierTrajectoryNode(Node):
             dim=self.dim, sample_rate=CONTROL_FREQUENCY
         ).generate_trajectory_from_yaml(yaml_name)
         self.total_samples = self.q_traj.shape[1]
-        self.sample_per_traj = self.total_samples // REPEAT_TRAJ
 
         # Control loop state variables
         self.start_time = None
@@ -254,9 +252,9 @@ def main(argv=None):
     parser.add_argument(
         "--type",
         type=str,
-        default=None,
+        default="unified",
         choices=list(FourierTrajectory.VALID_TYPES.keys()),
-        help="Identification type: balance, armature, or friction "
+        help="Identification type: balance, armature, friction, or unified "
         "(auto-resolves the latest matching YAML).",
     )
     parser.add_argument(
