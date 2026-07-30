@@ -288,6 +288,93 @@ class ParamBounds:
     def is_frozen(self, joint_idx: int, i: int) -> bool:
         return np.isclose(self.lb_matrix[joint_idx, i], self.ub_matrix[joint_idx, i])
 
+    # ------------------------------------------------------------------
+    def apply_from_global_indices(
+        self,
+        pi_prior: np.ndarray,  # (dof*13,)
+        freeze_global: list[int] | None = None,
+        widen_global: dict[int, float] | None = None,
+        bounds_global: dict[int, tuple[float, float]] | None = None,
+    ):
+        """
+        Apply freeze/widen/bounds using **global** YAML parameter indices.
+
+        Parameters
+        ----------
+        pi_prior : (dof*13,) ndarray
+        freeze_global : list[int] or None
+            Global indices to freeze at prior, e.g. ``[0, 4, 5, 7]``.
+        widen_global : dict[int, float] or None
+            ``{global_idx: rel_width}``, e.g. ``{3: 1.0}`` gives ±100%.
+        bounds_global : dict[int, (lo, hi)] or None
+            ``{global_idx: (lo, hi)}`` for absolute bounds.
+        """
+        pi_list = split_joint_params(pi_prior)
+        if freeze_global:
+            for g in freeze_global:
+                j, i = global_to_local(g)
+                self.set_frozen(j, [i], pi_list[j])
+        if widen_global:
+            for g, rel in widen_global.items():
+                j, i = global_to_local(g)
+                p = pi_list[j][i]
+                w = abs(p) * rel
+                self.lb_matrix[j, i] = p - w
+                self.ub_matrix[j, i] = p + w
+        if bounds_global:
+            for g, (lo, hi) in bounds_global.items():
+                j, i = global_to_local(g)
+                self.lb_matrix[j, i] = lo
+                self.ub_matrix[j, i] = hi
+
+    # ------------------------------------------------------------------
+    def apply_yaml_quality(
+        self,
+        yaml_path: str | Path,
+        pi_prior: np.ndarray,
+        *,
+        overrides: dict[str, dict] | None = None,
+    ):
+        """
+        Apply freeze/widen based on YAML ``_diagnostics.per_param`` quality labels.
+
+        Default strategy (customisable via ``overrides``):
+
+        ===============  ======  =====
+        quality           freeze  widen
+        ===============  ======  =====
+        null              yes     0
+        rank_deficient    yes     0
+        small             yes     0
+        bad               no      0.05
+        ok                no      0.1
+        good              no      0.3
+        ===============  ======  =====
+
+        Parameters
+        ----------
+        yaml_path : str or Path
+        pi_prior : (dof*13,) ndarray
+        overrides : dict or None
+            e.g. ``{"rank_deficient": {"freeze": False, "widen": 0.5}}``.
+        """
+        quality_map = load_yaml_param_quality(yaml_path)
+        pi_list = split_joint_params(pi_prior)
+
+        for g, quality in quality_map.items():
+            j, i = global_to_local(g)
+            strategy = dict(_quality_defaults(quality))
+            if overrides and quality in overrides:
+                strategy.update(overrides[quality])
+            prior_val = pi_list[j][i]
+
+            if strategy["freeze"]:
+                self.set_frozen(j, [i], pi_list[j])
+            elif strategy["widen"] > 0:
+                w = abs(prior_val) * strategy["widen"]
+                self.lb_matrix[j, i] = prior_val - w
+                self.ub_matrix[j, i] = prior_val + w
+
 
 # ============================================================================
 # Identifiability analysis
@@ -567,7 +654,7 @@ def prepare_data_from_urdf(
     urdf_path: str | Path,
     yaml_filename: str,
     limb_group: str = "left_arm",
-    sample_rate: float = 50.0,
+    sample_rate: float = 200.0,
     verbose: bool = True,
 ) -> dict:
     """
@@ -662,6 +749,44 @@ def prepare_data_from_urdf(
 
 
 # ============================================================================
+# YAML parameter-quality helpers
+# ============================================================================
+def load_yaml_param_quality(yaml_path: str | Path) -> dict[int, str]:
+    """
+    Parse the ``_diagnostics.per_param`` section of a PSO YAML file.
+
+    Returns a dict mapping **global** parameter index (0..dof*13-1) to
+    quality label: ``'null'``, ``'rank_deficient'``, ``'small'``,
+    ``'bad'``, ``'ok'``, ``'good'``.
+
+    Global index → local:  ``joint = g // 13``,  ``param = g % 13``.
+    """
+    import yaml
+
+    with open(yaml_path, "r") as f:
+        data = yaml.safe_load(f)
+    per_param = data.get("_diagnostics", {}).get("per_param", [])
+    return {entry["idx"]: entry["quality"] for entry in per_param}
+
+
+def global_to_local(global_idx: int) -> tuple[int, int]:
+    """Convert global YAML param index → (joint_idx, param_idx)."""
+    return global_idx // N_PER_JOINT, global_idx % N_PER_JOINT
+
+
+def _quality_defaults(quality: str) -> dict:
+    """Default freeze/widen strategy per YAML quality label."""
+    return {
+        "null": {"freeze": True, "widen": 0.0},
+        "rank_deficient": {"freeze": True, "widen": 0.0},
+        "small": {"freeze": True, "widen": 0.0},
+        "bad": {"freeze": False, "widen": 0.05},
+        "ok": {"freeze": False, "widen": 0.1},
+        "good": {"freeze": False, "widen": 0.3},
+    }.get(quality, {"freeze": False, "widen": 0.0})
+
+
+# ============================================================================
 # main / demo
 # ============================================================================
 def main():
@@ -675,6 +800,7 @@ def main():
         urdf_path=URDF_PATH,
         yaml_filename=latest_yaml,
         limb_group="left_arm",
+        sample_rate=100.0,
     )
 
     # 2. Configure bounds
@@ -689,14 +815,17 @@ def main():
         rel_friction=0.3,
     )
 
-    # --- Per-joint manual overrides (example) ---
-    pi_list = split_joint_params(data["pi_prior"])
-    # Freeze mass+mc for joint 0 (most proximal, structurally weak)
-    bounds.configure_joint(0, pi_list[0], freeze=[0, 1, 2, 3])
-    # Widen mass bounds for joint 3
-    bounds.configure_joint(3, pi_list[3], widen={"mass": 0.8})
-    # Set absolute bounds for armature on joint 4
-    bounds.configure_joint(4, pi_list[4], bounds={"armature": (0.01, 0.1)})
+    # --- Option A: manually freeze/widen by global YAML indices ---
+    # null params (idx 0,4,5,7) → freeze; bad params (idx 3,12) → widen
+    # bounds.apply_from_global_indices(
+    #     pi_prior=data["pi_prior"],
+    #     freeze_global=[0, 4, 5, 7],
+    #     widen_global={3: 0.05, 12: 0.05},
+    # )
+
+    # --- Option B (alternative): auto-apply from YAML quality labels ---
+    yaml_path = FourierTrajectory._coeffs_dir / latest_yaml
+    bounds.apply_yaml_quality(yaml_path, data["pi_prior"])
 
     # 3. Solve
     solver = SDPSolver(solver_name="MOSEK", verbose=True)
