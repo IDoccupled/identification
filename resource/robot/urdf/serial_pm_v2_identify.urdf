@@ -616,27 +616,6 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <dynamics armature="0.039175" damping="0.08" frictionloss="0.30"/>
     </joint>
 
-    <link name="LINK_ELBOW_END_L">
-        <inertial>
-            <mass value="1e-3"/>
-            <inertia ixx="1e-12" ixy="0" ixz="0" iyy="1e-12" iyz="0" izz="1e-12"/>
-        </inertial>
-        <visual>
-            <origin xyz="0 0 0" rpy="0 0 0"/>
-            <geometry>
-                <sphere radius="0.05"/>
-            </geometry>
-            <material name="">
-                <color rgba="0.75294 0.75294 0.75294 0.3"/>
-            </material>
-        </visual>
-    </link>
-    <joint name="J_FIXED_ELBOW_END_L" type="fixed">
-        <origin xyz="0.03 -0.02 -0.14" rpy="0 0 0"/>
-        <parent link="LINK_ELBOW_YAW_L"/>
-        <child link="LINK_ELBOW_END_L"/>
-    </joint>
-
     <link name="LINK_SHOULDER_PITCH_R">
         <inertial>
             <origin xyz="-0.00682535 -0.05628532 -0.01567159" rpy="0 0 0"/>
@@ -786,27 +765,6 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <axis xyz="-0.21479 0.061909 0.9747"/>
         <limit lower="-2.618" upper="2.618" effort="61" velocity="35.2"/>
         <dynamics damping="0.08" friction="0.30"/>
-    </joint>
-
-    <link name="LINK_ELBOW_END_R">
-        <inertial>
-            <mass value="1e-3"/>
-            <inertia ixx="1e-12" ixy="0" ixz="0" iyy="1e-12" iyz="0" izz="1e-12"/>
-        </inertial>
-        <visual>
-            <origin xyz="0 0 0" rpy="0 0 0"/>
-            <geometry>
-                <sphere radius="0.05"/>
-            </geometry>
-            <material name="">
-                <color rgba="0.75294 0.75294 0.75294 0.3"/>
-            </material>
-        </visual>
-    </link>
-    <joint name="J_FIXED_ELBOW_END_R" type="fixed">
-        <origin xyz="0.03 0.02 -0.14" rpy="0 0 0"/>
-        <parent link="LINK_ELBOW_YAW_R"/>
-        <child link="LINK_ELBOW_END_R"/>
     </joint>
 
     <link name="LINK_HEAD_YAW">
