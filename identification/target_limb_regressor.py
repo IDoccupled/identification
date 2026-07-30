@@ -572,12 +572,26 @@ class TargetLimbRegressor:
 
         if parameters:
             print(
-                "\033[93mOriginal inertial parameters from URDF\033[0m".center(80, "-")
+                "\033[93mAugmented parameters (inertial + armature + friction)\033[0m".center(
+                    80, "-"
+                )
             )
-            for i in range(self.Y_target_inertial.shape[0]):
+            dof = len(self.group_to_identify)
+            for i in range(dof):
+                # pi_aug = [pi_inertia (10*dof) | pi_armature (dof) | pi_friction (2*dof)]
+                # Build per-joint block: 10 inertial + 1 armature + 2 friction
+                block = np.hstack(
+                    [
+                        self.pi_inertia[i * 10 : (i + 1) * 10],
+                        [self.pi_armature[i]],
+                        self.pi_friction[i * 2 : (i + 1) * 2],
+                    ]
+                )
                 print(
                     f"Joint {self.target_joint_infos[i]['joint_id']} ({self.target_joint_infos[i]['name']}): \n"
-                    f"{self._fmt_array_lines(self.pi_aug[i * 13 : (i + 1) * 13], per_line=13)} \n"
+                    f"  inertial (10): {self._fmt_array_lines(block[:10], per_line=10)}\n"
+                    f"  armature:      {block[10]:.6g}\n"
+                    f"  friction:      {self._fmt_array_lines(block[11:], per_line=2)} \n"
                 )
 
         if inertial:
