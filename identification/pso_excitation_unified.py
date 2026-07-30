@@ -54,13 +54,13 @@ SAMPLE_RATE = 50.0  # [Hz] trajectory sample rate (coarse for PSO speed)
 # ============================================================================
 #  PSO hyper-parameters
 # ============================================================================
-POP = 500
-MAX_ITER = 50
+POP = 2000
+MAX_ITER = 300
 AMP_SCALE = 2.0  # Fourier coefficient amplitude scale
 PSO_W = 0.7  # inertia weight
 PSO_C1 = 1.5  # cognitive acceleration
 PSO_C2 = 1.5  # social acceleration
-RANDOM_SEED = 67
+RANDOM_SEED = 29
 
 # ============================================================================
 #  Constraint margins
@@ -99,6 +99,12 @@ class RewardConfig:
     std_bad: float = 1.0  # rel_std above this → polynomial penalty
     abs_std_good: float = (
         0.01  # abs_std below this → always "good" (regardless of rel_std)
+    )
+    nominal_small: float = (
+        1e-4  # |nominal| < this → quality "small" (negligible dynamics impact)
+    )
+    nullspace_threshold: float = (
+        0.5  # nullspace weight > this → quality "rank_deficient"
     )
     score_slope: float = 1.5  # linear slope in transition zone [std_good, std_bad]
     score_baseline: float = 0.5  # penalty magnitude at std_norm = std_bad
@@ -360,14 +366,19 @@ def compute_regressor_diagnostics(
 ) -> dict:
     """Compute comprehensive diagnostics from stacked regressor Y_full.
 
-    Uses the same RewardConfig as compute_fitness for consistent scoring.
-    Returns a dict suitable for YAML serialisation.
+    All 65 parameters are recorded, with quality categories:
+      - "null"            — structurally zero column (constant zero across all rows)
+      - "rank_deficient"  — significant nullspace component (linear dependency)
+      - "small"           — |nominal| < cfg.nominal_small (negligible dynamics impact)
+      - "good" / "ok" / "bad"  — standard scoring from _score_param_std
+
+    Priority: null > rank_deficient > small > good/ok/bad
     """
-    # Remove structurally zero columns
+    n_total = Y_full.shape[1]
     col_max = np.abs(Y_full).max(axis=0)
     nonzero_cols = col_max > 1e-12
-    n_total = Y_full.shape[1]
     n_nz = int(nonzero_cols.sum())
+    nz_indices = np.where(nonzero_cols)[0]
 
     if n_nz == 0:
         return {"error": "All columns are structurally zero"}
@@ -389,10 +400,23 @@ def compute_regressor_diagnostics(
     # Condition-number penalty
     r_cond = float(-max(0.0, cond / cfg.cond_threshold)) if r_eff >= 2 else 0.0
 
-    # Per-parameter variance
+    # ---- Per-parameter variance & nullspace analysis ----
     param_entries = []
+    quality_summary: dict[str, list] = {
+        "null": [],
+        "rank_deficient": [],
+        "small": [],
+        "good": [],
+        "ok": [],
+        "bad": [],
+    }
     r_param = 0.0
-    n_good = n_ok = n_bad = 0
+
+    # Compute per-param std for nonzero columns
+    std_raw_nz = np.full(n_nz, np.nan)
+    std_norm_nz = np.full(n_nz, np.nan)
+    scores_nz = np.zeros(n_nz)
+    nullspace_weight = np.zeros(n_nz)
 
     if r_eff >= 2:
         S_eff = S[:r_eff]
@@ -401,47 +425,85 @@ def compute_regressor_diagnostics(
         var_nz = np.sum(weighted**2, axis=1)
         std_raw_nz = np.sqrt(var_nz + 1e-12)
         theta_nom_nz = theta_nominal[nonzero_cols]
-        std_norm = std_raw_nz / (np.abs(theta_nom_nz) + 1e-8)
+        std_norm_nz = std_raw_nz / (np.abs(theta_nom_nz) + 1e-8)
 
-        # Use shared scoring function (dual threshold: relative + absolute)
-        scores_nz = _score_param_std(std_norm, std_raw_nz, cfg)
+        scores_nz = _score_param_std(std_norm_nz, std_raw_nz, cfg)
+        r_param = cfg.w_param_per * float(np.sum(scores_nz))
 
-        # Expand to full parameter space (fill NaN for zero columns)
-        rel_std_full = np.full(n_total, np.nan)
-        score_full = np.full(n_total, np.nan)
-        nz_indices = np.where(nonzero_cols)[0]
+    # Nullspace analysis: columns with strong projection onto nullspace are rank-deficient
+    if r_eff < n_nz:
+        null_V = Vt[r_eff:, :].T  # (n_nz, n_nz - r_eff)
+        nullspace_weight = np.sum(null_V**2, axis=1)  # ∈ [0, 1]
 
-        for j, full_idx in enumerate(nz_indices):
-            sn = float(std_norm[j])
-            sc = float(scores_nz[j])
-            rel_std_full[full_idx] = sn
-            score_full[full_idx] = sc
+    # ---- Build per-param entries for ALL 65 columns ----
+    nz_idx_map = {int(idx): j for j, idx in enumerate(nz_indices)}
 
-            quality = "good" if sc > 0.5 else ("ok" if sc >= -0.5 else "bad")
-            if quality == "good":
-                n_good += 1
-            elif quality == "ok":
-                n_ok += 1
-            else:
-                n_bad += 1
+    for full_idx in range(n_total):
+        name = (
+            param_names[full_idx]
+            if full_idx < len(param_names)
+            else f"param_{full_idx}"
+        )
+        nominal = (
+            float(theta_nominal[full_idx]) if full_idx < len(theta_nominal) else 0.0
+        )
 
+        # --- Structurally zero column ---
+        if full_idx not in nz_idx_map:
+            quality_summary["null"].append(int(full_idx))
             param_entries.append(
                 {
                     "idx": int(full_idx),
-                    "name": param_names[full_idx]
-                    if full_idx < len(param_names)
-                    else f"param_{full_idx}",
-                    "nominal": float(theta_nominal[full_idx])
-                    if full_idx < len(theta_nominal)
-                    else 0.0,
-                    "abs_std": float(std_raw_nz[j]),
-                    "rel_std": sn,
-                    "score": sc,
-                    "quality": quality,
+                    "name": name,
+                    "quality": "null",
                 }
             )
+            continue
 
-        r_param = cfg.w_param_per * float(np.sum(scores_nz))
+        j = nz_idx_map[full_idx]
+        sn = float(std_norm_nz[j])
+        sc = float(scores_nz[j])
+        as_ = float(std_raw_nz[j])
+        nw = float(nullspace_weight[j])
+
+        # --- Determine quality (priority order) ---
+        if nw > cfg.nullspace_threshold:
+            quality = "rank_deficient"
+        elif abs(nominal) < cfg.nominal_small:
+            quality = "small"
+        elif sc > 0.5:
+            quality = "good"
+        elif sc >= -0.5:
+            quality = "ok"
+        else:
+            quality = "bad"
+
+        quality_summary[quality].append(int(full_idx))
+
+        param_entries.append(
+            {
+                "idx": int(full_idx),
+                "name": name,
+                "nominal": nominal,
+                "abs_std": as_,
+                "rel_std": sn,
+                "nullspace_weight": nw,
+                "score": sc,
+                "quality": quality,
+            }
+        )
+
+    # Build quality_summary with names for readability
+    quality_summary_named = {}
+    for q, idx_list in quality_summary.items():
+        quality_summary_named[q] = {
+            "count": len(idx_list),
+            "indices": idx_list,
+            "names": [
+                param_names[i] if i < len(param_names) else f"param_{i}"
+                for i in idx_list
+            ],
+        }
 
     return {
         "reward_breakdown": {
@@ -454,17 +516,14 @@ def compute_regressor_diagnostics(
             "total_cols": int(n_total),
             "nonzero_cols": int(n_nz),
             "eff_rank": int(r_eff),
+            "nullspace_dim": int(n_nz - r_eff) if r_eff < n_nz else 0,
             "cond": float(round(cond, 1)),
             "sigma_floor": float(sigma_floor),
             "singular_values": [
                 float(round(float(s), 3)) for s in S[: min(r_eff + 5, len(S))]
             ],
         },
-        "param_quality": {
-            "n_good": n_good,
-            "n_ok": n_ok,
-            "n_bad": n_bad,
-        },
+        "quality_summary": quality_summary_named,
         "per_param": param_entries,
     }
 
@@ -505,6 +564,8 @@ def _save_yaml(
             "std_good": cfg.std_good,
             "std_bad": cfg.std_bad,
             "abs_std_good": cfg.abs_std_good,
+            "nominal_small": cfg.nominal_small,
+            "nullspace_threshold": cfg.nullspace_threshold,
             "score_slope": cfg.score_slope,
             "score_baseline": cfg.score_baseline,
             "std_penalty_power": cfg.std_penalty_power,
@@ -538,7 +599,8 @@ def main():
         f"w_tau={cfg.w_tau_limit}, w_coll={cfg.w_collision}, "
         f"σ_floor={cfg.sigma_floor_rel}, cond_thr={cfg.cond_threshold}, "
         f"w_param={cfg.w_param_per}, "
-        f"std_good/bad/abs={cfg.std_good}/{cfg.std_bad}/{cfg.abs_std_good}"
+        f"std_g/b/a={cfg.std_good}/{cfg.std_bad}/{cfg.abs_std_good}, "
+        f"nom_small={cfg.nominal_small}"
     )
 
     np.random.seed(RANDOM_SEED)
@@ -659,13 +721,20 @@ def main():
         # Console summary
         rd = diagnostics.get("reward_breakdown", {})
         rg = diagnostics.get("regression", {})
-        pq = diagnostics.get("param_quality", {})
+        qs = diagnostics.get("quality_summary", {})
+        counts = {k: v["count"] for k, v in qs.items()}
         print(
             f"  d_opt={rd.get('d_opt', '?')}, cond_pen={rd.get('cond_penalty', '?')}, "
             f"param={rd.get('param_reward', '?')}, "
-            f"rank={rg.get('eff_rank', '?')}/{rg.get('nonzero_cols', '?')}, "
+            f"rank={rg.get('eff_rank', '?')}/{rg.get('nonzero_cols', '?')} "
+            f"(nullspace={rg.get('nullspace_dim', '?')}), "
             f"κ={rg.get('cond', '?')}, "
-            f"good/ok/bad={pq.get('n_good', '?')}/{pq.get('n_ok', '?')}/{pq.get('n_bad', '?')}"
+            f"null={counts.get('null', 0)} "
+            f"rank_def={counts.get('rank_deficient', 0)} "
+            f"small={counts.get('small', 0)} "
+            f"good={counts.get('good', 0)} "
+            f"ok={counts.get('ok', 0)} "
+            f"bad={counts.get('bad', 0)}"
         )
         print(
             f"  Collisions: {traj_stats['collisions']}, "
