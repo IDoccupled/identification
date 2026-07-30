@@ -41,7 +41,7 @@ import numpy as np
 # Constants — per-joint parameter layout (13 scalars)
 # ============================================================================
 # Pinocchio Inertia::toDynamicParameters() ordering:
-#   [m,  mc_x,  mc_y,  mc_z,   Ixx, Ixy, Ixz, Iyy, Iyz, Izz,  arm, damp, fric]
+#   [m,  mc_x,  mc_y,  mc_z,   Ixx, Ixy, Iyy, Ixz, Iyz, Izz,  arm, damp, fric]
 #    0     1      2      3      4    5    6    7    8    9     10    11    12
 N_PER_JOINT = 13
 
@@ -52,14 +52,23 @@ _PARAM_LABELS = [
     "mc_z",
     "Ixx",
     "Ixy",
-    "Ixz",
     "Iyy",
+    "Ixz",
     "Iyz",
     "Izz",
     "armature",
     "damping",
     "friction",
 ]
+
+BOUNDRY_PARAMS = {
+    "null": {"freeze": True, "widen": 0.0},
+    "rank_deficient": {"freeze": False, "widen": 0.1},
+    "small": {"freeze": True, "widen": 0.0},
+    "bad": {"freeze": False, "widen": 0.1},
+    "ok": {"freeze": False, "widen": 0.3},
+    "good": {"freeze": False, "widen": 0.5},
+}
 
 
 # ============================================================================
@@ -77,19 +86,12 @@ def join_joint_params(pi_list: list[np.ndarray]) -> np.ndarray:
 
 
 # ============================================================================
-# Physical-consistency LMI (Section 4, eq.22 of Jung et al. 2018)
+# Physical-consistency LMI  — 6×6 pseudo-inertia (Jung et al. eq.22)
 # ============================================================================
 def _skew3(v) -> cp.Expression:
-    """3×3 skew-symmetric matrix."""
     if isinstance(v, np.ndarray):
         v = cp.Constant(v)
-    return cp.bmat(
-        [
-            [0, -v[2], v[1]],
-            [v[2], 0, -v[0]],
-            [-v[1], v[0], 0],
-        ]
-    )
+    return cp.bmat([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
 
 
 def build_pseudo_inertia_LMI(
@@ -97,40 +99,26 @@ def build_pseudo_inertia_LMI(
     mc: cp.Variable,
     I_vec: cp.Variable,
 ) -> cp.Expression:
-    """
-    6×6 pseudo-inertia matrix  [I, S(mc); S(mc)ᵀ, m·I₃] ≽ 0.
-
-    Pinocchio stores rotational inertia about the JOINT FRAME (I_frame),
-    not about COM.  The 6×6 LMI with I_frame is the standard physical
-    consistency condition — its Schur complement gives I_com ≻ 0.
-
-    Pinocchio ordering: I_vec = [Ixx, Ixy, Ixz, Iyy, Iyz, Izz].
-    """
+    """6×6  [I, S(mc); S(mc)ᵀ, m·I₃] ≽ 0.  Pinocchio ordering."""
     I_mat = cp.bmat(
         [
-            [I_vec[0], I_vec[1], I_vec[2]],  # Ixx Ixy Ixz
-            [I_vec[1], I_vec[3], I_vec[4]],  # Ixy Iyy Iyz
-            [I_vec[2], I_vec[4], I_vec[5]],  # Ixz Iyz Izz
+            [I_vec[0], I_vec[1], I_vec[3]],  # Ixx Ixy Ixz
+            [I_vec[1], I_vec[2], I_vec[4]],  # Ixy Iyy Iyz
+            [I_vec[3], I_vec[4], I_vec[5]],  # Ixz Iyz Izz
         ]
     )
     S = _skew3(mc)
-    return cp.bmat(
-        [
-            [I_mat, S],
-            [S.T, m * np.eye(3)],
-        ]
-    )
+    return cp.bmat([[I_mat, S], [S.T, m * np.eye(3)]])
 
 
 def check_lmi_feasibility(pi: np.ndarray) -> tuple[bool, float, np.ndarray]:
-    """Check 6×6 pseudo-inertia LMI.  Returns (ok, min_eig, J)."""
     m_val, mc_val = pi[0], pi[1:4]
     I_vals = pi[4:10]
     I_mat = np.array(
         [
-            [I_vals[0], I_vals[1], I_vals[2]],
-            [I_vals[1], I_vals[3], I_vals[4]],
-            [I_vals[2], I_vals[4], I_vals[5]],
+            [I_vals[0], I_vals[1], I_vals[3]],
+            [I_vals[1], I_vals[2], I_vals[4]],
+            [I_vals[3], I_vals[4], I_vals[5]],
         ]
     )
     S = np.array(
@@ -168,7 +156,7 @@ class ParamBounds:
     enforce_nonneg_friction: bool = True
 
     # Pseudo-inertia LMI relaxation:  J + eps·I₆ ≽ 0  (numerical tolerance)
-    lmi_eps: float = 1e-2
+    inertia_eps: float = 1e-2
 
     # ------------------------------------------------------------------
     @classmethod
@@ -206,7 +194,7 @@ class ParamBounds:
                     rel_mc
                     if i <= 3
                     else rel_inertia_diag
-                    if i in (4, 7, 9)
+                    if i in (4, 6, 9)  # Ixx, Iyy, Izz in Pinocchio order
                     else rel_inertia_offdiag
                 )
                 lb[j, i] = p[i] - w
@@ -310,20 +298,21 @@ class ParamBounds:
             ``{global_idx: (lo, hi)}`` for absolute bounds.
         """
         pi_list = split_joint_params(pi_prior)
+        dof = len(pi_prior) // N_PER_JOINT
         if freeze_global:
             for g in freeze_global:
-                j, i = global_to_local(g)
+                j, i = _yaml_global_to_local(g, dof)
                 self.set_frozen(j, [i], pi_list[j])
         if widen_global:
             for g, rel in widen_global.items():
-                j, i = global_to_local(g)
+                j, i = _yaml_global_to_local(g, dof)
                 p = pi_list[j][i]
                 w = abs(p) * rel
                 self.lb_matrix[j, i] = p - w
                 self.ub_matrix[j, i] = p + w
         if bounds_global:
             for g, (lo, hi) in bounds_global.items():
-                j, i = global_to_local(g)
+                j, i = _yaml_global_to_local(g, dof)
                 self.lb_matrix[j, i] = lo
                 self.ub_matrix[j, i] = hi
 
@@ -359,10 +348,15 @@ class ParamBounds:
             e.g. ``{"rank_deficient": {"freeze": False, "widen": 0.5}}``.
         """
         quality_map = load_yaml_param_quality(yaml_path)
+        if not quality_map:
+            print(f"  ⚠ apply_yaml_quality: NO quality data found in {yaml_path}")
+            return
         pi_list = split_joint_params(pi_prior)
+        frozen_count = 0
+        widen_count = 0
 
         for g, quality in quality_map.items():
-            j, i = global_to_local(g)
+            j, i = g // N_PER_JOINT, g % N_PER_JOINT
             strategy = dict(_quality_defaults(quality))
             if overrides and quality in overrides:
                 strategy.update(overrides[quality])
@@ -370,10 +364,17 @@ class ParamBounds:
 
             if strategy["freeze"]:
                 self.set_frozen(j, [i], pi_list[j])
+                frozen_count += 1
             elif strategy["widen"] > 0:
                 w = abs(prior_val) * strategy["widen"]
                 self.lb_matrix[j, i] = prior_val - w
                 self.ub_matrix[j, i] = prior_val + w
+                widen_count += 1
+
+        print(
+            f"  apply_yaml_quality: {len(quality_map)} params loaded, "
+            f"{frozen_count} frozen, {widen_count} widened"
+        )
 
 
 # ============================================================================
@@ -504,10 +505,23 @@ class SDPSolver:
                         print(f"  Joint {d} ({name}): auto-freeze {frozen}")
 
             if self.verbose:
+                # --- Data consistency + freeze status ---
+                fit_prior = Y_blk @ prior
+                resid_prior = np.linalg.norm(fit_prior - tau_comp)
+                frozen_names = [
+                    _PARAM_LABELS[i]
+                    for i in range(N_PER_JOINT)
+                    if bounds.is_frozen(d, i)
+                ]
                 print(
                     f"  Joint {d} ({name}): Y_blk=({Y_blk.shape}), "
-                    f"‖τ_res‖={np.linalg.norm(tau_comp):.4f}"
+                    f"‖τ_res‖={np.linalg.norm(tau_comp):.4f}, "
+                    f"‖Y·prior−τ‖={resid_prior:.4e}"
                 )
+                if frozen_names:
+                    print(f"    frozen: {frozen_names}")
+                else:
+                    print(f"    frozen: (none)")
 
             pi_opt, dt, obj = self._identify_one(d, Y_blk, tau_comp, prior, bounds)
             pi_identified[cs:ce] = pi_opt
@@ -538,16 +552,24 @@ class SDPSolver:
         """Single-joint SOCP.  Returns (pi_opt, solve_time, objective)."""
         lb, ub = bounds.get_bounds_for_joint(joint_idx)
 
-        # Diagnostic
-        lmi_ok, eig_min, J_prior = check_lmi_feasibility(prior)
-        if not lmi_ok and self.verbose:
-            print(f"    ⚠ prior LMI NOT satisfied (min eig={eig_min:.4e})")
-            print(f"       m={prior[0]:.6g}  mc={prior[1:4]}")
-            print("       I_frame =")
-            for row in J_prior[:3, :3]:
-                print(f"         [{row[0]:>12.6g}, {row[1]:>12.6g}, {row[2]:>12.6g}]")
-            eigs = np.linalg.eigvalsh(J_prior)
-            print(f"       6×6 eigenvalues = {eigs}")
+        # Pre-solve diagnostics
+        fit_prior = Y_blk @ prior
+        resid_prior = np.linalg.norm(fit_prior - tau_res)
+        lmi_ok, eig_min, _ = check_lmi_feasibility(prior)
+        in_bounds = np.all((prior >= lb) & (prior <= ub))
+
+        if self.verbose:
+            if not lmi_ok:
+                print(f"    ⚠ prior LMI FAIL (min eig={eig_min:.4e})")
+            if not in_bounds:
+                viol = np.where((prior < lb) | (prior > ub))[0]
+                print(f"    ⚠ prior OUT OF BOUNDS at indices {list(viol)}")
+                for i in viol:
+                    print(
+                        f"       {_PARAM_LABELS[i]}: prior={prior[i]:.6g}  bounds=[{lb[i]:.6g}, {ub[i]:.6g}]"
+                    )
+            if lmi_ok and in_bounds:
+                print(f"    ✓ prior feasible (LMI OK, in bounds)")
 
         # Variables
         pi = cp.Variable(N_PER_JOINT)
@@ -557,9 +579,9 @@ class SDPSolver:
         cstr: list = []
         cstr.append(cp.SOC(lam, Y_blk @ pi - tau_res))
 
-        # Physical consistency: 6×6 pseudo-inertia LMI (Jung et al. eq.22)
+        # Physical consistency: 6×6 pseudo-inertia LMI ≽ 0
         J = build_pseudo_inertia_LMI(pi[0], pi[1:4], pi[4:10])
-        cstr.append(J + bounds.lmi_eps * np.eye(6) >> 0)
+        cstr.append(J + bounds.inertia_eps * np.eye(6) >> 0)
 
         for i in range(N_PER_JOINT):
             if bounds.is_frozen(joint_idx, i):
@@ -585,8 +607,7 @@ class SDPSolver:
             msg = f"SDP infeasible for joint {joint_idx} (status={problem.status})."
             if self.verbose:
                 msg += (
-                    f"\n    COM inertia prior: "
-                    f"{'OK' if lmi_ok else f'FAIL (min eig={eig_min:.4e})'}"
+                    f"\n    inertia prior: {'OK' if lmi_ok else f'FAIL (min eig={eig_min:.4e})'}"
                     f"\n    Try: wider bounds, or freeze more params."
                 )
             raise RuntimeError(msg)
@@ -601,15 +622,16 @@ class SDPSolver:
         result: IdentificationResult,
         joint_names: list[str] | None = None,
         pi_reference: np.ndarray | None = None,
+        quality_map: dict[int, str] | None = None,
     ):
         """Pretty-print identification results joint by joint."""
         if pi_reference is None:
             pi_reference = result.pi_reference
         has_ref = pi_reference is not None
 
-        print("\n" + "=" * 90)
-        print("IDENTIFICATION RESULTS".center(90))
-        print("=" * 90)
+        print("\n" + "=" * 100)
+        print("IDENTIFICATION RESULTS".center(100))
+        print("=" * 100)
 
         pi_id = split_joint_params(result.pi_identified)
         pi_prior = split_joint_params(result.pi_prior)
@@ -618,29 +640,34 @@ class SDPSolver:
         for d in result.joint_order:
             name = joint_names[d] if joint_names else f"joint_{d}"
             print(f"\n--- Joint {d}: {name} ---")
-            if has_ref:
-                hdr = (
-                    f"{'Param':<10s} {'Prior':>12s} {'Identified':>12s} "
-                    f"{'Ref':>12s} {'Err%':>9s}"
-                )
-            else:
-                hdr = f"{'Param':<10s} {'Prior':>12s} {'Identified':>12s}"
+            hdr = (
+                f"{'Param':<10s} {'Prior':>12s} {'Identified':>12s} "
+                f"{'True':>12s} {'Err%':>8s} {'Δ%':>8s} {'Quality':>10s}"
+                if has_ref
+                else f"{'Param':<10s} {'Prior':>12s} {'Identified':>12s} {'Δ%':>8s} {'Quality':>10s}"
+            )
             print(hdr)
             print("-" * len(hdr))
 
             for i in range(N_PER_JOINT):
                 pr = pi_prior[d][i]
                 ident = pi_id[d][i]
+                g = d * N_PER_JOINT + i
+                q = quality_map.get(g, "?") if quality_map else "?"
+                dp = (ident - pr) / max(abs(pr), 1e-12) * 100  # Δ% from prior
                 if has_ref:
                     ref = pi_ref[d][i]
                     denom = abs(ref) if abs(ref) > 1e-12 else 1.0
                     err = (ident - ref) / denom * 100
                     print(
                         f"{_PARAM_LABELS[i]:<10s} {pr:>12.6g} {ident:>12.6g} "
-                        f"{ref:>12.6g} {err:>8.2f}%"
+                        f"{ref:>12.6g} {err:>7.2f}% {dp:>7.2f}% {q:>10s}"
                     )
                 else:
-                    print(f"{_PARAM_LABELS[i]:<10s} {pr:>12.6g} {ident:>12.6g}")
+                    print(
+                        f"{_PARAM_LABELS[i]:<10s} {pr:>12.6g} {ident:>12.6g} "
+                        f"{dp:>7.2f}% {q:>10s}"
+                    )
 
         print("\n" + "-" * 90)
         print(f"Total solve time: {sum(result.joint_solve_times):.3f}s")
@@ -655,24 +682,29 @@ def prepare_data_from_urdf(
     yaml_filename: str,
     limb_group: str = "left_arm",
     sample_rate: float = 200.0,
+    urdf_true_path: str | Path | None = None,
     verbose: bool = True,
 ) -> dict:
     """
     Prepare all data needed by ``SDPSolver.solve()``.
 
-    Uses FourierTrajectory + TargetLimbRegressor to compute:
-        Y_stack, tau_measured, pi_prior, subtree_mask, joint_order,
-        joint_names, dof, pi_true
-
-    ``tau_measured`` is computed as Y_stack @ pi_true where pi_true is
-    read from the URDF.  For real-robot data, replace ``tau_measured``
-    with sensor readings.
+    Parameters
+    ----------
+    urdf_path : str or Path
+        Initial/prior URDF: used for regressor, pi_prior, subtree mask.
+    urdf_true_path : str, Path, or None
+        "True" robot URDF.  If None, same as urdf_path (debug mode).
+        When different: only used to generate tau_measured; its params
+        are treated as unknown by the solver.
     """
     from identification.fourier_trajectory import FourierTrajectory
     from identification.target_limb_regressor import (
         TargetLimbRegressor,
         VALID_LIMB_GROUPS,
     )
+
+    if urdf_true_path is None:
+        urdf_true_path = urdf_path
 
     # --- Trajectory ---
     dof_limb = len(VALID_LIMB_GROUPS[limb_group])
@@ -683,7 +715,7 @@ def prepare_data_from_urdf(
     if verbose:
         print(f"Trajectory: {N} steps from {yaml_name}")
 
-    # --- Regressor & params ---
+    # --- Initial (prior) model: regressor, pi_prior, subtree, joint order ---
     reg = TargetLimbRegressor(
         urdf_path=Path(urdf_path),
         group_to_identify=limb_group,
@@ -702,23 +734,70 @@ def prepare_data_from_urdf(
         pi_prior_list.append(info["friction"])
         if verbose:
             print(
-                f"  [{idx}] j{joint_id} {info['name']}: "
-                f"pinocchio_jid={pin_jid} "
-                f"name_in_model={reg.model.names[pin_jid]} "
+                f"  [prior] [{idx}] {info['name']}: "
                 f"m={pi_inertial[0]:.6g} "
-                f"Ixx={pi_inertial[4]:.6g} Iyy={pi_inertial[7]:.6g} Izz={pi_inertial[9]:.6g}"
+                f"Ixx={pi_inertial[4]:.6g} Iyy={pi_inertial[6]:.6g} Izz={pi_inertial[9]:.6g}"
             )
-    pi_prior = np.array(pi_prior_list)  # (dof*13,)
-    pi_true = pi_prior.copy()
+    pi_prior = np.array(pi_prior_list)
 
-    # Subtree mask + joint order
     reg.compute_regressor(print_info=False)
     subtree_mask = reg.subtree_mask.copy()
     subtree_size = subtree_mask.sum(axis=1)
     joint_order = sorted(range(dof), key=lambda d: subtree_size[d])
     joint_names = [reg.target_joint_infos[d]["name"] for d in range(dof)]
 
+    # --- True model: only extract pi_true (unknown to solver) ---
+    if Path(urdf_true_path).resolve() != Path(urdf_path).resolve():
+        if verbose:
+            print(f"  [true]  loading separate URDF: {urdf_true_path}")
+        reg_true = TargetLimbRegressor(
+            urdf_path=Path(urdf_true_path),
+            group_to_identify=limb_group,
+            print_info=False,
+        )
+        pi_true_list = []
+        for idx, joint_id in enumerate(reg_true.group_to_identify):
+            pin_jid = joint_id + 1
+            pi_i = reg_true.model.inertias[pin_jid].toDynamicParameters()
+            info_t = reg_true.target_joint_infos[idx]
+            pi_true_list.extend(pi_i)
+            pi_true_list.append(info_t["armature"])
+            pi_true_list.append(info_t["damping"])
+            pi_true_list.append(info_t["friction"])
+            if verbose:
+                print(
+                    f"  [true]  [{idx}] {info_t['name']}: "
+                    f"m={pi_i[0]:.6g} "
+                    f"Ixx={pi_i[4]:.6g} Iyy={pi_i[6]:.6g} Izz={pi_i[9]:.6g}"
+                )
+        pi_true = np.array(pi_true_list)
+    else:
+        pi_true = pi_prior.copy()
+        if verbose:
+            print("  [true]  same as prior URDF (debug mode)")
+    subtree_size = subtree_mask.sum(axis=1)
+    joint_order = sorted(range(dof), key=lambda d: subtree_size[d])
+    joint_names = [reg.target_joint_infos[d]["name"] for d in range(dof)]
+
     # --- Stack regressor ---
+    # Y_aug from compute_regressor is TYPE-MAJOR:
+    #   columns = [inertial_j0(10)...inertial_j{D-1}(10), arm_j0(1)...arm_j{D-1}(1), fric_j0(2)...fric_j{D-1}(2)]
+    # pi_prior is JOINT-MAJOR:
+    #   [j0(10+1+2), j1(10+1+2), ...]
+    # Reorder Y_aug to joint-major so Y @ pi works correctly.
+    def _reorder_y_aug(Y: np.ndarray, dof: int) -> np.ndarray:
+        Yr = np.zeros((dof, dof * N_PER_JOINT))
+        for j in range(dof):
+            # inertial (10 cols)
+            Yr[:, j * N_PER_JOINT : j * N_PER_JOINT + 10] = Y[:, j * 10 : (j + 1) * 10]
+            # armature (1 col)
+            Yr[:, j * N_PER_JOINT + 10] = Y[:, 10 * dof + j]
+            # friction (2 cols)
+            Yr[:, j * N_PER_JOINT + 11 : j * N_PER_JOINT + 13] = Y[
+                :, 10 * dof + dof + 2 * j : 10 * dof + dof + 2 * j + 2
+            ]
+        return Yr
+
     Y_list, tau_list = [], []
     for k in range(N):
         Y_aug, *_ = reg.compute_regressor(
@@ -727,6 +806,7 @@ def prepare_data_from_urdf(
             a_traj[:, k],
             print_info=False,
         )
+        Y_aug = _reorder_y_aug(Y_aug, dof)
         Y_list.append(Y_aug)
         tau_list.append(Y_aug @ pi_true)
 
@@ -751,39 +831,107 @@ def prepare_data_from_urdf(
 # ============================================================================
 # YAML parameter-quality helpers
 # ============================================================================
+# YAML parameter-order constants (MUST match pso_excitation_unified output)
+_YAML_INERTIA_YAML2OUR = {4: 4, 5: 5, 6: 7, 7: 6, 8: 8, 9: 9}
+# YAML inertia: [Ixx, Ixy, Iyy, Ixz, Iyz, Izz] → our Pinocchio: [Ixx, Ixy, Ixz, Iyy, Iyz, Izz]
+
+
+def _yaml_global_to_local(global_idx: int, dof: int) -> tuple[int, int]:
+    """
+    Convert YAML global index → (joint, param) in our 13-per-joint layout.
+
+    YAML layout (total = 10*dof + dof + 2*dof = 13*dof):
+      [j0_inertial(10), j1_inertial(10), ..., j{D-1}_inertial(10),
+       j0_arm(1), ..., j{D-1}_arm(1),
+       j0_damp(1), j0_fric(1), j1_damp(1), j1_fric(1), ...]
+    """
+    n_inertial = 10 * dof
+    if global_idx < n_inertial:
+        joint = global_idx // 10
+        yaml_i = global_idx % 10
+        our_i = yaml_i if yaml_i < 4 else _YAML_INERTIA_YAML2OUR[yaml_i]
+        return joint, our_i
+    elif global_idx < n_inertial + dof:
+        joint = global_idx - n_inertial
+        return joint, 10
+    else:
+        idx = global_idx - n_inertial - dof
+        joint = idx // 2
+        our_i = 11 + (idx % 2)
+        return joint, our_i
+
+
 def load_yaml_param_quality(yaml_path: str | Path) -> dict[int, str]:
     """
-    Parse the ``_diagnostics.per_param`` section of a PSO YAML file.
-
-    Returns a dict mapping **global** parameter index (0..dof*13-1) to
-    quality label: ``'null'``, ``'rank_deficient'``, ``'small'``,
-    ``'bad'``, ``'ok'``, ``'good'``.
-
-    Global index → local:  ``joint = g // 13``,  ``param = g % 13``.
+    Parse YAML diagnostics, return quality labels keyed by OUR global index
+    (0..dof*13-1, joint-major by 13).
     """
     import yaml
 
     with open(yaml_path, "r") as f:
         data = yaml.safe_load(f)
     per_param = data.get("_diagnostics", {}).get("per_param", [])
-    return {entry["idx"]: entry["quality"] for entry in per_param}
+    dof = len(per_param) // N_PER_JOINT
 
-
-def global_to_local(global_idx: int) -> tuple[int, int]:
-    """Convert global YAML param index → (joint_idx, param_idx)."""
-    return global_idx // N_PER_JOINT, global_idx % N_PER_JOINT
+    result = {}
+    for entry in per_param:
+        yaml_g = entry["idx"]
+        j, i = _yaml_global_to_local(yaml_g, dof)
+        our_g = j * N_PER_JOINT + i
+        result[our_g] = entry["quality"]
+    return result
 
 
 def _quality_defaults(quality: str) -> dict:
     """Default freeze/widen strategy per YAML quality label."""
-    return {
-        "null": {"freeze": True, "widen": 0.0},
-        "rank_deficient": {"freeze": True, "widen": 0.0},
-        "small": {"freeze": True, "widen": 0.0},
-        "bad": {"freeze": False, "widen": 0.05},
-        "ok": {"freeze": False, "widen": 0.1},
-        "good": {"freeze": False, "widen": 0.3},
-    }.get(quality, {"freeze": False, "widen": 0.0})
+    assert quality in ("null", "rank_deficient", "small", "bad", "ok", "good")
+    return BOUNDRY_PARAMS.get(quality)
+
+
+# ============================================================================
+# Torque comparison plot
+# ============================================================================
+def plot_torque_comparison(
+    result: IdentificationResult,
+    joint_names: list[str],
+    Y_stack: np.ndarray,
+    pi_reference: np.ndarray | None = None,
+    sample_rate: float = 100.0,
+):
+    """Plot τ_true vs τ_prior vs τ_identified for each joint."""
+    import matplotlib.pyplot as plt
+
+    dof = len(result.joint_order)
+    pi_true = pi_reference if pi_reference is not None else result.pi_prior
+    pi_id = result.pi_identified
+    pi_pr = result.pi_prior
+
+    tau_true = Y_stack @ pi_true
+    tau_prior = Y_stack @ pi_pr
+    tau_ident = Y_stack @ pi_id
+
+    N_total = len(tau_true)
+    N = N_total // dof
+    t = np.arange(N) / sample_rate
+
+    fig, axes = plt.subplots(dof, 1, figsize=(12, 3 * dof), sharex=True)
+    if dof == 1:
+        axes = [axes]
+
+    for idx, d in enumerate(result.joint_order):
+        ax = axes[idx]
+        row = np.arange(d, N_total, dof)
+        ax.plot(t, tau_true[row], "k-", linewidth=1.0, alpha=0.7, label="true")
+        ax.plot(t, tau_prior[row], "b--", linewidth=1.0, alpha=0.7, label="prior")
+        ax.plot(t, tau_ident[row], "r-", linewidth=1.5, label="identified")
+        ax.set_ylabel(f"{joint_names[d]}\n[Nm]")
+        ax.legend(loc="upper right", fontsize=7)
+        ax.grid(True, alpha=0.3)
+
+    axes[-1].set_xlabel("Time [s]")
+    fig.suptitle("Joint Torque Comparison: true vs prior vs identified", fontsize=13)
+    plt.tight_layout()
+    plt.show()
 
 
 # ============================================================================
@@ -791,16 +939,34 @@ def _quality_defaults(quality: str) -> dict:
 # ============================================================================
 def main():
     from identification.fourier_trajectory import FourierTrajectory
-    from identification.target_limb_regressor import URDF_PATH
+
+    URDF_PATH = (
+        Path(__file__).resolve().parent.parent
+        / "resource"
+        / "robot"
+        / "urdf"
+        / "serial_pm_v2_identify.urdf"
+    ).resolve()
+    URDF_TRUE_PATH = (
+        Path(__file__).resolve().parent.parent
+        / "resource"
+        / "robot"
+        / "urdf"
+        # / "serial_pm_v2_identify_20pct.urdf"
+        / "serial_pm_v2_identify_nominal.urdf"
+    ).resolve()
 
     latest_yaml = FourierTrajectory.find_latest_yaml("unified")
 
-    # 1. Prepare data
+    # 1. Prepare data — two URDFs: initial (prior) vs true (unknown to solver)
+    # For debug with same URDF: omit urdf_true_path
+    # For real test: urdf_true_path=URDF_PATH, urdf_path=NOMINAL_URDF
     data = prepare_data_from_urdf(
-        urdf_path=URDF_PATH,
+        urdf_path=URDF_PATH,  # initial/prior model → regressor, bounds, freeze target
         yaml_filename=latest_yaml,
         limb_group="left_arm",
         sample_rate=100.0,
+        urdf_true_path=URDF_TRUE_PATH,  # ← change to NOMINAL_URDF for real test
     )
 
     # 2. Configure bounds
@@ -841,8 +1007,26 @@ def main():
     )
 
     # 4. Report
+    quality_map = load_yaml_param_quality(yaml_path)
+    # Print quality distribution
+    from collections import Counter
+
+    qc = Counter(quality_map.values())
+    print(f"  YAML quality distribution: {dict(qc)}")
     solver.print_results(
-        result, joint_names=data["joint_names"], pi_reference=data["pi_true"]
+        result,
+        joint_names=data["joint_names"],
+        pi_reference=data["pi_true"],
+        quality_map=quality_map,
+    )
+
+    # 5. Plot torque comparison
+    plot_torque_comparison(
+        result,
+        data["joint_names"],
+        data["Y_stack"],
+        pi_reference=data["pi_true"],
+        sample_rate=100.0,
     )
 
 
