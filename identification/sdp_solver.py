@@ -413,6 +413,67 @@ class IdentificationResult:
 
 
 # ============================================================================
+# Torque RMSE helpers
+# ============================================================================
+def _joint_rmse(
+    pi: np.ndarray,
+    joint_order: list[int],
+    Y_stack: np.ndarray,
+    tau_measured: np.ndarray,
+) -> np.ndarray:
+    """Per-joint RMSE of ``Y_stack @ pi`` vs ``tau_measured``.
+
+    Samples are laid out row-major by joint (sample k, joint d → row k·dof + d),
+    matching ``plot_torque_comparison``.
+    """
+    dof = len(joint_order)
+    n_total = len(tau_measured)
+    tau_pred = Y_stack @ pi
+    rmse = np.empty(dof)
+    for idx, d in enumerate(joint_order):
+        row = np.arange(d, n_total, dof)
+        rmse[idx] = np.sqrt(np.mean((tau_pred[row] - tau_measured[row]) ** 2))
+    return rmse
+
+
+def print_rmse_comparison(
+    result: IdentificationResult,
+    joint_names: list[str] | None,
+    Y_stack: np.ndarray,
+    tau_measured: np.ndarray,
+) -> None:
+    """Print torque RMSE before (prior) vs after (identified) identification."""
+    rmse_prior = _joint_rmse(result.pi_prior, result.joint_order, Y_stack, tau_measured)
+    rmse_ident = _joint_rmse(
+        result.pi_identified, result.joint_order, Y_stack, tau_measured
+    )
+
+    def _improve(a: float, b: float) -> float:
+        return (1 - b / a) * 100 if a > 1e-12 else float("nan")
+
+    print("\nTorque RMSE comparison (prior vs identified):")
+    print(
+        f"{'Joint':<20s} {'Prior [Nm]':>12s} {'Identified [Nm]':>15s} {'Improve %':>10s}"
+    )
+    print("-" * 53)
+    for idx, d in enumerate(result.joint_order):
+        name = joint_names[d] if joint_names else f"joint_{d}"
+        print(
+            f"{name:<20s} {rmse_prior[idx]:>12.6g} {rmse_ident[idx]:>15.6g} "
+            f"{_improve(rmse_prior[idx], rmse_ident[idx]):>9.2f}%"
+        )
+    print("-" * 53)
+    rp_all = float(np.sqrt(np.mean((Y_stack @ result.pi_prior - tau_measured) ** 2)))
+    ri_all = float(
+        np.sqrt(np.mean((Y_stack @ result.pi_identified - tau_measured) ** 2))
+    )
+    print(
+        f"{'ALL':<20s} {rp_all:>12.6g} {ri_all:>15.6g} "
+        f"{_improve(rp_all, ri_all):>9.2f}%"
+    )
+
+
+# ============================================================================
 # Pure SDP solver
 # ============================================================================
 class SDPSolver:
@@ -553,8 +614,6 @@ class SDPSolver:
         lb, ub = bounds.get_bounds_for_joint(joint_idx)
 
         # Pre-solve diagnostics
-        fit_prior = Y_blk @ prior
-        resid_prior = np.linalg.norm(fit_prior - tau_res)
         lmi_ok, eig_min, _ = check_lmi_feasibility(prior)
         in_bounds = np.all((prior >= lb) & (prior <= ub))
 
@@ -623,8 +682,14 @@ class SDPSolver:
         joint_names: list[str] | None = None,
         pi_reference: np.ndarray | None = None,
         quality_map: dict[int, str] | None = None,
+        Y_stack: np.ndarray | None = None,
+        tau_measured: np.ndarray | None = None,
     ):
-        """Pretty-print identification results joint by joint."""
+        """Pretty-print identification results joint by joint.
+
+        If ``Y_stack`` and ``tau_measured`` are provided, prints a per-joint
+        torque RMSE comparison (prior vs identified) instead of Σ‖τ_residual‖₂.
+        """
         if pi_reference is None:
             pi_reference = result.pi_reference
         has_ref = pi_reference is not None
@@ -671,7 +736,12 @@ class SDPSolver:
 
         print("\n" + "-" * 90)
         print(f"Total solve time: {sum(result.joint_solve_times):.3f}s")
-        print(f"Σ ‖τ_residual‖₂: {sum(result.joint_objectives):.6g}")
+
+        if Y_stack is not None and tau_measured is not None:
+            print_rmse_comparison(result, joint_names, Y_stack, tau_measured)
+        else:
+            # Backward-compatible fallback if torque data isn't available
+            print(f"Σ ‖τ_residual‖₂: {sum(result.joint_objectives):.6g}")
 
 
 # ============================================================================
@@ -897,8 +967,24 @@ def plot_torque_comparison(
     Y_stack: np.ndarray,
     pi_reference: np.ndarray | None = None,
     sample_rate: float = 100.0,
+    offset: float | None = None,
+    show_residual: bool = True,
 ):
-    """Plot τ_true vs τ_prior vs τ_identified for each joint."""
+    """Plot τ_true vs τ_prior vs τ_identified for each joint.
+
+    The three curves often nearly overlap when identification is good,
+    so this version improves readability via:
+
+    * **Residual panels** (default on): a sub-panel below each torque plot
+      shows ``τ_true − τ_prior`` and ``τ_true − τ_identified`` with per-curve
+      RMSE in the legend — even sub-0.1 Nm gaps become clearly visible.
+    * **Sparse markers**: triangles (prior) / circles (identified) on a
+      subset of points, so curves remain distinguishable where they overlap
+      exactly.
+    * **offset** (optional, Nm): shift the curves vertically
+      (prior +offset, identified −offset) to fully separate them.
+      Residuals are always computed from the un-shifted data.
+    """
     import matplotlib.pyplot as plt
 
     dof = len(result.joint_order)
@@ -914,21 +1000,86 @@ def plot_torque_comparison(
     N = N_total // dof
     t = np.arange(N) / sample_rate
 
-    fig, axes = plt.subplots(dof, 1, figsize=(12, 3 * dof), sharex=True)
-    if dof == 1:
-        axes = [axes]
+    mark_every = max(1, N // 150) if N >= 100 else None
+
+    fig = plt.figure(figsize=(12, 3.2 * dof * (2 if show_residual else 1)))
+    gs = fig.add_gridspec(dof, 1, hspace=0.45)
+    last_ax: plt.Axes | None = None
 
     for idx, d in enumerate(result.joint_order):
-        ax = axes[idx]
         row = np.arange(d, N_total, dof)
-        ax.plot(t, tau_true[row], "k-", linewidth=1.0, alpha=0.7, label="true")
-        ax.plot(t, tau_prior[row], "b--", linewidth=1.0, alpha=0.7, label="prior")
-        ax.plot(t, tau_ident[row], "r-", linewidth=1.5, label="identified")
-        ax.set_ylabel(f"{joint_names[d]}\n[Nm]")
-        ax.legend(loc="upper right", fontsize=7)
-        ax.grid(True, alpha=0.3)
+        y_true = tau_true[row]
+        y_prior = tau_prior[row]
+        y_ident = tau_ident[row]
 
-    axes[-1].set_xlabel("Time [s]")
+        if offset:
+            y_prior = y_prior + offset
+            y_ident = y_ident - offset
+
+        if show_residual:
+            gs_sub = gs[idx].subgridspec(2, 1, height_ratios=[2.2, 1.0], hspace=0.1)
+            ax = fig.add_subplot(gs_sub[0])
+            ax_r = fig.add_subplot(gs_sub[1], sharex=ax)
+        else:
+            ax = fig.add_subplot(gs[idx])
+            ax_r = None
+
+        # --- Torque comparison panel ---
+        ax.plot(t, y_true, "r-", linewidth=2.2, label="true")
+        ax.plot(
+            t,
+            y_prior,
+            "b--",
+            linewidth=1.6,
+            alpha=0.9,
+            # marker="^",
+            # markevery=mark_every,
+            # markersize=4,
+            label="prior",
+        )
+        ax.plot(
+            t,
+            y_ident,
+            "g-",
+            linewidth=2.0,
+            # marker="o",
+            # markevery=mark_every,
+            # markersize=4,
+            label="identified",
+        )
+        ax.set_ylabel(f"{joint_names[d]}\n[Nm]")
+        ax.legend(loc="upper right", fontsize=7, ncol=3)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(t[0], t[-1])
+
+        # --- Residual panel: differences vs true ---
+        if ax_r is not None:
+            rmse_prior = np.sqrt(np.mean((tau_true[row] - tau_prior[row]) ** 2))
+            rmse_ident = np.sqrt(np.mean((tau_true[row] - tau_ident[row]) ** 2))
+            ax_r.axhline(0.0, color="k", linewidth=0.8, alpha=0.5)
+            ax_r.plot(
+                t,
+                tau_true[row] - tau_prior[row],
+                "b--",
+                linewidth=1.4,
+                alpha=0.9,
+                label=f"true−prior   RMSE {rmse_prior:.3g}",
+            )
+            ax_r.plot(
+                t,
+                tau_true[row] - tau_ident[row],
+                "g-",
+                linewidth=1.6,
+                label=f"true−identified   RMSE {rmse_ident:.3g}",
+            )
+            ax_r.set_ylabel("Δτ [Nm]")
+            ax_r.legend(loc="upper right", fontsize=6)
+            ax_r.grid(True, alpha=0.3)
+            ax_r.set_xlim(t[0], t[-1])
+
+        last_ax = ax_r if ax_r is not None else ax
+
+    last_ax.set_xlabel("Time [s]")
     fig.suptitle("Joint Torque Comparison: true vs prior vs identified", fontsize=13)
     plt.tight_layout()
     plt.show()
@@ -1018,6 +1169,8 @@ def main():
         joint_names=data["joint_names"],
         pi_reference=data["pi_true"],
         quality_map=quality_map,
+        Y_stack=data["Y_stack"],
+        tau_measured=data["tau_measured"],
     )
 
     # 5. Plot torque comparison
