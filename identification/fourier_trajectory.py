@@ -68,15 +68,20 @@ class FourierTrajectory:
                             > 1 speeds up the trajectory, < 1 slows it down.
         """
         self.omega_f = 2.0 * np.pi / TRAJ_PERIOD
-        self.t_array = np.linspace(
-            0,
-            TRAJ_PERIOD,
-            int(TRAJ_PERIOD * sample_rate),
-            endpoint=False,
-        )
         self.n_harmonics = N_HARMONICS
         self.dim = dim
         self.time_coeffs = time_coeffs
+        # Time-scaled trajectory has period TRAJ_PERIOD / time_coeffs. Sample
+        # count must match the scaled duration so that (a) playback lasts the
+        # right amount of real time, and (b) the trajectory wraps exactly on a
+        # period boundary (q(0) == q(end)) -> no end-of-cycle position jump.
+        self.duration = TRAJ_PERIOD / self.time_coeffs
+        self.t_array = np.linspace(
+            0,
+            self.duration,
+            int(self.duration * sample_rate),
+            endpoint=False,
+        )
 
     @staticmethod
     def load_coeffs(yaml_filename: str) -> np.ndarray:
