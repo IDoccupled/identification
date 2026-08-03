@@ -3,6 +3,8 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+# ruff: noqa: RUF012
+
 # ==============================
 # Tunable trajectory configuration
 # ==============================
@@ -11,6 +13,7 @@ import yaml
 N_HARMONICS = 5
 TRAJ_PERIOD = 5.0
 SAMPLE_RATE = 50.0
+TIME_COEFFS = 1.0
 
 
 class FourierTrajectory:
@@ -56,8 +59,14 @@ class FourierTrajectory:
         self,
         dim: int,
         sample_rate=SAMPLE_RATE,
+        time_coeffs=TIME_COEFFS,
     ):
-
+        """
+        :param dim: Number of joints/dimensions in the trajectory.
+        :param sample_rate: Sampling rate in Hz.
+        :param time_coeffs: Time scaling coefficient (default 1.0 = normal speed).
+                            > 1 speeds up the trajectory, < 1 slows it down.
+        """
         self.omega_f = 2.0 * np.pi / TRAJ_PERIOD
         self.t_array = np.linspace(
             0,
@@ -67,6 +76,7 @@ class FourierTrajectory:
         )
         self.n_harmonics = N_HARMONICS
         self.dim = dim
+        self.time_coeffs = time_coeffs
 
     @staticmethod
     def load_coeffs(yaml_filename: str) -> np.ndarray:
@@ -113,6 +123,10 @@ class FourierTrajectory:
         """
         Generate joint trajectories (q, v, a) from Fourier coefficients.
 
+        The time axis is scaled by ``self.time_coeffs`` (time_coeffs > 1 speeds
+        the motion up, < 1 slows it down); velocity and acceleration are scaled
+        by time_coeffs and time_coeffs**2 accordingly.
+
         :param coeffs: Flattened array of shape (dim * (n_harmonics * 2 + 2 ),) containing [A1_1, B1_1, A2_1, B2_1, ..., A_N_1, B_N_1, q_1,
                                                                                  A1_2, B1_2, A2_2, B2_2, ..., A_N_2, B_N_2, q_2,
                                                                                  ...] for each joint.
@@ -123,6 +137,10 @@ class FourierTrajectory:
         v_traj = np.zeros_like(q_traj)
         a_traj = np.zeros_like(q_traj)
 
+        # Time-scaled sampling instants: time_coeffs > 1 speeds the motion up,
+        # time_coeffs < 1 slows it down. Samples still lie on self.t_array.
+        t = self.t_array * self.time_coeffs
+
         for i in range(self.dim):
             q0 = params[i, -1]
             a = params[i, 0 : self.n_harmonics * 2 : 2]
@@ -130,12 +148,13 @@ class FourierTrajectory:
             harmonics = np.arange(1, self.n_harmonics + 1, dtype=float)
             w = self.omega_f * harmonics
 
-            sin_wt = np.sin(np.outer(self.t_array, w))
-            cos_wt = np.cos(np.outer(self.t_array, w))
+            sin_wt = np.sin(np.outer(t, w))
+            cos_wt = np.cos(np.outer(t, w))
 
             q_traj[i, :] = q0 + sin_wt @ (a / w) - cos_wt @ (b / w)
-            v_traj[i, :] = cos_wt @ a + sin_wt @ b
-            a_traj[i, :] = -sin_wt @ (a * w) + cos_wt @ (b * w)
+            # Time scaling by c scales velocity by c and acceleration by c^2
+            v_traj[i, :] = self.time_coeffs * (cos_wt @ a + sin_wt @ b)
+            a_traj[i, :] = self.time_coeffs**2 * (-sin_wt @ (a * w) + cos_wt @ (b * w))
         return q_traj, v_traj, a_traj
 
 
