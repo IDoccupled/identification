@@ -8,6 +8,8 @@ from ament_index_python.packages import get_package_share_directory
 
 import time
 
+# ruff: noqa: TRY002
+
 LEFT_LEG_Q_INDICES = [0, 1, 2, 3, 4, 5]
 RIGHT_LEG_Q_INDICES = [6, 7, 8, 9, 10, 11]
 WAIST_Q_INDICES = [12]
@@ -211,6 +213,13 @@ def main():
         ("LINK_ELBOW_YAW_L_0", "LINK_HIP_YAW_L_0"),
         ("LINK_ELBOW_PITCH_L_0", "LINK_TORSO_YAW_0"),
         ("LINK_SHOULDER_YAW_L_0", "LINK_TORSO_YAW_0"),
+        # 桌子（桌面 + 桌腿）
+        ("LINK_ELBOW_YAW_L_0", "table_0"),
+        ("LINK_ELBOW_YAW_L_0", "table_leg_0"),
+        ("LINK_ELBOW_PITCH_L_0", "table_0"),
+        ("LINK_ELBOW_PITCH_L_0", "table_leg_0"),
+        ("LINK_SHOULDER_YAW_L_0", "table_0"),
+        ("LINK_SHOULDER_YAW_L_0", "table_leg_0"),
     ]
 
     ct.add_collision_pairs(collision_pairs)

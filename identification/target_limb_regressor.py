@@ -28,6 +28,7 @@ VALID_LIMB_GROUPS = {
 
 GROUP_TO_IDENTIFY = "left_arm"
 
+# Self-collision pairs (left-arm links vs trunk/base) — always checked.
 COLLISION_PAIRS = [
     ("LINK_ELBOW_YAW_L_0", "LINK_BASE_0"),
     ("LINK_ELBOW_YAW_L_0", "LINK_TORSO_YAW_0"),
@@ -38,6 +39,48 @@ COLLISION_PAIRS = [
     ("LINK_ELBOW_PITCH_L_0", "LINK_TORSO_YAW_0"),
     ("LINK_SHOULDER_YAW_L_0", "LINK_TORSO_YAW_0"),
 ]
+
+# 每个待辨识分组（肢体）对应的连杆。
+# Pinocchio 会把几何体命名为 "<link>_0"（挂在 link 的 frame 上）。
+# 注意：LINK_FOOT_* / LINK_ELBOW_END_* 在 URDF 里没有 <collision> 网格，
+# pinocchio 碰撞模型中不存在，因此不列入。
+GROUP_COLLISION_LINKS = {
+    "left_leg": [
+        "LINK_HIP_PITCH_L",
+        "LINK_HIP_ROLL_L",
+        "LINK_HIP_YAW_L",
+        "LINK_KNEE_PITCH_L",
+        "LINK_ANKLE_PITCH_L",
+        "LINK_ANKLE_ROLL_L",
+    ],
+    "right_leg": [
+        "LINK_HIP_PITCH_R",
+        "LINK_HIP_ROLL_R",
+        "LINK_HIP_YAW_R",
+        "LINK_KNEE_PITCH_R",
+        "LINK_ANKLE_PITCH_R",
+        "LINK_ANKLE_ROLL_R",
+    ],
+    "waist": ["LINK_TORSO_YAW"],
+    "left_arm": [
+        "LINK_SHOULDER_PITCH_L",
+        "LINK_SHOULDER_ROLL_L",
+        "LINK_SHOULDER_YAW_L",
+        "LINK_ELBOW_PITCH_L",
+        "LINK_ELBOW_YAW_L",
+    ],
+    "right_arm": [
+        "LINK_SHOULDER_PITCH_R",
+        "LINK_SHOULDER_ROLL_R",
+        "LINK_SHOULDER_YAW_R",
+        "LINK_ELBOW_PITCH_R",
+        "LINK_ELBOW_YAW_R",
+    ],
+    "neck": ["LINK_HEAD_YAW"],
+}
+
+# 桌子（桌面 + 桌腿）的碰撞几何体，命名同样带 "_0" 后缀。
+TABLE_COLLISION_GEOMS = ("table_0", "table_leg_0")
 
 URDF_PATH = (
     Path(get_package_share_directory("identification"))
@@ -98,7 +141,14 @@ class TargetLimbRegressor:
         self.ct = CollisionTest(
             model=self.model, urdf_path=URDF_PATH, pkg_dir=PKG_DIR, performance=True
         )
-        self.ct.add_collision_pairs(COLLISION_PAIRS)
+        # 把桌子模型加入当前待辨识分组的碰撞检测：
+        # 该分组每个连杆 × 桌面/桌腿 生成碰撞对。
+        table_pairs = [
+            (f"{link}_0", table_geom)
+            for link in GROUP_COLLISION_LINKS[group_to_identify]
+            for table_geom in TABLE_COLLISION_GEOMS
+        ]
+        self.ct.add_collision_pairs(COLLISION_PAIRS + table_pairs)
 
     @staticmethod
     def _fmt_array(arr: np.ndarray) -> str:
