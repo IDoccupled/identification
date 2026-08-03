@@ -1,4 +1,5 @@
 <mujoco model="global_model">
     <include file="robot/xml/serial_pm_v2.xml"/>
     <include file="environment/ground.xml"/>
+    <include file="environment/table.xml"/>
 </mujoco>

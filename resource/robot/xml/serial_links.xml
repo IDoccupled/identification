@@ -3,7 +3,7 @@
         <inertial pos="0.0101086 0.045246 -0.0119649" quat="0.644148 0.745776 0.169512 -0.0125773" mass="1.68628" diaginertia="0.00232449 0.00220186 0.00200187" />
         <joint name="J00_HIP_PITCH_L" pos="0 0 0" axis="0 0.965926 -0.258819" range="-3.141 2.443" actuatorfrcrange="-164 164" class="joint" armature="0.045325" damping="0.12" frictionloss="0.55" />
         <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="LINK_HIP_PITCH_L" class="visual" />
-        <geom class="collision_hip_left" />
+        <geom class="collision_hip_left" conaffinity="9" />
         <body name="LINK_HIP_ROLL_L" pos="0.048 0.049359 -0.013226">
             <inertial pos="-0.0186136 0.00234772 -0.0460198" quat="0.934255 0.0674459 -0.349492 -0.0217749" mass="0.632743" diaginertia="0.0016198 0.00145212 0.000966255" />
             <joint name="J01_HIP_ROLL_L" pos="0 0 0" axis="1 0 0" range="-0.436 2.094" actuatorfrcrange="-164 164" class="joint" armature="0.045325" damping="0.12" frictionloss="0.55" />
@@ -16,7 +16,7 @@
                     <inertial pos="-0.00978702 0.00212191 -0.119309" quat="0.754298 -0.0350501 -0.0489895 0.653763" mass="4.29474" diaginertia="0.054833 0.053824 0.00490216" />
                     <joint name="J03_KNEE_PITCH_L" pos="0 0 0" axis="0 1 0" range="-0.3491 2.3911" actuatorfrcrange="-164 164" class="joint" armature="0.045325" damping="0.12" frictionloss="0.55" />
                     <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="LINK_KNEE_PITCH_L" class="visual" />
-                    <geom class="collision_knee" />
+                    <geom class="collision_knee" conaffinity="9" />
                     <body name="LINK_ANKLE_PITCH_L" pos="-0.026756 0.00041994 -0.36305">
                         <inertial pos="0.00126412 0 -0.00661445" quat="0.67654 -0.205654 -0.205654 0.67654" mass="0.115345" diaginertia="1.511e-05 1.42169e-05 1.17731e-05" />
                         <joint name="J04_ANKLE_PITCH_L" pos="0 0 0" axis="0 1 0" range="-0.6807 0.7243" actuatorfrcrange="-61 61" class="joint" armature="0.039175" damping="0.08" frictionloss="0.30" />
@@ -27,8 +27,8 @@
                             <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="LINK_ANKLE_ROLL_L" class="visual" />
                             <body name="LINK_FOOT_L">
                                 <inertial pos="0 0 0" mass="1e-3" diaginertia="1e-12 1e-12 1e-12" />
-                                <geom class="collision_left_foot" />
-                                <geom class="collision_left_foot_toe" />
+                                <geom class="collision_left_foot" conaffinity="9" />
+                                <geom class="collision_left_foot_toe" conaffinity="9" />
                                 <site name="force_sensor_left_foot" />
                                 <site name="torque_sensor_left_foot" />
                             </body>
@@ -97,14 +97,14 @@
                         <inertial pos="0.00298237 0.00186711 -0.0651846" quat="0.850602 -0.0227837 0.0480929 0.52311" mass="1.38061" diaginertia="0.00600679 0.00586987 0.000776466" />
                         <joint name="J16_ELBOW_PITCH_L" pos="0 0 0" axis="0.00272431 0.998022 0.0628031" range="-2.1948 0.7374" actuatorfrcrange="-61 61" class="joint" armature="0.039175" damping="0.08" frictionloss="0.30" />
                         <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="LINK_ELBOW_PITCH_L" class="visual" />
-                        <geom class="collision_elbow" />
+                        <geom class="collision_elbow" conaffinity="9" />
                         <body name="LINK_ELBOW_YAW_L" pos="0.013817 0.0097723 -0.1547">
                             <inertial pos="0.0201851 0.000217483 -0.0900144" quat="0.993617 -0.0142345 -0.111507 -0.00947408" mass="0.467519" diaginertia="0.00174612 0.00173484 0.000322726" />
                             <joint name="J17_ELBOW_YAW_L" pos="0 0 0" axis="-0.214789 -0.0619207 0.974696" range="-2.618 2.618" actuatorfrcrange="-61 61" class="joint" armature="0.039175" damping="0.08" frictionloss="0.30" />
                             <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="LINK_ELBOW_YAW_L" class="visual" />
                             <body name="LINK_ELBOW_END_L">
                                 <inertial pos="0 0 0" mass="1e-3" diaginertia="1e-12 1e-12 1e-12" />
-                                <geom class="collision_left_elbow_end" />
+                                <geom class="collision_left_elbow_end" conaffinity="9" />
                             </body>
                         </body>
                     </body>

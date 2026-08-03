@@ -1,0 +1,41 @@
+<!--
+  独立桌子模型（用于辨识实验）：复刻 serial_pm_v2_identify.urdf 中的 table / table_leg。
+
+  URDF 中桌子是放在 lay_down/world 坐标系下的绝对位置：
+      table      center = (-0.25,  0, -0.11)   box 0.5 x 0.25 x 0.02
+      table_leg  center = (-0.025, 0.1, -0.51)  box 0.05 x 0.05 x 0.8
+
+  而 Mujoco 模型中机器人底座在 z = 0.82（见 serial_pm_v2.xml：
+  <body name="LINK_BASE" pos="0 0 0.82" euler="0 -1.57 0"/>），URDF 底座在 z = 0。
+  为了保持 URDF 的相对几何关系（桌面正好在躺倒机器人下方、左胳膊/左腿可撞到桌沿），
+  对 z 整体加上 0.82 偏移：
+      table      center = (-0.25,  0,  0.71)
+      table_leg  center = (-0.025, 0.1,  0.31)
+
+  碰撞设置：
+  - 机器人碰撞 geom 默认 contype=1 / conaffinity=1（bit 1）。
+  - 桌子使用独立 bit 4：contype=8 / conaffinity=1，因此不会与地面(conaffinity=7)碰撞。
+  - serial_links.xml 中左侧胳膊/腿的碰撞 geom 已加 conaffinity=9（bit 1 | bit 4），
+    所以只有左胳膊和左腿会与桌子产生碰撞，右侧与躯干不会。
+-->
+<mujoco model="table">
+
+  <worldbody>
+
+    <!-- 桌面：URDF box 0.5 x 0.25 x 0.02，中心 (-0.25, 0, 0.71) -->
+    <body name="table" pos="-0.25 0 0.71">
+      <geom name="table_top" type="box" size="0.25 0.125 0.01"
+            contype="8" conaffinity="1" friction="0.8 0.005 0.0001"
+            rgba="0.55 0.35 0.2 1"/>
+    </body>
+
+    <!-- 桌腿：URDF box 0.05 x 0.05 x 0.8，中心 (-0.025, 0.1, 0.31) -->
+    <body name="table_leg" pos="-0.025 0.1 0.31">
+      <geom name="table_leg_geom" type="box" size="0.025 0.025 0.4"
+            contype="8" conaffinity="1" friction="0.8 0.005 0.0001"
+            rgba="0.45 0.28 0.14 1"/>
+    </body>
+
+  </worldbody>
+
+</mujoco>
