@@ -52,7 +52,45 @@ CONTROL_FREQUENCY = 500.0
 CONTROL_PERIOD = 1.0 / CONTROL_FREQUENCY
 NUM_JOINTS = 24
 
-# Default path to the joint_test.yaml (target positions)
+# ---------------------------------------------------------------------------
+# Home position for all 24 joints (set to 0.0 to keep the joint relaxed/uncontrolled)
+# Joint layout: left_leg[0-5], right_leg[6-11], waist[12],
+#               left_arm[13-17], right_arm[18-22], neck[23]
+# ---------------------------------------------------------------------------
+HOME_POS = [
+    # left leg (0-5)
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    # right leg (6-11)
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    # waist (12)
+    0.0,
+    # left arm (13-17)
+    0.01,
+    0.1,
+    0.01,
+    0.01,
+    0.01,
+    # right arm (18-22)
+    0.0,
+    -0.0,
+    0.0,
+    0.0,
+    0.0,
+    # neck (23)
+    0.0,
+]
+
+# Default path to the joint_test.yaml (used for num_steps, kp/kd, etc.)
 DEFAULT_TARGET_CONFIG = (
     Path(__file__).resolve().parent / ".." / ".." / "config" / "joint_test.yaml"
 ).resolve()
@@ -120,6 +158,7 @@ class FourierWithHomeNode(Node):
         pd_config_path: Path = PD_CONFIG_PATH,
         group: str = DEFAULT_GROUP_TO_IDENTIFY,
         time_coeffs: float = 1.0,
+        dry_run: bool = True,
     ):
         assert target_config_path.exists(), (
             f"Target config not found: {target_config_path}"
@@ -135,10 +174,12 @@ class FourierWithHomeNode(Node):
         with target_config_path.open("r", encoding="utf-8") as f:
             target_cfg = yaml.safe_load(f)
 
-        self.target_positions = _load_grouped_config(target_cfg, "target_position")
+        self.target_positions = list(HOME_POS)
         self.num_steps_list = [
             int(s) for s in _load_grouped_config(target_cfg, "num_steps")
         ]
+        # Identify joints that should remain relaxed (home pos == 0)
+        self.relaxed_joints = [i for i, p in enumerate(HOME_POS) if p == 0.0]
 
         # Phase-1 PD gains (from target config, or fallback to pd_config)
         kp_phase1_raw = _load_grouped_config(target_cfg, "kp") or [100.0] * NUM_JOINTS
@@ -171,6 +212,12 @@ class FourierWithHomeNode(Node):
         self.target_joint_indices = VALID_LIMB_GROUPS[group]
         self.dim = len(self.target_joint_indices)
         self.group = group
+        self.dry_run = dry_run
+        if self.dry_run:
+            self.get_logger().warn(
+                "DRY RUN mode — no joint commands will be published. "
+                "Use --no-dry_run to send commands to the robot."
+            )
 
         # --- Prepare Phase 2: Fourier trajectory ---
         self.q_traj, self.v_traj, _ = FourierTrajectory(
@@ -232,12 +279,18 @@ class FourierWithHomeNode(Node):
     # Phase 1: generate interpolated homing trajectories
     # ------------------------------------------------------------------
     def _generate_homing_trajectories(self, initial_positions):
-        """Create interpolated paths from current positions to target positions."""
+        """Create interpolated paths from current positions to target positions.
+        Joints with HOME_POS == 0 are skipped (marked as already reached)."""
         self.interpolated_positions = []
         self.current_steps = [0] * NUM_JOINTS
         self.reached_targets = [False] * NUM_JOINTS
 
         for i in range(NUM_JOINTS):
+            if i in self.relaxed_joints:
+                # Don't generate trajectory for relaxed joints
+                self.interpolated_positions.append([initial_positions[i]])
+                self.reached_targets[i] = True
+                continue
             num_steps_i = max(self.num_steps_list[i], 2)  # at least 2 steps
             start = initial_positions[i]
             end = self.target_positions[i]
@@ -283,7 +336,8 @@ class FourierWithHomeNode(Node):
             self._control_fourier()
 
     def _control_homing(self):
-        """Phase 1: interpolate joints toward target positions."""
+        """Phase 1: interpolate joints toward target positions.
+        Joints with HOME_POS == 0 are left relaxed (kp=kd=0, no position command)."""
         joint_command = JointCommand()
         joint_command.header = Header()
         joint_command.header.stamp = self.get_clock().now().to_msg()
@@ -296,8 +350,16 @@ class FourierWithHomeNode(Node):
         joint_command.stiffness = list(self.kp_phase1)
         joint_command.damping = list(self.kd_phase1)
 
+        # Relax joints that have HOME_POS == 0
+        for i in self.relaxed_joints:
+            joint_command.stiffness[i] = 0.0
+            joint_command.damping[i] = 0.0
+
         all_reached = True
         for i in range(NUM_JOINTS):
+            if i in self.relaxed_joints:
+                # Don't control relaxed joints
+                continue
             if not self.reached_targets[i]:
                 if self.current_steps[i] < len(self.interpolated_positions[i]):
                     joint_command.position[i] = self.interpolated_positions[i][
@@ -312,7 +374,8 @@ class FourierWithHomeNode(Node):
                 joint_command.position[i] = self.target_positions[i]
 
         joint_command.velocity = [0.0] * NUM_JOINTS
-        self.joint_command_pub.publish(joint_command)
+        if not self.dry_run:
+            self.joint_command_pub.publish(joint_command)
 
         if all_reached and not self.all_homed:
             self.get_logger().info(
@@ -324,7 +387,8 @@ class FourierWithHomeNode(Node):
             self._hold_start_time = self.get_clock().now()
 
     def _control_holding(self):
-        """Brief hold at target position before starting Fourier."""
+        """Brief hold at target position before starting Fourier.
+        Joints with HOME_POS == 0 are left relaxed."""
         hold_elapsed = (
             self.get_clock().now() - self._hold_start_time
         ).nanoseconds * 1e-9
@@ -340,14 +404,22 @@ class FourierWithHomeNode(Node):
         joint_command.torque = [0.0] * NUM_JOINTS
         joint_command.stiffness = list(self.kp_phase1)
         joint_command.damping = list(self.kd_phase1)
-        self.joint_command_pub.publish(joint_command)
+
+        # Relax joints that have HOME_POS == 0
+        for i in self.relaxed_joints:
+            joint_command.stiffness[i] = 0.0
+            joint_command.damping[i] = 0.0
+
+        if not self.dry_run:
+            self.joint_command_pub.publish(joint_command)
 
         # After a short hold (1 second), start Fourier
         if hold_elapsed >= 1.0:
             self._start_fourier_phase()
 
     def _control_fourier(self):
-        """Phase 2: run Fourier trajectory on selected joints, hold others."""
+        """Phase 2: run Fourier trajectory on selected joints, hold others.
+        Joints with HOME_POS == 0 that are NOT in the target group stay relaxed."""
         elapsed_sec = (
             self.get_clock().now() - self.fourier_start_time
         ).nanoseconds * 1e-9
@@ -365,6 +437,12 @@ class FourierWithHomeNode(Node):
         joint_command.stiffness = list(self.kp_list)
         joint_command.damping = list(self.kd_list)
 
+        # Relax joints that have HOME_POS == 0 and are NOT in the target group
+        for i in self.relaxed_joints:
+            if i not in self.target_joint_indices:
+                joint_command.stiffness[i] = 0.0
+                joint_command.damping[i] = 0.0
+
         # Soft-start blending factor
         alpha = min(elapsed_sec / SOFT_START_DURATION, 1.0)
 
@@ -381,7 +459,8 @@ class FourierWithHomeNode(Node):
                 joint_command.position[j] = self.final_positions[j]
                 joint_command.velocity[j] = 0.0
 
-        self.joint_command_pub.publish(joint_command)
+        if not self.dry_run:
+            self.joint_command_pub.publish(joint_command)
 
     # ------------------------------------------------------------------
     # Initialization
@@ -469,6 +548,12 @@ def main(argv=None):
         default=1.0,
         help="Time scaling coefficient for the trajectory (default: 1.0).",
     )
+    parser.add_argument(
+        "--dry_run",
+        type=lambda x: x.lower() in ("true", "1", "yes"),
+        default=True,
+        help="Dry run mode: skip publishing joint commands (default: True). Use '--dry_run False' to send commands.",
+    )
 
     parsed_args, unknown_args = parser.parse_known_args(argv)
 
@@ -488,12 +573,15 @@ def main(argv=None):
     print(f"Fourier YAML : {yaml_name}")
     print(f"Limb group   : {parsed_args.group}")
 
+    print(f"Dry run      : {parsed_args.dry_run}")
+
     rclpy.init(args=unknown_args)
     node = FourierWithHomeNode(
         yaml_name=yaml_name,
         target_config_path=Path(parsed_args.config_file),
         group=parsed_args.group,
         time_coeffs=parsed_args.time_coeffs,
+        dry_run=parsed_args.dry_run,
     )
 
     if not node.initialize():
