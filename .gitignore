@@ -4,6 +4,8 @@ devel/
 install/
 log/
 logs/
+bags/
+extracted/
 
 ## Catkin / Colcon workspaces
 catkin_ws/build/
