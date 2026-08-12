@@ -4,3 +4,4 @@ meshcat
 scikit-opt
 pyyaml
 rosbags
+pandas
