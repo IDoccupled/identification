@@ -100,6 +100,7 @@ class TargetLimbRegressor:
         urdf_path: Path = URDF_PATH,
         group_to_identify=GROUP_TO_IDENTIFY,
         print_info=False,
+        gravity: np.ndarray | None = None,
     ):
 
         assert urdf_path.is_file(), f"URDF file not found at: {urdf_path}"
@@ -113,6 +114,10 @@ class TargetLimbRegressor:
         self.group_to_identify = list(VALID_LIMB_GROUPS[group_to_identify])
 
         self.model = self._model_from_urdf(urdf_path)
+        self.model.gravity.linear[:] = (
+            gravity if gravity is not None else np.array([0.0, 0.0, -9.81])
+        )
+        print(f"\033[91mGravity:\n{self.model.gravity}\033[0m")
         self.data = self.model.createData()
         self.urdf_dynamics = self._load_urdf_joint_dynamics(urdf_path)
         self.all_joint_infos, self.target_joint_infos = self.collect_target_limb_info()
