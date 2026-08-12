@@ -184,16 +184,22 @@ class FourierWithHomeNode(Node):
         # Phase-1 PD gains (from target config, or fallback to pd_config)
         kp_phase1_raw = _load_grouped_config(target_cfg, "kp") or [100.0] * NUM_JOINTS
         kd_phase1_raw = _load_grouped_config(target_cfg, "kd") or [1.0] * NUM_JOINTS
-        self.kp_phase1 = (
-            kp_phase1_raw[:NUM_JOINTS]
-            if len(kp_phase1_raw) >= NUM_JOINTS
-            else kp_phase1_raw + [100.0] * (NUM_JOINTS - len(kp_phase1_raw))
-        )
-        self.kd_phase1 = (
-            kd_phase1_raw[:NUM_JOINTS]
-            if len(kd_phase1_raw) >= NUM_JOINTS
-            else kd_phase1_raw + [1.0] * (NUM_JOINTS - len(kd_phase1_raw))
-        )
+        self.kp_phase1 = [
+            float(v)
+            for v in (
+                kp_phase1_raw[:NUM_JOINTS]
+                if len(kp_phase1_raw) >= NUM_JOINTS
+                else kp_phase1_raw + [100.0] * (NUM_JOINTS - len(kp_phase1_raw))
+            )
+        ]
+        self.kd_phase1 = [
+            float(v)
+            for v in (
+                kd_phase1_raw[:NUM_JOINTS]
+                if len(kd_phase1_raw) >= NUM_JOINTS
+                else kd_phase1_raw + [1.0] * (NUM_JOINTS - len(kd_phase1_raw))
+            )
+        ]
 
         # --- Load PD config (Phase 2) ---
         with pd_config_path.open("r", encoding="utf-8") as f:
