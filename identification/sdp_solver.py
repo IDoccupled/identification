@@ -136,32 +136,29 @@ def check_lmi_feasibility(pi: np.ndarray) -> tuple[bool, float, np.ndarray]:
 # ============================================================================
 # Bound configuration — per-joint, per-parameter
 # ============================================================================
-@dataclass
 class ParamBounds:
     """
     Per-joint, per-parameter bounds for the 13-parameter vector.
+
+    The bounds are built automatically in ``__init__`` as symmetric relative
+    intervals around the prior ``pi_prior`` (the baseline), e.g. for a
+    parameter ``p`` with relative width ``rel``:
+
+        lb = p·(1 − rel)      ub = p·(1 + rel)
+
+    (off-diagonal inertia uses ±|p|·rel since it can be negative).
 
     ``lb_matrix`` / ``ub_matrix`` have shape ``(dof, 13)``.
     Use ``np.inf`` / ``-np.inf`` for unconstrained dimensions.
     To freeze a parameter: set ``lb == ub == prior``, or call ``set_frozen()``.
 
-    For convenience, use ``ParamBounds.from_relative(pi_prior, ...)``.
+    After construction, refine the baseline per-parameter with
+    ``configure_joint()``, ``apply_from_global_indices()`` or
+    ``apply_yaml_quality()``.
     """
 
-    lb_matrix: np.ndarray  # (dof, 13)
-    ub_matrix: np.ndarray  # (dof, 13)
-
-    # Hard physical constraints (merged on top of user bounds)
-    enforce_positive_mass: bool = True
-    enforce_nonneg_friction: bool = True
-
-    # Pseudo-inertia LMI relaxation:  J + eps·I₆ ≽ 0  (numerical tolerance)
-    inertia_eps: float = 1e-2
-
-    # ------------------------------------------------------------------
-    @classmethod
-    def from_relative(
-        cls,
+    def __init__(
+        self,
         pi_prior: np.ndarray,  # (dof*13,)
         rel_mass: float = 0.5,
         rel_mc: float = 0.5,
@@ -170,8 +167,13 @@ class ParamBounds:
         rel_armature: float = 0.5,
         rel_damping: float = 0.5,
         rel_friction: float = 0.5,
-        **kwargs,
-    ) -> ParamBounds:
+        *,
+        # Hard physical constraints (merged on top of user bounds)
+        enforce_positive_mass: bool = True,
+        enforce_nonneg_friction: bool = True,
+        # Pseudo-inertia LMI relaxation:  J + eps·I₆ ≽ 0  (numerical tolerance)
+        inertia_eps: float = 1e-2,
+    ):
         """
         Build bounds from symmetric relative intervals around prior values.
 
@@ -207,7 +209,11 @@ class ParamBounds:
             lb[j, 12] = p[12] * (1 - rel_friction)
             ub[j, 12] = p[12] * (1 + rel_friction)
 
-        return cls(lb_matrix=lb, ub_matrix=ub, **kwargs)
+        self.lb_matrix = lb
+        self.ub_matrix = ub
+        self.enforce_positive_mass = enforce_positive_mass
+        self.enforce_nonneg_friction = enforce_nonneg_friction
+        self.inertia_eps = inertia_eps
 
     # ------------------------------------------------------------------
     def get_bounds_for_joint(self, joint_idx: int) -> tuple[np.ndarray, np.ndarray]:
@@ -327,17 +333,18 @@ class ParamBounds:
         """
         Apply freeze/widen based on YAML ``_diagnostics.per_param`` quality labels.
 
-        Default strategy (customisable via ``overrides``):
+        Default strategy (matches ``BOUNDRY_PARAMS``, customisable via
+        ``overrides``):
 
         ===============  ======  =====
         quality           freeze  widen
         ===============  ======  =====
         null              yes     0
-        rank_deficient    yes     0
+        rank_deficient    no      0.1
         small             yes     0
-        bad               no      0.05
-        ok                no      0.1
-        good              no      0.3
+        bad               no      0.1
+        ok                no      0.3
+        good              no      0.5
         ===============  ======  =====
 
         Parameters
@@ -1120,8 +1127,9 @@ def main():
         urdf_true_path=URDF_TRUE_PATH,  # ← change to NOMINAL_URDF for real test
     )
 
-    # 2. Configure bounds
-    bounds = ParamBounds.from_relative(
+    # 2. Configure bounds — baseline from relative intervals around prior,
+    #    then refine (freeze/widen) per-parameter below.
+    bounds = ParamBounds(
         pi_prior=data["pi_prior"],
         rel_mass=0.3,
         rel_mc=0.5,
