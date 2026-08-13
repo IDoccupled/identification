@@ -184,22 +184,10 @@ class FourierWithHomeNode(Node):
         # Phase-1 PD gains (from target config, or fallback to pd_config)
         kp_phase1_raw = _load_grouped_config(target_cfg, "kp") or [100.0] * NUM_JOINTS
         kd_phase1_raw = _load_grouped_config(target_cfg, "kd") or [1.0] * NUM_JOINTS
-        self.kp_phase1 = [
-            float(v)
-            for v in (
-                kp_phase1_raw[:NUM_JOINTS]
-                if len(kp_phase1_raw) >= NUM_JOINTS
-                else kp_phase1_raw + [100.0] * (NUM_JOINTS - len(kp_phase1_raw))
-            )
-        ]
-        self.kd_phase1 = [
-            float(v)
-            for v in (
-                kd_phase1_raw[:NUM_JOINTS]
-                if len(kd_phase1_raw) >= NUM_JOINTS
-                else kd_phase1_raw + [1.0] * (NUM_JOINTS - len(kd_phase1_raw))
-            )
-        ]
+
+        assert len(kd_phase1_raw) >= NUM_JOINTS
+        self.kp_phase1 = [float(v) for v in (kp_phase1_raw[:NUM_JOINTS])]
+        self.kd_phase1 = [float(v) for v in (kd_phase1_raw[:NUM_JOINTS])]
 
         # --- Load PD config (Phase 2) ---
         with pd_config_path.open("r", encoding="utf-8") as f:
@@ -222,7 +210,7 @@ class FourierWithHomeNode(Node):
         if self.dry_run:
             self.get_logger().warn(
                 "DRY RUN mode — no joint commands will be published. "
-                "Use --no-dry_run to send commands to the robot."
+                "Use < --dry_run false > to send commands to the robot."
             )
 
         # --- Prepare Phase 2: Fourier trajectory ---
@@ -297,7 +285,7 @@ class FourierWithHomeNode(Node):
                 self.interpolated_positions.append([initial_positions[i]])
                 self.reached_targets[i] = True
                 continue
-            num_steps_i = max(self.num_steps_list[i], 2)  # at least 2 steps
+            num_steps_i = min(self.num_steps_list[i], 2000)
             start = initial_positions[i]
             end = self.target_positions[i]
             step_size = (end - start) / (num_steps_i - 1)
