@@ -302,8 +302,9 @@ def read_bag(
     try:
         conns = [c for c in reader.connections if c.topic in topics]
         accs = {c.topic: TopicAccumulator(c.topic, c.msgtype) for c in conns}
-        read_total = 0
-        for connection, ts, raw in reader.messages(connections=conns):
+        for read_total, (connection, ts, raw) in enumerate(
+            reader.messages(connections=conns)
+        ):
             acc = accs[connection.topic]
             acc.add(store.deserialize_cdr(raw, connection.msgtype), ts)
             read_total += 1
@@ -385,6 +386,7 @@ def save_npz(accs, out_path: Path):
     np.savez(out_path, **payload)
 
 
+# ruff: noqa: UP031
 def _fmt8(x) -> str:
     return "%.8g" % x
 
