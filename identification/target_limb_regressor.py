@@ -101,6 +101,7 @@ class TargetLimbRegressor:
         group_to_identify=GROUP_TO_IDENTIFY,
         print_info=False,
         gravity: np.ndarray | None = None,
+        waist_yaw_offset: float = 0.0,
     ):
 
         assert urdf_path.is_file(), f"URDF file not found at: {urdf_path}"
@@ -118,6 +119,30 @@ class TargetLimbRegressor:
             gravity if gravity is not None else np.array([0.0, 0.0, -9.81])
         )
         print(f"\033[91mGravity:\n{self.model.gravity}\033[0m")
+
+        # Fixed waist-yaw (J12_WAIST_YAW) value between the IMU/base frame and
+        # the upper body. During data collection this joint may be non-zero,
+        # which rotates the target limb (e.g. arm/neck) relative to gravity.
+        # It is applied to the full-state q whenever the waist is NOT the group
+        # being identified (i.e. only when the waist value is not provided by
+        # the target-limb states).
+        self.waist_yaw_offset = float(waist_yaw_offset)
+        if (
+            self.waist_yaw_offset != 0.0
+            and WAIST_Q_INDICES[0] not in self.group_to_identify
+        ):
+            waist_idx = WAIST_Q_INDICES[0]
+            q_lower = self.model.lowerPositionLimit[waist_idx]
+            q_upper = self.model.upperPositionLimit[waist_idx]
+            if not (q_lower <= self.waist_yaw_offset <= q_upper):
+                print(
+                    f"\033[91mWarning: waist_yaw_offset={self.waist_yaw_offset:.4f} "
+                    f"is outside waist joint limits "
+                    f"[{q_lower:.4f}, {q_upper:.4f}]\033[0m"
+                )
+        print(
+            f"\033[91mWaist yaw offset (J12): {self.waist_yaw_offset:.4f}\033[0m"
+        ) if print_info else None
         self.data = self.model.createData()
         self.urdf_dynamics = self._load_urdf_joint_dynamics(urdf_path)
         self.all_joint_infos, self.target_joint_infos = self.collect_target_limb_info()
@@ -291,6 +316,20 @@ class TargetLimbRegressor:
 
         return all_infos, target_infos
 
+    def _apply_fixed_joint_offsets(self, q: np.ndarray) -> np.ndarray:
+        """Apply fixed joint-position offsets for joints NOT being identified.
+
+        Currently only the waist-yaw (J12) offset between the IMU/base frame and
+        the upper body is applied; it is only used when the waist is not the
+        target group (otherwise the actual waist value comes from the data).
+        """
+        if (
+            self.waist_yaw_offset != 0.0
+            and WAIST_Q_INDICES[0] not in self.group_to_identify
+        ):
+            q[WAIST_Q_INDICES[0]] = self.waist_yaw_offset
+        return q
+
     def state_size_check_and_form(
         self, q: list | np.ndarray, v: list | np.ndarray, a: list | np.ndarray
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -307,6 +346,7 @@ class TargetLimbRegressor:
         for i, v_idx in enumerate(self.group_to_identify):
             formed_v[v_idx] = v[i]
             formed_a[v_idx] = a[i]
+        self._apply_fixed_joint_offsets(formed_q)
         return formed_q, formed_v, formed_a
 
     def sample_state(self, target_v_indices):
@@ -315,6 +355,7 @@ class TargetLimbRegressor:
             low = self.model.lowerPositionLimit[q_idx]
             high = self.model.upperPositionLimit[q_idx]
             q[q_idx] = np.random.uniform(low, high)
+        self._apply_fixed_joint_offsets(q)
 
         v = np.zeros(self.model.nv)
         a = np.zeros(self.model.nv)
@@ -761,9 +802,12 @@ def main():
         tau_excess_normalized,
         collided,
     ) = regressor.compute_regressor(
-        q=[-1.6, 1.5, 0.0, 0.0, 0.0],
-        v=[0.5, 0.4, 0.3, 0.2, 0.1],
-        a=[10.0, 8.0, 5.0, 3.0, 1.0],
+        # q=[-1.6, 1.5, 0.0, 0.0, 0.0],
+        # v=[0.5, 0.4, 0.3, 0.2, 0.1],
+        # a=[10.0, 8.0, 5.0, 3.0, 1.0],
+        q=[0, 0, 0, 0, 0],
+        v=[0, 0, 0, 0, 0],
+        a=[0, 0, 0, 0, 0],
         print_info=True,
     )
     regressor.print_regressor_info(
