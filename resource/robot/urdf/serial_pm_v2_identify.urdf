@@ -4,11 +4,34 @@ Commit Version: 1.6.0-1-g15f4949  Build Version: 1.6.7594.29634
 For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
 <robot name="pm_v2">
 
+    <link name="LINK_BASE">
+        <inertial>
+            <origin xyz="0.01525750 -0.00001621 -0.02333111" rpy="0 0 0"/>
+            <mass value="4.08640035"/>
+            <inertia ixx="0.02021593" ixy="-0.00000120" ixz="-0.00037784" iyy="0.01531282" iyz="-0.00000295" izz="0.01216285"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_BASE.STL"/>
+            </geometry>
+            <material name="">
+                <color rgba="0.75294 0.75294 0.75294 1"/>
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_BASE.STL"/>
+            </geometry>
+        </collision>
+    </link>
+
     <link name="lay_down"/>
     <joint name="LAY_DOWN" type="fixed">
-        <origin xyz="0 0 0" rpy="0 -1.57 0"/>
-        <parent link="lay_down"/>
-        <child link="LINK_BASE"/>
+        <origin xyz="0 0 0" rpy="0 1.57 0"/>
+        <parent link="LINK_BASE"/>
+        <child link="lay_down"/>
     </joint>
 
     <link name="table">
@@ -56,28 +79,6 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="table_leg"/>
     </joint>
 
-    <link name="LINK_BASE">
-        <inertial>
-            <origin xyz="0.01525750 -0.00001621 -0.02333111" rpy="0 0 0"/>
-            <mass value="4.08640035"/>
-            <inertia ixx="0.02021593" ixy="-0.00000120" ixz="-0.00037784" iyy="0.01531282" iyz="-0.00000295" izz="0.01216285"/>
-        </inertial>
-        <visual>
-            <origin xyz="0 0 0" rpy="0 0 0"/>
-            <geometry>
-                <mesh filename="package://identification/resource/robot/meshes/LINK_BASE.STL"/>
-            </geometry>
-            <material name="">
-                <color rgba="0.75294 0.75294 0.75294 1"/>
-            </material>
-        </visual>
-        <collision>
-            <origin xyz="0 0 0" rpy="0 0 0"/>
-            <geometry>
-                <mesh filename="package://identification/resource/robot/meshes/LINK_BASE.STL"/>
-            </geometry>
-        </collision>
-    </link>
     <link name="LINK_HIP_PITCH_L">
         <inertial>
             <origin xyz="0.01010860 0.04524604 -0.01196488" rpy="0 0 0"/>
