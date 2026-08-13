@@ -22,21 +22,19 @@ fourier_fit.py — 只用位置(编码器)最小二乘拟合 5 次傅里叶轨�
     * 位置 5 谐波拟合可解释 ~99.996% 方差，残差 RMS ~0.007 rad；
     * 由位置系数解析求导的理论速度 vs 实测速度残差 ~0.83% (v 的 std)。
 
-本脚本只负责"拟合 + 保存 + 打印诊断"，不含任何画图代码。
-画图统一由 fourier_trajectory.py 的 plot_from_yaml() 从保存的 YAML 完成
-（可传 --time-coeffs 手动指定时间倍率以复现采集轨迹）。
+本脚本流程：拟合 -> 保存 YAML -> 可选本地画图对比（--plot）。
+画图时用 fourier_trajectory 从保存的 YAML 生成理论 q/v/a（与真实回放同一代码路径），
+叠加 bag 原始位置 / 速度并画残差小图；理论轨迹自动按估计的 f0 对齐录制频率。
 
 用法：
     python identification/fourier_fit.py --bag 13_55_31
     python identification/fourier_fit.py --bag 13_55_31 --joints 13 14 15
     python identification/fourier_fit.py --bag 13_55_31 --joints 13 --f0 0.15   # 手动指定 f0
-    python identification/fourier_fit.py --bag 13_55_31 --time-coeffs 0.75     # 保存后自动画图
+    python identification/fourier_fit.py --bag 13_55_31 --plot                 # 保存后画对比图
 
 输出：
     拟合结果按 fourier_trajectory.py 的 YAML 格式保存到
     trajectory_coefficients/ 目录（joint_0..joint_{k-1}，含 a / b / q0）。
-    保存后如需画图：
-        python identification/fourier_trajectory.py --yaml recovered_xxx.yaml --time-coeffs 0.75
 """
 
 import argparse
@@ -48,9 +46,9 @@ import yaml
 
 try:
     # 以包内模块方式导入（安装后 / colcon build）
-    from .fourier_trajectory import TRAJ_PERIOD, plot_from_yaml
+    from .fourier_trajectory import FourierTrajectory, TRAJ_PERIOD
 except ImportError:  # 以脚本方式直接运行
-    from fourier_trajectory import TRAJ_PERIOD, plot_from_yaml
+    from fourier_trajectory import FourierTrajectory, TRAJ_PERIOD
 
 N_HARMONICS = 5  # 与 fourier_trajectory.py 一致
 F0_MIN, F0_MAX = 0.05, 0.5  # f0 搜索范围（time_coeffs 归一化后约 0.1..0.4）
@@ -58,7 +56,7 @@ F0_MIN, F0_MAX = 0.05, 0.5  # f0 搜索范围（time_coeffs 归一化后约 0.1.
 COEFFS_DIR = Path(__file__).resolve().parent / ".." / "trajectory_coefficients"
 
 BAGS_ROOT = Path(__file__).resolve().parent / ".." / "extracted"
-TOPIC_KEY = "hardware_joint_command_feedback"  # 对应 /hardware/joint_command_feedback
+TOPIC_KEY = "hardware_joint_state"  # 对应 /hardware/joint_state
 DEFAULT_BAG = "rosbag2_1970_01_01-13_55_31"
 DEFAULT_JOINTS = [13, 14, 15, 16, 17]
 
@@ -257,6 +255,95 @@ def save_coeffs_yaml(results: list, out_name: str, bag: str = "") -> Path:
     return out_path
 
 
+# ---------------------------------------------------------------------------
+# 6) 本地画图：用 fourier_trajectory 生成理论 q/v/a，与 bag 原始数据叠加对比
+# ---------------------------------------------------------------------------
+def plot_compare(
+    yaml_name: str,
+    dim: int,
+    robot_joints: list,
+    t_raw: np.ndarray,
+    q_raw: np.ndarray,
+    v_raw: np.ndarray,
+    f0: float,
+    sample_rate: float = 500.0,
+):
+    """画每个关节的对比图：原始 vs 理论 q/v + 底部残差小图。
+
+    理论 q/v 由 fourier_trajectory 从保存的 YAML 生成，并按估计的 f0 自动对齐
+    录制频率（time_coeffs = TRAJ_PERIOD × f0），一周期信号按相位折叠延拓到
+    整个原始时间轴后与 bag 原始数据叠加。
+
+    :param yaml_name: trajectory_coefficients 下的 YAML 文件名。
+    :param dim: 关节数。
+    :param robot_joints: 各 YAML 关节对应的机器人关节号列表。
+    :param t_raw, q_raw, v_raw: bag 原始时间 / 位置 / 速度。
+    :param f0: 估计（或手动指定）的基频，用于对齐录制频率。
+    :param sample_rate: 生成理论轨迹的采样率。
+    :return: Figure 列表（由调用方统一 plt.show()）。
+    """
+    import matplotlib.pyplot as plt
+
+    tc = TRAJ_PERIOD * f0  # 与录制频率对齐的 time_coeffs
+    traj = FourierTrajectory(dim=dim, sample_rate=sample_rate, time_coeffs=tc)
+    q_th, v_th, _ = traj.generate_trajectory_from_yaml(yaml_name)
+    t_th = traj.t_array
+    period = TRAJ_PERIOD / tc  # 一周期时长（秒）
+
+    figs = []
+    for i, rj in enumerate(robot_joints):
+        qr, vr = q_raw[:, rj], v_raw[:, rj]
+        # 一周期理论值按相位折叠延拓到整个原始时间轴
+        phase = np.mod(t_raw, period)
+        q_t = np.interp(phase, t_th, q_th[i], period=period)
+        v_t = np.interp(phase, t_th, v_th[i], period=period)
+        rq, rv = qr - q_t, vr - v_t
+
+        fig, axs = plt.subplots(
+            4,
+            1,
+            figsize=(12, 10),
+            sharex=True,
+            gridspec_kw={"height_ratios": [3, 3, 1.3, 1.3]},
+        )
+
+        # q: 原始 vs 理论
+        axs[0].plot(t_raw, qr, lw=0.5, alpha=0.7, label="raw")
+        axs[0].plot(t_raw, q_t, lw=1.2, label="theoretical (fourier_trajectory)")
+        axs[0].set_ylabel("q (rad)")
+        axs[0].set_title(
+            f"Joint {rj}  f0≈{f0:.5f} Hz  time_coeffs={tc:.6f}  "
+            f"q resid RMS {np.sqrt(np.mean(rq**2)):.5f} rad"
+        )
+        axs[0].legend(loc="upper right", fontsize=8)
+        axs[0].grid(alpha=0.3)
+
+        # v: 原始 vs 理论
+        axs[1].plot(t_raw, vr, lw=0.5, alpha=0.7, label="raw")
+        axs[1].plot(t_raw, v_t, lw=1.2, label="theoretical")
+        axs[1].set_ylabel("v (rad/s)")
+        axs[1].set_title(
+            f"v resid RMS {np.sqrt(np.mean(rv**2)):.4f} = "
+            f"{100 * np.sqrt(np.mean(rv**2)) / np.std(vr):.2f}% of v std"
+        )
+        axs[1].legend(loc="upper right", fontsize=8)
+        axs[1].grid(alpha=0.3)
+
+        # 残差小图
+        axs[2].plot(t_raw, rq, lw=0.6)
+        axs[2].set_ylabel("q resid (rad)")
+        axs[2].grid(alpha=0.3)
+
+        axs[3].plot(t_raw, rv, lw=0.6)
+        axs[3].set_ylabel("v resid (rad/s)")
+        axs[3].set_xlabel("t (s)")
+        axs[3].grid(alpha=0.3)
+
+        fig.tight_layout()
+        figs.append(fig)
+    return figs
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="用位置最小二乘拟合傅里叶轨迹，并把恢复出的系数保存到 trajectory_coefficients/"
@@ -272,11 +359,10 @@ def main():
         help="输出 YAML 文件名（默认 recovered_YYMMDD_HHMMSS.yaml）",
     )
     ap.add_argument(
-        "--time-coeffs",
-        type=float,
-        default=None,
-        help="若指定，保存后调用 fourier_trajectory.plot_from_yaml 画图，"
-        "并按此时间倍率回放（复现采集轨迹一般用 0.75）",
+        "--plot",
+        default=True,
+        action="store_true",
+        help="保存后本地画图：对比理论 q/v 与 bag 原始数据并画残差小图",
     )
     args = ap.parse_args()
 
@@ -314,13 +400,27 @@ def main():
         + ", ".join(f"joint_{i}->{r['joint']}" for i, r in enumerate(results))
     )
     print(
-        f"  复现/画图:  python identification/fourier_trajectory.py "
+        f"  也可单独画图: python identification/fourier_trajectory.py "
         f"--yaml {out_name} --time-coeffs <录制时的值>"
     )
 
-    # 画图全部委托给 fourier_trajectory.plot_from_yaml（本脚本无任何绘图代码）
-    if args.time_coeffs is not None:
-        plot_from_yaml(out_name, dim=len(results), time_coeffs=args.time_coeffs)
+    # 本地画图：fourier_trajectory 生成理论 q/v/a，叠加 bag 原始数据 + 残差小图
+    if args.plot:
+        import matplotlib.pyplot as plt
+
+        sample_rate = 1.0 / float(np.median(np.diff(t)))
+        figs = plot_compare(
+            yaml_name=out_name,
+            dim=len(results),
+            robot_joints=[r["joint"] for r in results],
+            t_raw=t,
+            q_raw=q,
+            v_raw=v,
+            f0=results[0]["f0"],
+            sample_rate=sample_rate,
+        )
+        if figs:
+            plt.show()
 
 
 if __name__ == "__main__":
