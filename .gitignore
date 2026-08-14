@@ -6,6 +6,7 @@ log/
 logs/
 bags/
 extracted/
+*.npz
 
 ## Catkin / Colcon workspaces
 catkin_ws/build/
