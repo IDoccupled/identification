@@ -16,21 +16,22 @@ fourier_fit.py — 只用位置(编码器)最小二乘拟合 5 次傅里叶轨�
 得到的 v、a 与拟合用的位置完全自洽，且天然无噪声放大的问题。
 
 关键结论（已在本包实际数据上验证，bag 13_55_31，关节 13）：
-    * 真实基频 f0 不是标称 0.2 Hz！该 bag 是用 time_coeffs=0.75 跑的，
-      周期 = 5 / 0.75 = 6.667 s  ->  f0 = 0.15 Hz。
-      因此必须先估计 f0（FFT 粗扫 + 最小二乘细扫），不能直接套标称值。
+    * f0 直接由录制时的 time_coeffs 决定：f0 = time_coeffs / TRAJ_PERIOD
+      （该 bag 用 time_coeffs=0.75 跑，周期 = 5/0.75 = 6.667 s -> f0 = 0.15 Hz）。
+      因此不再从数据估计 f0：time_coeffs 在 extract_bag_data.py 提取时写入
+      <bag>/summary.json，本脚本默认从 summary.json 读取，也可 --time-coeffs 覆盖，
+      避免扫描 f0 引入的人为误差。
     * 位置 5 谐波拟合可解释 ~99.996% 方差，残差 RMS ~0.007 rad；
     * 由位置系数解析求导的理论速度 vs 实测速度残差 ~0.83% (v 的 std)。
 
 本脚本流程：拟合 -> 保存 YAML -> 可选本地画图对比（--plot）。
 画图时用 fourier_trajectory 从保存的 YAML 生成理论 q/v/a（与真实回放同一代码路径），
-叠加 bag 原始位置 / 速度并画残差小图；理论轨迹自动按估计的 f0 对齐录制频率。
+叠加 bag 原始位置 / 速度并画残差小图；理论轨迹按手动指定的 time_coeffs 对齐录制频率。
 
-用法：
-    python identification/fourier_fit.py --bag 13_55_31
-    python identification/fourier_fit.py --bag 13_55_31 --joints 13 14 15
-    python identification/fourier_fit.py --bag 13_55_31 --joints 13 --f0 0.15   # 手动指定 f0
-    python identification/fourier_fit.py --bag 13_55_31 --plot                 # 保存后画对比图
+用法（--time-coeffs 可省略，默认从 bag 的 summary.json 读取；在包根目录 src/identification 下运行）：
+    python -m identification.fourier_fit --bag 13_55_31
+    python -m identification.fourier_fit --bag 13_55_31 --joints 13 14 15
+    python -m identification.fourier_fit --bag 13_55_31 --time-coeffs 0.75 --plot   # 手动覆盖 + 画图
 
 输出：
     拟合结果按 fourier_trajectory.py 的 YAML 格式保存到
@@ -39,23 +40,20 @@ fourier_fit.py — 只用位置(编码器)最小二乘拟合 5 次傅里叶轨�
 
 import argparse
 import datetime
+import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import yaml
 
-try:
-    # 以包内模块方式导入（安装后 / colcon build）
-    from .fourier_trajectory import FourierTrajectory, TRAJ_PERIOD
-except ImportError:  # 以脚本方式直接运行
-    from fourier_trajectory import FourierTrajectory, TRAJ_PERIOD
+from identification.fourier_trajectory import FourierTrajectory, TRAJ_PERIOD
 
 N_HARMONICS = 5  # 与 fourier_trajectory.py 一致
-F0_MIN, F0_MAX = 0.05, 0.5  # f0 搜索范围（time_coeffs 归一化后约 0.1..0.4）
 
 COEFFS_DIR = Path(__file__).resolve().parent / ".." / "trajectory_coefficients"
 
-BAGS_ROOT = Path(__file__).resolve().parent / ".." / "extracted"
+BAGS_ROOT = Path(__file__).resolve().parent / ".." / "bag_data"
 TOPIC_KEY = "hardware_joint_state"  # 对应 /hardware/joint_state
 DEFAULT_BAG = "rosbag2_1970_01_01-13_55_31"
 DEFAULT_JOINTS = [13, 14, 15, 16, 17]
@@ -65,12 +63,12 @@ DEFAULT_JOINTS = [13, 14, 15, 16, 17]
 # 1) 数据加载
 # ---------------------------------------------------------------------------
 def load_bag(bag_name: str):
-    """从 extracted/<bag>/data.npz 读取 (t, position, velocity)。
+    """从 <bag>/csv/hardware_joint_state.csv 读取 (t, position, velocity)。
 
     支持短名（如 "13_55_31"）：自动按 glob 匹配到完整 bag 目录名。
     """
     bag_dir = BAGS_ROOT / bag_name
-    if not (bag_dir / "data.npz").is_file():
+    if not (bag_dir / "csv").is_dir():
         # 尝试短名模糊匹配，例如 "13_55_31" -> "rosbag2_1970_01_01-13_55_31"
         matches = sorted(BAGS_ROOT.glob(f"*{bag_name}*"))
         if len(matches) == 1:
@@ -79,15 +77,16 @@ def load_bag(bag_name: str):
             raise FileNotFoundError(
                 f"短名 '{bag_name}' 匹配到多个 bag: {[m.name for m in matches]}"
             )
-    npz_path = bag_dir / "data.npz"
-    if not npz_path.is_file():
-        raise FileNotFoundError(f"data.npz not found: {npz_path}")
-    d = np.load(npz_path)
-    t = d[f"{TOPIC_KEY}.t_s"].astype(float)
-    q = d[f"{TOPIC_KEY}.position"].astype(float)  # (N, n_joints)
-    v = d[f"{TOPIC_KEY}.velocity"].astype(float)  # (N, n_joints)
+    csv_path = bag_dir / "csv" / f"{TOPIC_KEY}.csv"
+    if not csv_path.is_file():
+        raise FileNotFoundError(f"CSV not found: {csv_path}")
+    df = pd.read_csv(csv_path)
+    n_joints = sum(c.startswith("position_") for c in df.columns)
+    t = df["t_s"].to_numpy(dtype=float)
+    q = df[[f"position_{i}" for i in range(n_joints)]].to_numpy(dtype=float)
+    v = df[[f"velocity_{i}" for i in range(n_joints)]].to_numpy(dtype=float)
     t = t - t[0]  # 归零，便于分析
-    print(f"  数据: {npz_path}")
+    print(f"  数据: {csv_path}")
     print(
         f"  N={len(t)}  时长={t[-1]:.2f}s  dt~{np.median(np.diff(t)) * 1e3:.2f}ms  "
         f"关节数={q.shape[1]}"
@@ -95,40 +94,22 @@ def load_bag(bag_name: str):
     return t, q, v, bag_dir
 
 
-# ---------------------------------------------------------------------------
-# 2) 基频 f0 估计（粗扫 + 细扫，最小二乘残差最小处即真实 f0）
-# ---------------------------------------------------------------------------
-def _ls_residual(t, y, f0, n_harm=N_HARMONICS):
-    """在给定 f0 下，用 5 谐波 + 直流基做最小二乘，返回 (残差RMS, 系数)。"""
-    w = 2.0 * np.pi * f0
-    cols = [np.sin(n * w * t) for n in range(1, n_harm + 1)]
-    cols += [np.cos(n * w * t) for n in range(1, n_harm + 1)]
-    cols.append(np.ones_like(t))
-    A = np.column_stack(cols)
-    c, *_ = np.linalg.lstsq(A, y, rcond=None)
-    rms = float(np.sqrt(np.mean((y - A @ c) ** 2)))
-    return rms, c
+def _read_summary_time_coeffs(bag_dir) -> float | None:
+    """从 <bag>/summary.json 读取录制时的 time_coeffs（extract_bag_data.py 写入）。
 
-
-def estimate_f0(t, y, f0_lo=F0_MIN, f0_hi=F0_MAX, n_harm=N_HARMONICS):
-    """粗网格 + 细网格扫描，找让 5 谐波拟合残差最小的 f0。
-
-    注意不能只靠 FFT 找峰：某次谐波可能才是最大峰（例如关节 13 的
-    3 次谐波最大），直接取峰再除以谐波次数会得到非整数倍的错误结果。
+    没有该字段（例如旧数据）时返回 None，由调用方用 --time-coeffs 覆盖或报错。
     """
-    # 粗扫
-    f_coarse = np.linspace(f0_lo, f0_hi, 401)
-    res = np.array([_ls_residual(t, y, f)[0] for f in f_coarse])
-    f_best = f_coarse[int(np.argmin(res))]
-    # 细扫（围绕粗扫最优 ±0.005 Hz）
-    f_fine = np.linspace(max(f0_lo, f_best - 0.005), min(f0_hi, f_best + 0.005), 401)
-    res_f = np.array([_ls_residual(t, y, f)[0] for f in f_fine])
-    f_final = f_fine[int(np.argmin(res_f))]
-    return f_final
+    p = bag_dir / "summary.json"
+    if not p.is_file():
+        return None
+    with open(p) as f:
+        data = json.load(f)
+    tc = data.get("time_coeffs")
+    return float(tc) if tc is not None else None
 
 
 # ---------------------------------------------------------------------------
-# 3) 位置拟合 + 解析求导
+# 2) 位置拟合 + 解析求导（f0 由 time_coeffs 决定，不再估计）
 # ---------------------------------------------------------------------------
 def fit_position(t, y, f0, n_harm=N_HARMONICS):
     """对位置做 5 谐波最小二乘拟合，返回各项与诊断。"""
@@ -185,21 +166,23 @@ def compare_v(v_meas, v_th):
 
 
 # ---------------------------------------------------------------------------
-# 4) 主流程
+# 3) 主流程
 # ---------------------------------------------------------------------------
-def analyze_joint(t, q, v, joint, f0_override=None):
-    """对单个关节做完整分析，返回统计 dict（不含任何画图）。"""
+def analyze_joint(t, q, v, joint, f0):
+    """对单个关节做完整分析，返回统计 dict（不含任何画图）。
+
+    :param f0: 手动指定的基频（Hz），由 --time-coeffs / TRAJ_PERIOD 得到。
+    """
     qj, vj = q[:, joint], v[:, joint]
     if np.std(qj) < 1e-6:
         print(f"  关节 {joint:2d}: 数据全 0 / 静止，跳过")
         return None
 
-    f0 = f0_override if f0_override is not None else estimate_f0(t, qj)
     fit = fit_position(t, qj, f0)
     cmp_ = compare_v(vj, fit["v_th"])
 
     print(f"\n=== 关节 {joint} ===")
-    print(f"  f0 估计       : {fit['f0']:.5f} Hz  (周期 {1 / fit['f0']:.4f} s)")
+    print(f"  f0 手动指定   : {fit['f0']:.2f} Hz  (周期 {1 / fit['f0']:.4f} s)")
     print(
         f"  位置拟合      : 解释方差 {fit['explained'] * 100:.4f}%  残差RMS {fit['res_rms']:.5f} rad"
     )
@@ -215,21 +198,24 @@ def analyze_joint(t, q, v, joint, f0_override=None):
 
 
 # ---------------------------------------------------------------------------
-# 5) 保存恢复出的轨迹系数（fourier_trajectory.py 的 YAML 格式）
+# 4) 保存恢复出的轨迹系数（fourier_trajectory.py 的 YAML 格式）
 # ---------------------------------------------------------------------------
-def save_coeffs_yaml(results: list, out_name: str, bag: str = "") -> Path:
+def save_coeffs_yaml(
+    results: list, out_name: str, bag: str = "", time_coeffs: float | None = None
+) -> Path:
     """把恢复出的轨迹系数按 fourier_trajectory.py 的 YAML 格式保存。
 
     拟合得到的位置系数  q = dc + Σ_n [ s_n·sin(n·ω0·t) + c_n·cos(n·ω0·t) ]，
     换算成 fourier_trajectory.py 的 (a, b, q0) 约定：
         a_n = n·ω_nominal·s_n ,   b_n = −n·ω_nominal·c_n ,   q0 = dc
     其中 ω_nominal = 2π/TRAJ_PERIOD（标称角频率）。
-    这样回放时只要传入与录制一致的 time_coeffs（如 0.75 -> f0=0.15Hz）
+    这样回放时只要传入与录制一致的 time_coeffs（--time-coeffs 手动指定）
     即可复现采集到的轨迹；YAML 本身格式不变。
 
     :param results: analyze_joint 返回的 dict 列表（按关节顺序）。
     :param out_name: 输出文件名，如 "recovered_260813_180000.yaml"。
     :param bag: bag 名，写进 _meta 备忘。
+    :param time_coeffs: 辨识时手动提供的时间系数，写进 _meta 备忘。
     :return: 保存后的完整路径。
     """
     w_nominal = 2.0 * np.pi / TRAJ_PERIOD
@@ -244,8 +230,9 @@ def save_coeffs_yaml(results: list, out_name: str, bag: str = "") -> Path:
     # 备忘信息（load_coeffs 只读 joint_ 开头的键，_meta 会被跳过，不影响加载）
     data["_meta"] = {
         "source_bag": bag,
-        "estimated_f0_hz": float(results[0]["f0"]),
-        "note": "recovered by fourier_fit.py; replay with the recording time_coeffs",
+        "time_coeffs": float(time_coeffs) if time_coeffs is not None else None,
+        "f0_hz": float(results[0]["f0"]),
+        "note": "recovered by fourier_fit.py; time_coeffs from bag summary.json (or --time-coeffs) at fit time",
     }
 
     COEFFS_DIR.mkdir(parents=True, exist_ok=True)
@@ -256,7 +243,7 @@ def save_coeffs_yaml(results: list, out_name: str, bag: str = "") -> Path:
 
 
 # ---------------------------------------------------------------------------
-# 6) 本地画图：用 fourier_trajectory 生成理论 q/v/a，与 bag 原始数据叠加对比
+# 5) 本地画图：用 fourier_trajectory 生成理论 q/v/a，与 bag 原始数据叠加对比
 # ---------------------------------------------------------------------------
 def plot_compare(
     yaml_name: str,
@@ -270,15 +257,15 @@ def plot_compare(
 ):
     """画每个关节的对比图：原始 vs 理论 q/v + 底部残差小图。
 
-    理论 q/v 由 fourier_trajectory 从保存的 YAML 生成，并按估计的 f0 自动对齐
-    录制频率（time_coeffs = TRAJ_PERIOD × f0），一周期信号按相位折叠延拓到
-    整个原始时间轴后与 bag 原始数据叠加。
+    理论 q/v 由 fourier_trajectory 从保存的 YAML 生成，并按手动指定的 f0
+    对齐录制频率（time_coeffs = TRAJ_PERIOD × f0），一周期信号按相位折叠
+    延拓到整个原始时间轴后与 bag 原始数据叠加。
 
     :param yaml_name: trajectory_coefficients 下的 YAML 文件名。
     :param dim: 关节数。
     :param robot_joints: 各 YAML 关节对应的机器人关节号列表。
     :param t_raw, q_raw, v_raw: bag 原始时间 / 位置 / 速度。
-    :param f0: 估计（或手动指定）的基频，用于对齐录制频率。
+    :param f0: 手动指定的基频（= time_coeffs / TRAJ_PERIOD），用于对齐录制频率。
     :param sample_rate: 生成理论轨迹的采样率。
     :return: Figure 列表（由调用方统一 plt.show()）。
     """
@@ -312,7 +299,7 @@ def plot_compare(
         axs[0].plot(t_raw, q_t, lw=1.2, label="theoretical (fourier_trajectory)")
         axs[0].set_ylabel("q (rad)")
         axs[0].set_title(
-            f"Joint {rj}  f0≈{f0:.5f} Hz  time_coeffs={tc:.6f}  "
+            f"Joint {rj}  f0={f0:.2f} Hz  time_coeffs={tc:.2f}  "
             f"q resid RMS {np.sqrt(np.mean(rq**2)):.5f} rad"
         )
         axs[0].legend(loc="upper right", fontsize=8)
@@ -348,11 +335,16 @@ def main():
     ap = argparse.ArgumentParser(
         description="用位置最小二乘拟合傅里叶轨迹，并把恢复出的系数保存到 trajectory_coefficients/"
     )
-    ap.add_argument("--bag", default=DEFAULT_BAG, help="extracted 下的 bag 名")
+    ap.add_argument("--bag", default=DEFAULT_BAG, help="bag_data 下的 bag 名")
     ap.add_argument(
         "--joints", nargs="+", type=int, default=DEFAULT_JOINTS, help="要分析的关节号"
     )
-    ap.add_argument("--f0", type=float, default=None, help="手动指定基频 f0 (Hz)")
+    ap.add_argument(
+        "--time-coeffs",
+        type=float,
+        default=None,
+        help="时间系数（默认从 bag summary.json 读取；extract_bag_data.py --time-coeffs 写入）",
+    )
     ap.add_argument(
         "--out",
         default=None,
@@ -366,12 +358,28 @@ def main():
     )
     args = ap.parse_args()
 
-    t, q, v, _ = load_bag(args.bag)
+    t, q, v, bag_dir = load_bag(args.bag)
+
+    # time_coeffs 默认从 bag summary.json 读取（extract 时写入），可 --time-coeffs 覆盖
+    time_coeffs = args.time_coeffs
+    if time_coeffs is None:
+        time_coeffs = _read_summary_time_coeffs(bag_dir)
+    if time_coeffs is None:
+        raise SystemExit(
+            f"bag {args.bag} 的 summary.json 里没有 time_coeffs，请用 --time-coeffs "
+            "指定，或重新用 extract_bag_data.py --time-coeffs <值> 提取"
+        )
+    time_coeffs = float(time_coeffs)
+    f0 = time_coeffs / TRAJ_PERIOD
+    print(
+        f"\nf0 = time_coeffs / TRAJ_PERIOD = {time_coeffs:.2f} / {TRAJ_PERIOD}"
+        f" = {f0:.2f} Hz"
+    )
 
     print("\n===== 逐个关节分析 =====")
     results = []
     for j in args.joints:
-        r = analyze_joint(t, q, v, j, f0_override=args.f0)
+        r = analyze_joint(t, q, v, j, f0)
         if r is not None:
             results.append(r)
 
@@ -383,7 +391,7 @@ def main():
         )
         for r in results:
             print(
-                f"{r['joint']:>4} {r['f0']:>9.5f} {r['explained'] * 100:>9.3f}% "
+                f"{r['joint']:>4} {r['f0']:>9.2f} {r['explained'] * 100:>9.3f}% "
                 f"{r['v_rms']:>10.4f} {r['v_pct']:>8.2f}% {r['corr']:>10.6f} "
                 f"{np.abs(r['a_th']).max():>9.3f}"
             )
@@ -393,7 +401,9 @@ def main():
 
     # 保存恢复出的轨迹系数（格式与 fourier_trajectory.py 一致）
     out_name = args.out or f"recovered_{datetime.datetime.now():%y%m%d_%H%M%S}.yaml"
-    out_path = save_coeffs_yaml(results, out_name, bag=args.bag)
+    out_path = save_coeffs_yaml(
+        results, out_name, bag=args.bag, time_coeffs=time_coeffs
+    )
     print(f"\n恢复的轨迹系数已保存: {out_path}")
     print(
         "  关节映射 (YAML joint_i -> 机器人关节): "
