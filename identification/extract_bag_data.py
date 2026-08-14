@@ -593,7 +593,6 @@ def main(argv=None):
     parser.add_argument(
         "--time-coeffs",
         type=float,
-        default=None,
         help="录制时 fourier_trajectory 的时间系数（如 0.75），写入 summary.json 供下游读取",
     )
     parser.add_argument(
