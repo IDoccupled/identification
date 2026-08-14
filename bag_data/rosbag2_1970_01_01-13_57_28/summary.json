@@ -1,0 +1,866 @@
+{
+  "bag": "rosbag2_1970_01_01-13_57_28",
+  "start_time_ns": 21448388045568,
+  "end_time_ns": 21498520646145,
+  "duration_s": 50.132601,
+  "topics": {
+    "/hardware/joint_command": {
+      "msgtype": "interface_protocol/msg/JointCommand",
+      "count": 24156,
+      "rate_hz": 499.96,
+      "fields": {
+        "t_recv_ns": {
+          "shape": [
+            24156
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 21450206548096.0,
+          "max": 21498520646144.0,
+          "mean": 21474363154075.688,
+          "nan": 0
+        },
+        "t_stamp_ns": {
+          "shape": [
+            24156
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 21450206206176.0,
+          "max": 21498520382976.0,
+          "mean": 21474362888799.06,
+          "nan": 0
+        },
+        "t_s": {
+          "shape": [
+            24156
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 48.314098048,
+          "mean": 24.156605979689356,
+          "nan": 0
+        },
+        "frame_id": {
+          "shape": [
+            24156
+          ],
+          "dtype": "<U1",
+          "kind": "U",
+          "values": [
+            ""
+          ]
+        },
+        "parallel_parser_type": {
+          "shape": [
+            24156
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "nan": 0
+        },
+        "position": {
+          "shape": [
+            24156,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -2.7769716545666685,
+          "max": 2.616208483012829,
+          "mean": 0.01118754308327282,
+          "nan": 0
+        },
+        "velocity": {
+          "shape": [
+            24156,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -9.713437228564505,
+          "max": 8.76438040994801,
+          "mean": -0.00240615864434535,
+          "nan": 0
+        },
+        "feed_forward_torque": {
+          "shape": [
+            24156,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "nan": 0
+        },
+        "torque": {
+          "shape": [
+            24156,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "nan": 0
+        },
+        "stiffness": {
+          "shape": [
+            24156,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 100.0,
+          "mean": 20.833333333333332,
+          "nan": 0
+        },
+        "damping": {
+          "shape": [
+            24156,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 1.0,
+          "mean": 0.20833333333333334,
+          "nan": 0
+        }
+      }
+    },
+    "/hardware/joint_command_feedback": {
+      "msgtype": "interface_protocol/msg/JointCommand",
+      "count": 25067,
+      "rate_hz": 500.02,
+      "fields": {
+        "t_recv_ns": {
+          "shape": [
+            25067
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 21448390608640.0,
+          "max": 21498520298144.0,
+          "mean": 21473455473033.164,
+          "nan": 0
+        },
+        "t_stamp_ns": {
+          "shape": [
+            25067
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 1.7863729059065846e+18,
+          "max": 1.7863729560385746e+18,
+          "mean": 1.7863729309725847e+18,
+          "nan": 0
+        },
+        "t_s": {
+          "shape": [
+            25067
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 50.129689504,
+          "mean": 25.06486439316839,
+          "nan": 0
+        },
+        "frame_id": {
+          "shape": [
+            25067
+          ],
+          "dtype": "<U1",
+          "kind": "U",
+          "values": [
+            ""
+          ]
+        },
+        "parallel_parser_type": {
+          "shape": [
+            25067
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "nan": 0
+        },
+        "position": {
+          "shape": [
+            25067,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -2.7769716545666685,
+          "max": 2.616208483012829,
+          "mean": 0.012715938299147172,
+          "nan": 0
+        },
+        "velocity": {
+          "shape": [
+            25067,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -9.713437228564505,
+          "max": 8.76438040994801,
+          "mean": -0.00034786484298654816,
+          "nan": 0
+        },
+        "feed_forward_torque": {
+          "shape": [
+            25067,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "nan": 0
+        },
+        "torque": {
+          "shape": [
+            25067,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -20.526706694571168,
+          "max": 14.304795915064576,
+          "mean": -0.0626218555255772,
+          "nan": 0
+        },
+        "stiffness": {
+          "shape": [
+            25067,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 100.0,
+          "mean": 20.833333333333332,
+          "nan": 0
+        },
+        "damping": {
+          "shape": [
+            25067,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 1.0,
+          "mean": 0.20833333333333334,
+          "nan": 0
+        }
+      }
+    },
+    "/hardware/gamepad_keys": {
+      "msgtype": "interface_protocol/msg/GamepadKeys",
+      "count": 2507,
+      "rate_hz": 50.0,
+      "fields": {
+        "t_recv_ns": {
+          "shape": [
+            2507
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 21448400263424.0,
+          "max": 21498517976768.0,
+          "mean": 21473459098986.465,
+          "nan": 0
+        },
+        "t_stamp_ns": {
+          "shape": [
+            2507
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 1.786372905916529e+18,
+          "max": 1.7863729560365276e+18,
+          "mean": 1.7863729309765174e+18,
+          "nan": 0
+        },
+        "t_s": {
+          "shape": [
+            2507
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 50.117713344,
+          "mean": 25.05883556246669,
+          "nan": 0
+        },
+        "frame_id": {
+          "shape": [
+            2507
+          ],
+          "dtype": "<U1",
+          "kind": "U",
+          "values": [
+            ""
+          ]
+        },
+        "hardware_connected": {
+          "shape": [
+            2507
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "nan": 0
+        },
+        "digital_states": {
+          "shape": [
+            2507,
+            12
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "nan": 0
+        },
+        "analog_states": {
+          "shape": [
+            2507,
+            6
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "nan": 0
+        }
+      }
+    },
+    "/hardware/imu_info": {
+      "msgtype": "interface_protocol/msg/ImuInfo",
+      "count": 25068,
+      "rate_hz": 500.02,
+      "fields": {
+        "t_recv_ns": {
+          "shape": [
+            25068
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 21448388317952.0,
+          "max": 21498519923776.0,
+          "mean": 21473454099908.184,
+          "nan": 0
+        },
+        "t_stamp_ns": {
+          "shape": [
+            25068
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "nan": 0
+        },
+        "t_s": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 50.131605824,
+          "mean": 25.06578195617935,
+          "nan": 0
+        },
+        "frame_id": {
+          "shape": [
+            25068
+          ],
+          "dtype": "<U1",
+          "kind": "U",
+          "values": [
+            ""
+          ]
+        },
+        "quaternion.x": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -0.12090499699115753,
+          "max": -0.11749999970197678,
+          "mean": -0.11929601389045101,
+          "nan": 0
+        },
+        "quaternion.y": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -0.6453409790992737,
+          "max": -0.6434000134468079,
+          "mean": -0.6443751757060662,
+          "nan": 0
+        },
+        "quaternion.z": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -0.10900700092315674,
+          "max": -0.10642699897289276,
+          "mean": -0.10760348916852686,
+          "nan": 0
+        },
+        "quaternion.w": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.7467979788780212,
+          "max": 0.7486420273780823,
+          "mean": 0.7476414520289313,
+          "nan": 0
+        },
+        "rpy.x": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -0.284379997786795,
+          "max": -0.2618491889115339,
+          "mean": -0.27433129041819315,
+          "nan": 0
+        },
+        "rpy.y": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -1.425902653473337,
+          "max": -1.4211194829975002,
+          "mean": -1.42368972965545,
+          "nan": 0
+        },
+        "rpy.z": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -0.06022612721181339,
+          "max": -0.04041789704726469,
+          "mean": -0.04882899736974627,
+          "nan": 0
+        },
+        "linear_acceleration.x": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 8.740675926208496,
+          "max": 10.54587459564209,
+          "mean": 9.713055844776402,
+          "nan": 0
+        },
+        "linear_acceleration.y": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -1.1610349416732788,
+          "max": 0.2325959950685501,
+          "mean": -0.39182151960272327,
+          "nan": 0
+        },
+        "linear_acceleration.z": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -0.6560649871826172,
+          "max": 3.5967938899993896,
+          "mean": 1.3926518855491448,
+          "nan": 0
+        },
+        "angular_velocity.x": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -0.030283801360105195,
+          "max": 0.02417532333195266,
+          "mean": 0.00032119652502575236,
+          "nan": 0
+        },
+        "angular_velocity.y": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -0.01494020991996573,
+          "max": 0.014874621255744121,
+          "mean": 0.0005726641970906586,
+          "nan": 0
+        },
+        "angular_velocity.z": {
+          "shape": [
+            25068
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -0.03608583277057368,
+          "max": 0.034407421266632474,
+          "mean": 0.000673090750776192,
+          "nan": 0
+        }
+      }
+    },
+    "/hardware/joint_state": {
+      "msgtype": "interface_protocol/msg/JointState",
+      "count": 25069,
+      "rate_hz": 500.04,
+      "fields": {
+        "t_recv_ns": {
+          "shape": [
+            25069
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 21448388082144.0,
+          "max": 21498520135232.0,
+          "mean": 21473453312477.566,
+          "nan": 0
+        },
+        "t_stamp_ns": {
+          "shape": [
+            25069
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "nan": 0
+        },
+        "t_s": {
+          "shape": [
+            25069
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 50.132053088,
+          "mean": 25.065230333570863,
+          "nan": 0
+        },
+        "frame_id": {
+          "shape": [
+            25069
+          ],
+          "dtype": "<U1",
+          "kind": "U",
+          "values": [
+            ""
+          ]
+        },
+        "position": {
+          "shape": [
+            25069,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -2.818150520324707,
+          "max": 2.6087207794189453,
+          "mean": 0.012375746995133349,
+          "nan": 0
+        },
+        "velocity": {
+          "shape": [
+            25069,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -11.270084381103516,
+          "max": 9.27878189086914,
+          "mean": -0.00043139994643914495,
+          "nan": 0
+        },
+        "torque": {
+          "shape": [
+            25069,
+            24
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -16.24627685546875,
+          "max": 13.279937744140625,
+          "mean": -0.08234865788365656,
+          "nan": 0
+        }
+      }
+    },
+    "/motion/motion_state": {
+      "msgtype": "interface_protocol/msg/MotionState",
+      "count": 251,
+      "rate_hz": 5.0,
+      "fields": {
+        "t_recv_ns": {
+          "shape": [
+            251
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 21448460144032.0,
+          "max": 21498457932416.0,
+          "mean": 21473459033103.68,
+          "nan": 0
+        },
+        "t_stamp_ns": {
+          "shape": [
+            251
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "nan": 0
+        },
+        "t_s": {
+          "shape": [
+            251
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 49.997788384,
+          "mean": 24.99888907168128,
+          "nan": 0
+        },
+        "current_motion_task": {
+          "shape": [
+            251
+          ],
+          "dtype": "<U12",
+          "kind": "U",
+          "values": [
+            "joint_bridge"
+          ]
+        }
+      }
+    },
+    "/hardware/motor_debug": {
+      "msgtype": "interface_protocol/msg/MotorDebug",
+      "count": 2508,
+      "rate_hz": 50.01,
+      "fields": {
+        "t_recv_ns": {
+          "shape": [
+            2508
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 21448388073984.0,
+          "max": 21498517963680.0,
+          "mean": 21473449126613.793,
+          "nan": 0
+        },
+        "t_stamp_ns": {
+          "shape": [
+            2508
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "nan": 0
+        },
+        "t_s": {
+          "shape": [
+            2508
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 50.129889696,
+          "mean": 25.061052629792666,
+          "nan": 0
+        },
+        "tau_cmd": {
+          "shape": [
+            2508,
+            25
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": -16.31036376953125,
+          "max": 5174271.683009,
+          "mean": 205967.9724290665,
+          "nan": 0
+        },
+        "mos_temperature": {
+          "shape": [
+            2508,
+            25
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 35.937286376953125,
+          "max": 5174271.683826,
+          "mean": 206007.4905363035,
+          "nan": 0
+        },
+        "motor_temperature": {
+          "shape": [
+            2508,
+            25
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 33.66216278076172,
+          "max": 5174271.684185,
+          "mean": 206005.09959508624,
+          "nan": 0
+        }
+      }
+    },
+    "/heartbeat": {
+      "msgtype": "interface_protocol/msg/Heartbeat",
+      "count": 50,
+      "rate_hz": 1.0,
+      "fields": {
+        "t_recv_ns": {
+          "shape": [
+            50
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 21449260350528.0,
+          "max": 21498258087200.0,
+          "mean": 21473759159164.8,
+          "nan": 0
+        },
+        "t_stamp_ns": {
+          "shape": [
+            50
+          ],
+          "dtype": "int64",
+          "kind": "i",
+          "min": 1.7863729067766991e+18,
+          "max": 1.7863729557765916e+18,
+          "mean": 1.786372931276588e+18,
+          "nan": 0
+        },
+        "t_s": {
+          "shape": [
+            50
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 48.997736672,
+          "mean": 24.4988086368,
+          "nan": 0
+        },
+        "frame_id": {
+          "shape": [
+            50
+          ],
+          "dtype": "<U1",
+          "kind": "U",
+          "values": [
+            ""
+          ]
+        },
+        "startup_timestamp": {
+          "shape": [
+            50
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 1.7863729067767e+18,
+          "max": 1.7863729557765921e+18,
+          "mean": 1.786372931276588e+18,
+          "nan": 0
+        },
+        "error_code": {
+          "shape": [
+            50
+          ],
+          "dtype": "float64",
+          "kind": "f",
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "nan": 0
+        },
+        "node_name": {
+          "shape": [
+            50
+          ],
+          "dtype": "<U6",
+          "kind": "U",
+          "values": [
+            "motion"
+          ]
+        },
+        "node_status": {
+          "shape": [
+            50
+          ],
+          "dtype": "<U7",
+          "kind": "U",
+          "values": [
+            "running"
+          ]
+        },
+        "error_message": {
+          "shape": [
+            50
+          ],
+          "dtype": "<U1",
+          "kind": "U",
+          "values": [
+            ""
+          ]
+        }
+      }
+    }
+  }
+}
