@@ -8,17 +8,14 @@ Usage:
 """
 
 import sys
-import os
-
-os.environ["MUJOCO_GL"] = "egl"
 
 import numpy as np
-import mujoco
+import pinocchio as pin
 import matplotlib.pyplot as plt
 from pathlib import Path
 
 from identification.fourier_trajectory import FourierTrajectory
-from identification.sysid_three_stage import LEFT_ARM_XML
+from identification.target_limb_regressor import TargetLimbRegressor
 
 JOINT_NAMES = [
     "J13_SHOULDER_PITCH_L",
@@ -32,25 +29,48 @@ SAMPLE_RATE = 500
 
 
 def load_trajectory(yaml_path):
-    """Load (q, dq, ddq, tau) from a YAML file using the TRUE model."""
+    """Load (q, dq, ddq, tau) from a YAML file using Pinocchio inverse dynamics."""
     ft = FourierTrajectory(dim=5, sample_rate=SAMPLE_RATE)
     ft.omega_f = 2.0 * np.pi / 5.0
     ft.t_array = np.linspace(0, 5.0, int(5.0 * SAMPLE_RATE), endpoint=False)
 
     q_traj, dq_traj, ddq_traj = ft.generate_trajectory_from_yaml(yaml_path)
 
-    true_spec = mujoco.MjSpec.from_string(LEFT_ARM_XML)
-    model = true_spec.compile()
-    data = mujoco.MjData(model)
-    tau_true = np.zeros_like(q_traj.T)
-    for k in range(len(ft.t_array)):
-        data.qpos[:] = q_traj[:, k]
-        data.qvel[:] = dq_traj[:, k]
-        data.qacc[:] = ddq_traj[:, k]
-        mujoco.mj_inverse(model, data)
-        tau_true[k] = data.qfrc_inverse.copy()
+    # Build Pinocchio model via TargetLimbRegressor (URDF-based)
+    reg = TargetLimbRegressor(print_info=False)
 
-    return q_traj.T, dq_traj.T, ddq_traj.T, tau_true
+    tau = np.zeros((len(ft.t_array), 5))
+    for k in range(len(ft.t_array)):
+        q_limb = q_traj[:, k]
+        dq_limb = dq_traj[:, k]
+        ddq_limb = ddq_traj[:, k]
+
+        # Form full 24-DoF state vectors (non-target joints stay at zero)
+        q_full, v_full, a_full = reg.state_size_check_and_form(
+            q_limb, dq_limb, ddq_limb
+        )
+
+        # Inertial torque via Pinocchio Recursive Newton-Euler Algorithm
+        tau_inertial = pin.rnea(reg.model, reg.data, q_full, v_full, a_full)
+        tau_inertial_limb = tau_inertial[reg.group_to_identify]
+
+        # Armature torque: armature * acceleration
+        tau_armature = np.array(
+            [reg.target_joint_infos[i]["armature"] * ddq_limb[i] for i in range(5)]
+        )
+
+        # Friction torque: damping * v + friction * tanh(v * 100)
+        tau_friction = np.array(
+            [
+                reg.target_joint_infos[i]["damping"] * dq_limb[i]
+                + reg.target_joint_infos[i]["friction"] * np.tanh(dq_limb[i] * 1e2)
+                for i in range(5)
+            ]
+        )
+
+        tau[k] = tau_inertial_limb + tau_armature + tau_friction
+
+    return q_traj.T, dq_traj.T, ddq_traj.T, tau
 
 
 def main():
