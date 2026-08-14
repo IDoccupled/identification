@@ -25,7 +25,7 @@ def columns_select(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def main():
-    bag_dir = os.path.join(os.path.dirname(__file__), "..", "extracted", DEFAULT_BAG)
+    bag_dir = os.path.join(os.path.dirname(__file__), "..", "bag_data", DEFAULT_BAG)
     imu = read_csvs(bag_dir)
     imu_selected = columns_select(imu)
     # calculate mean for each, x,y,z

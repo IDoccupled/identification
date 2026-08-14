@@ -41,8 +41,8 @@ DEFAULT_JOINTS = [13, 14, 15, 16, 17]
 def read_csvs(bag_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     """读取 joint command 与 joint command state 两个 CSV。"""
     cmd_path = os.path.join(bag_dir, "csv", "hardware_joint_command.csv")
-    # ste_path = os.path.join(bag_dir, "csv", "hardware_joint_state.csv")
-    ste_path = os.path.join(bag_dir, "csv", "hardware_joint_command_feedback.csv")
+    ste_path = os.path.join(bag_dir, "csv", "hardware_joint_state.csv")
+    # ste_path = os.path.join(bag_dir, "csv", "hardware_joint_command_feedback.csv")
 
     print("=" * 70)
     print("① pd.read_csv —— 把 CSV 读成 DataFrame")
@@ -235,9 +235,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # bag 目录：脚本位于 identification/ 下，数据在 ../extracted/<bag>/
+    # bag 目录：脚本位于 identification/ 下，数据在 ../bag_data/<bag>/
     here = os.path.dirname(os.path.abspath(__file__))
-    bag_dir = os.path.join(os.path.dirname(here), "extracted", args.bag)
+    bag_dir = os.path.join(os.path.dirname(here), "bag_data", args.bag)
     out_dir = os.path.join(here, "..", "plots", args.bag)
 
     cmd, ste = read_csvs(bag_dir)

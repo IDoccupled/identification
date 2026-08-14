@@ -7,9 +7,9 @@ This script reads them with the pure-Python `rosbags` library (no ROS 2 shell
 environment required), deserializes every message and writes, for each bag:
 
     <out-dir>/<bag_name>/
-        data.npz              # all topics, one array per field (numpy)
         summary.json          # counts, duration and per-field statistics
-        csv/<topic>.csv       # human-readable flat tables per topic
+        csv/<topic>.csv       # human-readable flat tables per topic (default output)
+                              # (data.npz is legacy; use --format npz/both only if needed)
 
 Why a custom typestore?
 ------------------------
@@ -38,9 +38,9 @@ Options
 -------
     bags ...            bag dirs / a directory containing bag dirs / a .db3 file
                         (default: the package's `bags/` directory)
-    --out-dir DIR       output root (default: src/identification/extracted)
+    --out-dir DIR       output root (default: src/identification/bag_data)
     --topics a,b,c      only extract these topics
-    --format FMT        npz | csv | both  (default: both)
+    --format FMT        npz | csv | both  (default: csv)
     --max-messages N    stop after N messages per topic (quick checks)
     --summary-only      print the summary only, write no data files
     --msg-dir DIR       use .msg files from DIR instead of the embedded
@@ -454,7 +454,8 @@ def extract_bag(
     store,
     topics: set[str] | None = None,
     out_root=None,
-    fmt="both",
+    fmt="csv",
+    time_coeffs: float | None = None,
     max_messages: int | None = None,
     summary_only: bool = False,
 ):
@@ -466,7 +467,7 @@ def extract_bag(
     out_root = (
         Path(out_root)
         if out_root
-        else Path(__file__).resolve().parent.parent / "extracted"
+        else Path(__file__).resolve().parent.parent / "bag_data"
     )
     out_bag = out_root / bag_name
 
@@ -489,6 +490,10 @@ def extract_bag(
     accs, meta = read_bag(bag_dir, topics or set(), store, max_messages)
     summary = _stack_summary(accs, meta)
     summary["bag"] = bag_name
+    # 录制时的 time_coeffs（fourier_trajectory 时间系数）写入 summary.json，
+    # 供下游（fourier_fit / plot_residual / compare_torque）直接读取。
+    if time_coeffs is not None:
+        summary["time_coeffs"] = float(time_coeffs)
 
     # console summary
     _print_summary(bag_name, summary)
@@ -577,14 +582,20 @@ def main(argv=None):
     parser.add_argument(
         "--out-dir",
         default=None,
-        help="output root directory (default: src/identification/extracted)",
+        help="output root directory (default: src/identification/bag_data)",
     )
     parser.add_argument(
         "--topics",
         default=None,
         help="comma separated topic subset, e.g. /hardware/joint_state",
     )
-    parser.add_argument("--format", choices=["npz", "csv", "both"], default="both")
+    parser.add_argument("--format", choices=["npz", "csv", "both"], default="csv")
+    parser.add_argument(
+        "--time-coeffs",
+        type=float,
+        default=None,
+        help="录制时 fourier_trajectory 的时间系数（如 0.75），写入 summary.json 供下游读取",
+    )
     parser.add_argument(
         "--max-messages",
         type=int,
@@ -650,7 +661,15 @@ def main(argv=None):
         print(f"Warning: topics not found in any bag: {missing}", file=sys.stderr)
 
     for bd in bag_dirs:
-        extract_bag(bd, store, topics, args.out_dir, args.format, args.max_messages)
+        extract_bag(
+            bd,
+            store,
+            topics,
+            args.out_dir,
+            args.format,
+            args.max_messages,
+            time_coeffs=args.time_coeffs,
+        )
 
     print("\nDone.")
     return 0
