@@ -25,6 +25,7 @@ class FourierTrajectory:
         "armature": "pso_armature",
         "friction": "pso_friction",
         "unified": "pso_unified",
+        "recovered": "recovered",
     }
 
     @staticmethod
@@ -32,7 +33,7 @@ class FourierTrajectory:
         """
         Find the latest YAML file for a given identification type.
 
-        :param yaml_type: One of 'balance', 'armature', 'friction', 'unified'.
+        :param yaml_type: One of 'balance', 'armature', 'friction', 'unified', or 'recovered'.
         :return: Filename (not full path) of the latest matching YAML.
         :raises ValueError: If yaml_type is invalid or no matching YAML found.
         """
@@ -114,17 +115,21 @@ class FourierTrajectory:
 
         return np.array(coeffs_list)
 
-    def generate_trajectory_from_yaml(self, yaml_filename: str):
+    def generate_trajectory_from_yaml(
+        self, yaml_filename: str, t: np.ndarray | None = None
+    ):
         """
         Load coefficients from a YAML file and generate joint trajectories.
 
         :param yaml_filename: Name of the YAML file in trajectory_coefficients/.
-        :return: Tuple of (q_traj, v_traj, a_traj), each of shape (len(t_array), dim).
+        :param t: Optional Fourier-phase sampling instants (see
+                  ``generate_trajectory``).  ``None`` → default grid.
+        :return: Tuple of (q_traj, v_traj, a_traj), each of shape (len(t), dim).
         """
         coeffs = self.load_coeffs(yaml_filename)
-        return self.generate_trajectory(coeffs)
+        return self.generate_trajectory(coeffs, t=t)
 
-    def generate_trajectory(self, coeffs: np.ndarray):
+    def generate_trajectory(self, coeffs: np.ndarray, t: np.ndarray | None = None):
         """
         Generate joint trajectories (q, v, a) from Fourier coefficients.
 
@@ -135,16 +140,23 @@ class FourierTrajectory:
         :param coeffs: Flattened array of shape (dim * (n_harmonics * 2 + 2 ),) containing [A1_1, B1_1, A2_1, B2_1, ..., A_N_1, B_N_1, q_1,
                                                                                  A1_2, B1_2, A2_2, B2_2, ..., A_N_2, B_N_2, q_2,
                                                                                  ...] for each joint.
-        :return: Tuple of (q_traj, v_traj, a_traj), each of shape (len(t_array), dim)
+        :param t: Optional Fourier-phase sampling instants.  ``None`` (default)
+                  uses ``self.t_array * self.time_coeffs`` (the time-scaled
+                  grid; samples lie on ``self.t_array``).  When given, it
+                  replaces that grid **directly**: ``t`` is the time-scaled
+                  phase fed to the sine/cosine terms, i.e.
+                  phase = time_coeffs × physical time.  To evaluate at
+                  arbitrary physical times ``t_phys`` pass
+                  ``t = time_coeffs * t_phys``.
+        :return: Tuple of (q_traj, v_traj, a_traj), each of shape (len(t), dim)
         """
         params = coeffs.reshape(self.dim, self.n_harmonics * 2 + 1)
-        q_traj = np.zeros((self.dim, len(self.t_array)))
+        if t is None:
+            t = self.t_array * self.time_coeffs
+        t = np.asarray(t, dtype=float)
+        q_traj = np.zeros((self.dim, len(t)))
         v_traj = np.zeros_like(q_traj)
         a_traj = np.zeros_like(q_traj)
-
-        # Time-scaled sampling instants: time_coeffs > 1 speeds the motion up,
-        # time_coeffs < 1 slows it down. Samples still lie on self.t_array.
-        t = self.t_array * self.time_coeffs
 
         for i in range(self.dim):
             q0 = params[i, -1]
