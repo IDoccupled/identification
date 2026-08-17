@@ -71,4 +71,5 @@ joint_4:
 _meta:
   source_bag: '55_31'
   estimated_f0_hz: 0.15002500000000002
+  time_coeffs: 0.75
   note: recovered by fourier_fit.py; replay with the recording time_coeffs
