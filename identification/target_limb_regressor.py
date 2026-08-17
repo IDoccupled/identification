@@ -140,9 +140,7 @@ class TargetLimbRegressor:
                     f"is outside waist joint limits "
                     f"[{q_lower:.4f}, {q_upper:.4f}]\033[0m"
                 )
-        print(
-            f"\033[91mWaist yaw offset (J12): {self.waist_yaw_offset:.4f}\033[0m"
-        ) if print_info else None
+        print(f"\033[91mWaist yaw offset (J12): {self.waist_yaw_offset:.4f}\033[0m")
         self.data = self.model.createData()
         self.urdf_dynamics = self._load_urdf_joint_dynamics(urdf_path)
         self.all_joint_infos, self.target_joint_infos = self.collect_target_limb_info()
