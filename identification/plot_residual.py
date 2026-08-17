@@ -132,6 +132,26 @@ def _setup_cjk_font():
             return
 
 
+def _plot_residual_spectrum(ax, t, rq, rv, f0):
+    """在 ax 上画位置/速度残差的频谱（|FFT| vs Hz），竖虚线标出 f0 的整数倍。"""
+    dt = np.median(np.diff(t))
+    freq = np.fft.rfftfreq(len(rq), dt)
+    mag_q = np.maximum(np.abs(np.fft.rfft(rq)), 1e-15)
+    mag_v = np.maximum(np.abs(np.fft.rfft(rv)), 1e-15)
+    ax.semilogy(freq, mag_q, lw=0.9, color="C2", label="q residual spectrum")
+    ax.semilogy(freq, mag_v, lw=0.9, color="C4", label="v residual spectrum")
+    fmax = freq.max()
+    k = 1
+    while k * f0 <= fmax and k <= 25:
+        ax.axvline(k * f0, color="gray", lw=0.6, ls="--", alpha=0.6)
+        k += 1
+    ax.set_xlabel("frequency (Hz)")
+    ax.set_ylabel("|FFT(residual)|")
+    ax.set_title("Residual Spectrum (q & v)", loc="left", fontsize=11)
+    ax.grid(alpha=0.3)
+    ax.legend(loc="upper right", fontsize=8)
+
+
 def plot_joint_residual(
     t,
     q_raw,
@@ -146,7 +166,7 @@ def plot_joint_residual(
     joint_name,
     out_png=None,
 ):
-    """单个关节一张图：4 子图 —— 位置(原始 vs 理论)、速度(原始 vs 理论)、位置残差、速度残差。"""
+    """单个关节一张图：5 子图 —— 位置/速度、位置/速度残差、残差频谱。"""
     import matplotlib.pyplot as plt
 
     C_ACT = "C0"  # 实际
@@ -158,12 +178,13 @@ def plot_joint_residual(
     rq, rv = q_raw - q_t, v_raw - v_t
 
     fig, axs = plt.subplots(
-        4,
+        5,
         1,
-        figsize=(12, 11),
+        figsize=(12, 14),
         sharex=True,
-        gridspec_kw={"height_ratios": [3, 3, 1.3, 1.3]},
+        gridspec_kw={"height_ratios": [3, 3, 1.5, 1.5, 3.5]},
     )
+    axs[4].get_shared_x_axes().remove(axs[4])  # 频谱子图不共享时间轴
 
     # ① 位置：原始 vs 理论
     axs[0].plot(
@@ -177,7 +198,7 @@ def plot_joint_residual(
     axs[0].plot(t, q_t, lw=1.2, color=C_REC, label="recovered q (fourier_trajectory)")
     axs[0].set_ylabel("q (rad)")
     axs[0].set_title(
-        f"Position — {joint_name} (joint {joint_number})  f0≈{f0:.2f} Hz  "
+        f"Position — {joint_name} (joint {joint_number})  f0={f0:.2f} Hz  "
         f"time_coeffs={tc:.2f}  q resid RMS {np.sqrt(np.mean(rq**2)):.5f} rad",
         loc="left",
         fontsize=10,
@@ -212,6 +233,9 @@ def plot_joint_residual(
     axs[3].set_xlabel("t (s)")
     axs[3].axhline(0, color="gray", lw=0.6)
     axs[3].grid(alpha=0.3)
+
+    # ⑤ 残差频谱
+    _plot_residual_spectrum(axs[4], t, rq, rv, f0)
 
     fig.tight_layout()
     if out_png:

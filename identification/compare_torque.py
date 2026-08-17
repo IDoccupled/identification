@@ -166,6 +166,26 @@ def _setup_cjk_font():
             return
 
 
+def _plot_residual_spectrum(ax, t, rq, rv, f0):
+    """在 ax 上画位置/速度残差的频谱（|FFT| vs Hz），竖虚线标出 f0 的整数倍。"""
+    dt = np.median(np.diff(t))
+    freq = np.fft.rfftfreq(len(rq), dt)
+    mag_q = np.maximum(np.abs(np.fft.rfft(rq)), 1e-15)
+    mag_v = np.maximum(np.abs(np.fft.rfft(rv)), 1e-15)
+    ax.semilogy(freq, mag_q, lw=0.9, color="C2", label="q residual spectrum")
+    ax.semilogy(freq, mag_v, lw=0.9, color="C4", label="v residual spectrum")
+    fmax = freq.max()
+    k = 1
+    while k * f0 <= fmax and k <= 25:
+        ax.axvline(k * f0, color="gray", lw=0.6, ls="--", alpha=0.6)
+        k += 1
+    ax.set_xlabel("frequency (Hz)")
+    ax.set_ylabel("|FFT(residual)|")
+    ax.set_title("Residual Spectrum (q & v)", loc="left", fontsize=11)
+    ax.grid(alpha=0.3)
+    ax.legend(loc="upper right", fontsize=8)
+
+
 def plot_joint_compare(
     t,
     q_meas,
@@ -175,17 +195,19 @@ def plot_joint_compare(
     v_rec,
     a_rec,
     tau_rec,
+    f0,
     joint_number,
     joint_name,
     out_png=None,
 ):
-    """单个关节一张图：4 个子图 —— 位置 / 速度 / 加速度 / 力矩，实际 vs 还原。"""
+    """单个关节一张图：5 个子图 —— 位置/速度/加速度/力矩 + 残差频谱。"""
     import matplotlib.pyplot as plt
 
     C_ACT = "C0"  # 实际
     C_REC = "C3"  # 还原
 
-    fig, axs = plt.subplots(4, 1, figsize=(13, 13), sharex=True)
+    fig, axs = plt.subplots(5, 1, figsize=(13, 16), sharex=True)
+    axs[4].get_shared_x_axes().remove(axs[4])  # 频谱子图不共享时间轴
 
     # ① 位置：实际 vs 还原
     axs[0].plot(
@@ -256,6 +278,10 @@ def plot_joint_compare(
     axs[3].grid(alpha=0.3)
 
     axs[3].set_xlabel("t (s)")
+
+    # ⑤ 残差频谱（位置/速度残差）
+    _plot_residual_spectrum(axs[4], t, q_meas - q_rec, v_meas - v_rec, f0)
+
     fig.suptitle(
         f"{joint_name} (joint {joint_number}) — actual vs recovered\n"
         f"gravity={GRAVITY.tolist()}, waist={WAIST_YAW_OFFSET:.4f} rad",
@@ -468,6 +494,7 @@ def main():
                 v_rec[:, i],
                 a_rec[:, i],
                 tau_rec[:, i],
+                f0=f0,
                 joint_number=j,
                 joint_name=name,
                 out_png=out_path,
