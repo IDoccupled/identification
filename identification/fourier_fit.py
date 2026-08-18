@@ -101,21 +101,26 @@ def _read_summary_time_coeffs(bag_dir) -> float | None:
     """
     p = bag_dir / "summary.json"
     if not p.is_file():
-        return None
+        raise FileNotFoundError(
+            f"bag {bag_dir.name} 没有 summary.json，请用 --time-coeffs 指定"
+        )
     with open(p) as f:
         data = json.load(f)
     tc = data.get("time_coeffs")
-    return float(tc) if tc is not None else None
+    if tc is None:
+        raise ValueError(f"bag {bag_dir.name} 的 summary.json 中没有 time_coeffs")
+    return float(tc)
 
 
 # ---------------------------------------------------------------------------
-# 2) 位置拟合 + 解析求导（f0 由 time_coeffs 决定，不再估计）
+# 2) 位置拟合 + 解析求导
 # ---------------------------------------------------------------------------
 def fit_position(t, y, f0, n_harm=N_HARMONICS):
     """对位置做 5 谐波最小二乘拟合，返回各项与诊断。"""
     w = 2.0 * np.pi * f0
-    cols = [np.sin(n * w * t) for n in range(1, n_harm + 1)]
-    cols += [np.cos(n * w * t) for n in range(1, n_harm + 1)]
+    cols = [np.sin(n * w * t) for n in range(1, n_harm + 1)] + [
+        np.cos(n * w * t) for n in range(1, n_harm + 1)
+    ]
     cols.append(np.ones_like(t))
     A = np.column_stack(cols)
     c, *_ = np.linalg.lstsq(A, y, rcond=None)
