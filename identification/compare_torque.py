@@ -308,7 +308,7 @@ def _yaml_meta(yaml_name: str) -> dict:
     """读取 trajectory_coefficients 下 YAML 的 _meta（fourier_fit 保存的备忘）。"""
     path = COEFFS_DIR / yaml_name
     if not path.is_file():
-        return {}
+        raise FileNotFoundError(f"轨迹系数 YAML 不存在: {path}")
     with open(path) as f:
         data = yaml.safe_load(f)
     return data.get("_meta", {}) if isinstance(data, dict) else {}
