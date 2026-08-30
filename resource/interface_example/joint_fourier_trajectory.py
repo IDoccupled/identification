@@ -28,7 +28,6 @@ VALID_LIMB_GROUPS = {
     "neck": NECK_Q_INDICES,
 }
 
-DEFAULT_GROUP_TO_IDENTIFY = "left_arm"
 SOFT_START_DURATION = 3.0  # seconds
 
 CONTROL_FREQUENCY = 500.0
@@ -74,13 +73,16 @@ def _to_float_list(name, value):
 class FourierTrajectoryNode(Node):
     def __init__(
         self,
-        yaml_name: str = None,
+        yaml_name: str | None = None,
         config_path: Path = CONFIG_PATH,
-        group: str = DEFAULT_GROUP_TO_IDENTIFY,
+        group: str | None = None,
     ):
         assert config_path.exists(), f"Config file not found: {config_path}"
         with config_path.open("r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
+        # When not given explicitly, read the limb group from the YAML _meta.
+        if group is None:
+            group = FourierTrajectory.load_group(yaml_name)
         assert group in VALID_LIMB_GROUPS, (
             f"Invalid group '{group}', must be one of: {list(VALID_LIMB_GROUPS.keys())}"
         )
@@ -250,45 +252,37 @@ def main(argv=None):
         description="Run Fourier trajectory identification node."
     )
     parser.add_argument(
-        "--type",
-        type=str,
-        default="unified",
-        choices=list(FourierTrajectory.VALID_TYPES.keys()),
-        help="Identification type: balance, armature, friction, or unified "
-        "(auto-resolves the latest matching YAML).",
-    )
-    parser.add_argument(
         "--yaml",
         type=str,
         default=None,
-        help="Directly specify a YAML filename from trajectory_coefficients/ "
-        "(e.g. 'pso_friction_260707_150335.yaml').",
+        help="Trajectory YAML filename in trajectory_coefficients/ "
+        "(default: latest pso_unified_*.yaml).",
     )
     parser.add_argument(
         "--group",
         type=str,
-        default=DEFAULT_GROUP_TO_IDENTIFY,
-        help=f"Limb group to identify (default: {DEFAULT_GROUP_TO_IDENTIFY}).",
+        default=None,
+        help="Limb group to identify (default: read from YAML _meta.group).",
     )
     # Parse known args so ROS2 args are forwarded to rclpy.init
     parsed_args, unknown_args = parser.parse_known_args(argv)
 
-    # Resolve YAML: --yaml takes priority, otherwise --type auto-resolves
+    # Resolve YAML: --yaml takes priority, otherwise the latest unified YAML.
     if parsed_args.yaml:
         yaml_path = FourierTrajectory._coeffs_dir / parsed_args.yaml
         if not yaml_path.is_file():
             print(f"ERROR: YAML file not found: {yaml_path}")
             return 1
         yaml_name = parsed_args.yaml
-    elif parsed_args.type:
-        yaml_name = FourierTrajectory.find_latest_yaml(parsed_args.type)
     else:
-        parser.error("Either --type or --yaml must be specified.")
+        yaml_name = FourierTrajectory.find_latest_yaml()
 
     print(f"Using YAML: {yaml_name}")
+    group = parsed_args.group or FourierTrajectory.load_group(yaml_name)
+    print(f"Limb group : {group}")
 
     rclpy.init(args=unknown_args)
-    node = FourierTrajectoryNode(yaml_name=yaml_name, group=parsed_args.group)
+    node = FourierTrajectoryNode(yaml_name=yaml_name, group=group)
 
     if not node.initialize():
         node.get_logger().error("Failed to initialize, exiting")

@@ -45,7 +45,11 @@ import pinocchio as pin
 import yaml
 
 from identification.fourier_trajectory import FourierTrajectory, TRAJ_PERIOD
-from identification.target_limb_regressor import TargetLimbRegressor
+from identification.target_limb_regressor import (
+    GROUP_JOINT_NAMES,
+    TargetLimbRegressor,
+    VALID_LIMB_GROUPS,
+)
 
 PKG_DIR = Path(__file__).resolve().parent.parent
 BAG_DATA = PKG_DIR / "bag_data"
@@ -54,14 +58,6 @@ COEFFS_DIR = PKG_DIR / "trajectory_coefficients"
 STATE_KEY = "hardware_joint_state"
 DEFAULT_BAG = "13_55_31"
 DEFAULT_YAML = "recovered_260813_131930.yaml"
-DEFAULT_JOINTS = [13, 14, 15, 16, 17]
-JOINT_NAMES = [
-    "J13_SHOULDER_PITCH_L",
-    "J14_SHOULDER_ROLL_L",
-    "J15_SHOULDER_YAW_L",
-    "J16_ELBOW_PITCH_L",
-    "J17_ELBOW_YAW_L",
-]
 
 # 测量时机器人并非站立：机体系下的重力向量（长度≈9.82 m/s²）。
 GRAVITY = np.array([-9.712746, 0.390467, -1.393897])
@@ -348,7 +344,11 @@ def main():
         "--sample-rate", type=float, default=500.0, help="生成理论轨迹的采样率 Hz"
     )
     ap.add_argument(
-        "--joints", nargs="+", type=int, default=DEFAULT_JOINTS, help="左臂关节号"
+        "--joints",
+        nargs="+",
+        type=int,
+        default=None,
+        help="肢体关节号（默认按 YAML _meta.group 对应）",
     )
     ap.add_argument(
         "--gravity",
@@ -382,6 +382,12 @@ def main():
     meta = _yaml_meta(yaml_name)
     meta_bag = meta.get("source_bag")
 
+    # 肢体组从 YAML _meta.group 读取（旧 recovered_*.yaml 无 group 时回退左臂）；
+    # 关节号/名字随之推导，不再手动写死。
+    group = FourierTrajectory.load_group(yaml_name, default="left_arm")
+    joints = args.joints if args.joints is not None else list(VALID_LIMB_GROUPS[group])
+    joint_names = GROUP_JOINT_NAMES[group]
+
     # 0) bag 跟随 YAML _meta.source_bag（fourier_fit 保存的来源），避免轨迹
     #    系数和实测数据来源不一致（例如 57_28 的 YAML 配上 13_55_31 的 bag）；
     #    --bag 显式指定时覆盖。time_coeffs 默认从 bag summary.json 读取
@@ -411,7 +417,7 @@ def main():
 
     # 3) 恢复出的一周期理论轨迹
     ft = FourierTrajectory(
-        dim=len(args.joints), sample_rate=args.sample_rate, time_coeffs=time_coeffs
+        dim=len(joints), sample_rate=args.sample_rate, time_coeffs=time_coeffs
     )
     q_th, v_th, a_th = ft.generate_trajectory_from_yaml(yaml_name)
     period = ft.duration
@@ -422,7 +428,7 @@ def main():
 
     # 4) TargetLimbRegressor：非站立重力 + 固定腰关节
     reg = TargetLimbRegressor(
-        group_to_identify="left_arm",
+        group_to_identify=group,
         gravity=np.asarray(args.gravity, dtype=float),
         waist_yaw_offset=float(args.waist_offset),
         print_info=False,
@@ -457,7 +463,7 @@ def main():
     )
 
     # 6) 兜底：接近 0 的力矩样本 -> NaN（joint_state 正常无丢包，一般不会触发）
-    n_zero = int(np.sum(np.abs(tau_meas[:, args.joints]) < ZERO_TOL))
+    n_zero = int(np.sum(np.abs(tau_meas[:, joints]) < ZERO_TOL))
     tau_meas_plot = tau_meas.copy()
     tau_meas_plot[np.abs(tau_meas_plot) < ZERO_TOL] = np.nan
     print(f"\n实测力矩(joint_state)接近0被mask样本数: {n_zero}")
@@ -477,9 +483,8 @@ def main():
     tau_rec = tau_rec[mask_t]
 
     # 8) 每个关节单独一张 4 子图（位置/速度/加速度/力矩），收集后一起 show
-    joint_names = JOINT_NAMES[: len(args.joints)]
     figs = []
-    for i, (j, name) in enumerate(zip(args.joints, joint_names)):
+    for i, (j, name) in enumerate(zip(joints, joint_names)):
         out_path = None
         if args.save:
             p = Path(args.save)

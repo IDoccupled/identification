@@ -15,31 +15,36 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 from identification.fourier_trajectory import FourierTrajectory
-from identification.target_limb_regressor import TargetLimbRegressor
-
-JOINT_NAMES = [
-    "J13_SHOULDER_PITCH_L",
-    "J14_SHOULDER_ROLL_L",
-    "J15_SHOULDER_YAW_L",
-    "J16_ELBOW_PITCH_L",
-    "J17_ELBOW_YAW_L",
-]
 
 SAMPLE_RATE = 500
 
 
 def load_trajectory(yaml_path):
-    """Load (q, dq, ddq, tau) from a YAML file using Pinocchio inverse dynamics."""
-    ft = FourierTrajectory(dim=5, sample_rate=SAMPLE_RATE)
+    """Load (q, dq, ddq, tau) from a YAML file using Pinocchio inverse dynamics.
+
+    The limb group is read from the YAML ``_meta.group``, so this script works
+    for any identified limb without hard-coded joint indices or names.
+    """
+    from identification.target_limb_regressor import (
+        TargetLimbRegressor,
+        VALID_LIMB_GROUPS,
+    )
+
+    # Limb group + DOF come from the YAML itself.
+    group = FourierTrajectory.load_group(yaml_path)
+    dim = len(VALID_LIMB_GROUPS[group])
+
+    ft = FourierTrajectory(dim=dim, sample_rate=SAMPLE_RATE)
     ft.omega_f = 2.0 * np.pi / 5.0
     ft.t_array = np.linspace(0, 5.0, int(5.0 * SAMPLE_RATE), endpoint=False)
 
     q_traj, dq_traj, ddq_traj = ft.generate_trajectory_from_yaml(yaml_path)
 
     # Build Pinocchio model via TargetLimbRegressor (URDF-based)
-    reg = TargetLimbRegressor(print_info=False)
+    reg = TargetLimbRegressor(group_to_identify=group, print_info=False)
+    joint_names = [reg.target_joint_infos[d]["name"] for d in range(dim)]
 
-    tau = np.zeros((len(ft.t_array), 5))
+    tau = np.zeros((len(ft.t_array), dim))
     for k in range(len(ft.t_array)):
         q_limb = q_traj[:, k]
         dq_limb = dq_traj[:, k]
@@ -56,7 +61,7 @@ def load_trajectory(yaml_path):
 
         # Armature torque: armature * acceleration
         tau_armature = np.array(
-            [reg.target_joint_infos[i]["armature"] * ddq_limb[i] for i in range(5)]
+            [reg.target_joint_infos[i]["armature"] * ddq_limb[i] for i in range(dim)]
         )
 
         # Friction torque: damping * v + friction * tanh(v * 100)
@@ -64,13 +69,13 @@ def load_trajectory(yaml_path):
             [
                 reg.target_joint_infos[i]["damping"] * dq_limb[i]
                 + reg.target_joint_infos[i]["friction"] * np.tanh(dq_limb[i] * 1e2)
-                for i in range(5)
+                for i in range(dim)
             ]
         )
 
         tau[k] = tau_inertial_limb + tau_armature + tau_friction
 
-    return q_traj.T, dq_traj.T, ddq_traj.T, tau
+    return q_traj.T, dq_traj.T, ddq_traj.T, tau, joint_names
 
 
 def main():
@@ -78,8 +83,8 @@ def main():
         yaml_name = sys.argv[1]
     else:
         try:
-            yaml_name = FourierTrajectory.find_latest_yaml("unified")
-        except (ValueError, FileNotFoundError) as e:
+            yaml_name = FourierTrajectory.find_latest_yaml()
+        except FileNotFoundError as e:
             print(f"Error: {e}")
             print(
                 "Usage: python -m identification.plot_unified_trajectory "
@@ -89,7 +94,8 @@ def main():
 
     name = Path(yaml_name).name
     print(f"Loading {name} …")
-    q, dq, ddq, tau = load_trajectory(name)
+    q, dq, ddq, tau, joint_names = load_trajectory(name)
+    dof = q.shape[1]
 
     ylabels = [
         "Position q (rad)",
@@ -97,7 +103,7 @@ def main():
         "Acceleration ddq (rad/s²)",
         "Torque τ (Nm)",
     ]
-    joint_colors = plt.cm.tab10(np.linspace(0, 1, 5))
+    joint_colors = plt.cm.tab10(np.linspace(0, 1, dof))
 
     fig, axes = plt.subplots(4, 1, figsize=(10, 10), sharex=True)
     data = [q, dq, ddq, tau]
@@ -105,7 +111,7 @@ def main():
 
     for row in range(4):
         ax = axes[row]
-        for j in range(5):
+        for j in range(dof):
             ax.plot(t, data[row][:, j], color=joint_colors[j], lw=0.8, alpha=0.85)
 
         ax.set_ylabel(ylabels[row], fontsize=10)
@@ -119,7 +125,7 @@ def main():
             margin = 0.1 * (vmax - vmin) if vmax > vmin else 1.0
             ax.set_ylim(vmin - margin, vmax + margin)
 
-    fig.legend(JOINT_NAMES, loc="upper right", fontsize=8, ncol=1, framealpha=0.9)
+    fig.legend(joint_names, loc="upper right", fontsize=8, ncol=1, framealpha=0.9)
     fig.suptitle(f"Unified Excitation Trajectory — {name}", fontsize=13, y=0.97)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show()

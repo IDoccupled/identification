@@ -3,8 +3,6 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-# ruff: noqa: RUF012
-
 # ==============================
 # Tunable trajectory configuration
 # ==============================
@@ -19,37 +17,25 @@ TIME_COEFFS = 1.0
 class FourierTrajectory:
     # Directory where all coefficient YAML files are stored
     _coeffs_dir = Path(__file__).resolve().parent / ".." / "trajectory_coefficients"
-    # Valid identification types and their YAML filename prefix
-    VALID_TYPES = {
-        "balance": "pso_balance",
-        "armature": "pso_armature",
-        "friction": "pso_friction",
-        "unified": "pso_unified",
-        "recovered": "recovered",
-    }
 
     @staticmethod
-    def find_latest_yaml(yaml_type: str) -> str:
+    def find_latest_yaml(prefix: str = "pso_unified") -> str:
         """
-        Find the latest YAML file for a given identification type.
+        Find the latest trajectory coefficient YAML with the given filename prefix.
 
-        :param yaml_type: One of 'balance', 'armature', 'friction', 'unified', or 'recovered'.
+        All excitation trajectories are now 'unified' (``pso_unified_*.yaml``),
+        so the default prefix is ``pso_unified``.
+
+        :param prefix: Filename prefix, e.g. ``'pso_unified'`` or ``'recovered'``.
         :return: Filename (not full path) of the latest matching YAML.
-        :raises ValueError: If yaml_type is invalid or no matching YAML found.
+        :raises FileNotFoundError: If no matching YAML is found.
         """
-        if yaml_type not in FourierTrajectory.VALID_TYPES:
-            raise ValueError(
-                f"Unknown type '{yaml_type}'. "
-                f"Must be one of: {list(FourierTrajectory.VALID_TYPES.keys())}"
-            )
-
-        prefix = FourierTrajectory.VALID_TYPES[yaml_type]
         pattern = f"{prefix}_*.yaml"
         matches = sorted(FourierTrajectory._coeffs_dir.glob(pattern))
 
         if not matches:
             raise FileNotFoundError(
-                f"No YAML files found for type '{yaml_type}' "
+                f"No YAML files found for prefix '{prefix}' "
                 f"(pattern: {pattern} in {FourierTrajectory._coeffs_dir})"
             )
 
@@ -114,6 +100,43 @@ class FourierTrajectory:
             coeffs_list.extend(joint_coeffs)
 
         return np.array(coeffs_list)
+
+    @staticmethod
+    def load_meta(yaml_filename: str) -> dict:
+        """
+        Load the ``_meta`` section from a trajectory coefficient YAML file.
+
+        :param yaml_filename: Name of the YAML file in trajectory_coefficients/.
+        :return: The ``_meta`` dict (empty if absent).
+        """
+        yaml_path = FourierTrajectory._coeffs_dir / yaml_filename
+        assert yaml_path.is_file(), f"YAML file not found: {yaml_path}"
+        with open(str(yaml_path), "r") as f:
+            data = yaml.safe_load(f)
+        meta = data.get("_meta", {}) if isinstance(data, dict) else {}
+        return dict(meta)
+
+    @staticmethod
+    def load_group(yaml_filename: str, default: str | None = None) -> str:
+        """
+        Load the identification limb group from a YAML file's ``_meta.group``.
+
+        :param yaml_filename: Name of the YAML file in trajectory_coefficients/.
+        :param default: Group name to return when ``_meta.group`` is missing.
+            ``None`` → raise ValueError instead.
+        :return: The limb group name (e.g. 'left_arm').
+        :raises ValueError: If ``_meta.group`` is missing and ``default`` is None.
+        """
+        meta = FourierTrajectory.load_meta(yaml_filename)
+        group = meta.get("group")
+        if not group:
+            if default is not None:
+                return str(default)
+            raise ValueError(
+                f"YAML '{yaml_filename}' has no '_meta.group' entry. "
+                "Cannot determine the limb group to identify."
+            )
+        return str(group)
 
     def generate_trajectory_from_yaml(
         self, yaml_filename: str, t: np.ndarray | None = None

@@ -406,9 +406,9 @@ class ParamBounds:
             e.g. ``{"rank_deficient": {"freeze": False, "widen": 0.5}}``.
         """
         quality_map = load_yaml_param_quality(yaml_path)
-        if not quality_map:
-            print(f"  ⚠ apply_yaml_quality: NO quality data found in {yaml_path}")
-            return
+        assert quality_map, (
+            f"  ⚠ apply_yaml_quality: NO quality data found in {yaml_path}"
+        )
         pi_list = split_joint_params(pi_prior)
         frozen_count = 0
         widen_count = 0
@@ -849,7 +849,7 @@ def _stack_regressor(reg, q_arm, v_arm, a_arm) -> np.ndarray:
 def prepare_data_from_urdf(
     urdf_path: str | Path,
     yaml_filename: str,
-    limb_group: str = "left_arm",
+    limb_group: str | None = None,
     sample_rate: float = 200.0,
     urdf_true_path: str | Path | None = None,
     verbose: bool = True,
@@ -876,6 +876,11 @@ def prepare_data_from_urdf(
 
     if urdf_true_path is None:
         urdf_true_path = urdf_path
+
+    # Limb group defaults to the YAML _meta.group (fallback 'left_arm' for
+    # legacy recovered_*.yaml that predate the group field).
+    if limb_group is None:
+        limb_group = FourierTrajectory.load_group(yaml_filename, default="left_arm")
 
     # --- Trajectory ---
     dof_limb = len(VALID_LIMB_GROUPS[limb_group])
@@ -1125,7 +1130,7 @@ def _recovered_at_times(
 def data_from_measurement(
     urdf_path: str | Path,
     bag_name: str | None = None,
-    limb_group: str = "left_arm",
+    limb_group: str | None = None,
     csv_topic: str = "hardware_joint_state",
     sample_rate: float = 100.0,
     verbose: bool = True,
@@ -1154,8 +1159,10 @@ def data_from_measurement(
     bag_name : str or None
         Bag under ``bag_data/`` (full dir name or short fragment).  ``None``
         (default) → read from ``trajectory_yaml``'s ``_meta.source_bag``.
-    limb_group : str
-        Limb group, e.g. ``'left_arm'`` → CSV joints 13..17.
+    limb_group : str or None
+        Limb group, e.g. ``'left_arm'`` → CSV joints 13..17.  ``None``
+        (default) → read from ``trajectory_yaml``'s ``_meta.group``
+        (fallback ``'left_arm'``).
     csv_topic : str
         CSV topic under ``<bag>/csv/``.  Default ``'hardware_joint_state'``
         (real measured torque).  Avoid ``hardware_joint_command_feedback``.
@@ -1187,10 +1194,26 @@ def data_from_measurement(
     always ``None`` (unknown) and the identification uses the measured torque
     only.
     """
+    from identification.fourier_trajectory import FourierTrajectory
     from identification.target_limb_regressor import (
         TargetLimbRegressor,
         VALID_LIMB_GROUPS,
     )
+
+    # --- Resolve trajectory yaml + limb group + bag name.  The bag is read
+    #     from the yaml's _meta.source_bag (e.g. '55_31' → bag 13_55_31) and
+    #     the limb group from the yaml's _meta.group (fallback 'left_arm')
+    #     when not given explicitly. ---
+    if trajectory_yaml is None:
+        trajectory_yaml = _latest_recovered_yaml()
+    if limb_group is None:
+        limb_group = FourierTrajectory.load_group(trajectory_yaml, default="left_arm")
+    if bag_name is None:
+        bag_name = _yaml_source_bag(trajectory_yaml)
+        if verbose:
+            print(f"  [measurement] bag from yaml _meta.source_bag: {bag_name}")
+    if verbose:
+        print(f"  [measurement] limb group from yaml _meta.group: {limb_group}")
 
     joint_indices = list(VALID_LIMB_GROUPS[limb_group])
 
@@ -1229,16 +1252,6 @@ def data_from_measurement(
 
     # 测量模式没有地面真值：pi_true 恒为 None（未知），只靠实测 tau 辨识。
     pi_true = None
-
-    # --- Resolve trajectory yaml + bag name.  The bag is read from the
-    #     yaml's _meta.source_bag (e.g. '55_31' → bag 13_55_31) when not
-    #     given explicitly. ---
-    if trajectory_yaml is None:
-        trajectory_yaml = _latest_recovered_yaml()
-    if bag_name is None:
-        bag_name = _yaml_source_bag(trajectory_yaml)
-        if verbose:
-            print(f"  [measurement] bag from yaml _meta.source_bag: {bag_name}")
 
     # --- Measurement: read CSV — only the time axis and measured tau ---
     t_meas, q_meas, v_meas, tau_meas = _load_measurement_csv(
@@ -1541,7 +1554,7 @@ def plot_torque_comparison_measured(
     val_yaml: str,
     val_bag_name: str | None = None,
     joint_names: list[str] | None = None,
-    limb_group: str = "left_arm",
+    limb_group: str | None = None,
     csv_topic: str = "hardware_joint_state",
     sample_rate: float = 100.0,
     gravity: np.ndarray | None = None,
@@ -1571,7 +1584,13 @@ def plot_torque_comparison_measured(
     ``val_bag_name`` defaults to ``val_yaml``'s ``_meta.source_bag`` when not
     given explicitly.
     """
+    from identification.fourier_trajectory import FourierTrajectory
     from identification.target_limb_regressor import TargetLimbRegressor
+
+    # Limb group defaults to the validation yaml's _meta.group (fallback
+    # 'left_arm' for legacy recovered_*.yaml that predate the group field).
+    if limb_group is None:
+        limb_group = FourierTrajectory.load_group(val_yaml, default="left_arm")
 
     dof = len(result.joint_order)
     if joint_names is None:
@@ -1683,9 +1702,7 @@ def main():
         / "urdf"
         / "serial_pm_v2_identify.urdf"
     ).resolve()
-    # 注意：只有 prepare_data_from_urdf 的合成 demo 才有“真值”URDF
-    # （urdf_true_path，例如 .../serial_pm_v2_identify_nominal.urdf）；
-    # 真实测量辨识没有地面真值，因此这里不再定义 URDF_TRUE_PATH。
+
     SETUP = {
         "gravity": np.array([-9.712746, 0.390467, -1.393897]),
         "waist_yaw_offset": 0.076485634,
@@ -1698,7 +1715,7 @@ def main():
     # 较好的周期（如 "10:16.667"）只用一个周期辨识，通常能提升效果。None=全程。
     TWIN_ID = None  # 例如 "10:16.667"
 
-    latest_yaml = FourierTrajectory.find_latest_yaml("unified")
+    latest_yaml = FourierTrajectory.find_latest_yaml()
 
     # 1. Prepare data
     # ------------------------------------------------------------------
@@ -1721,7 +1738,7 @@ def main():
     # 测量模式无地面真值 → pi_true 为 None，只靠实测 tau 辨识。
     data = data_from_measurement(
         urdf_path=URDF_PATH,  # 先验模型 → regressor / pi_prior / bounds
-        limb_group="left_arm",
+        limb_group=None,
         csv_topic="hardware_joint_state",  # 实测力矩（勿用 command_feedback）
         sample_rate=100.0,  # CSV(~500Hz) 抽取到 ~100Hz
         gravity=SETUP["gravity"],

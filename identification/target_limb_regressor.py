@@ -26,6 +26,44 @@ VALID_LIMB_GROUPS = {
     "neck": NECK_Q_INDICES,
 }
 
+# Display names (from the identify URDF) for each limb group, in the same
+# order as VALID_LIMB_GROUPS.  Used by plotting/compare scripts so joint
+# labels follow the YAML _meta.group instead of a hard-coded left arm.
+GROUP_JOINT_NAMES = {
+    "left_leg": [
+        "J00_HIP_PITCH_L",
+        "J01_HIP_ROLL_L",
+        "J02_HIP_YAW_L",
+        "J03_KNEE_PITCH_L",
+        "J04_ANKLE_PITCH_L",
+        "J05_ANKLE_ROLL_L",
+    ],
+    "right_leg": [
+        "J06_HIP_PITCH_R",
+        "J07_HIP_ROLL_R",
+        "J08_HIP_YAW_R",
+        "J09_KNEE_PITCH_R",
+        "J10_ANKLE_PITCH_R",
+        "J11_ANKLE_ROLL_R",
+    ],
+    "waist": ["J12_WAIST_YAW"],
+    "left_arm": [
+        "J13_SHOULDER_PITCH_L",
+        "J14_SHOULDER_ROLL_L",
+        "J15_SHOULDER_YAW_L",
+        "J16_ELBOW_PITCH_L",
+        "J17_ELBOW_YAW_L",
+    ],
+    "right_arm": [
+        "J18_SHOULDER_PITCH_R",
+        "J19_SHOULDER_ROLL_R",
+        "J20_SHOULDER_YAW_R",
+        "J21_ELBOW_PITCH_R",
+        "J22_ELBOW_YAW_R",
+    ],
+    "neck": ["J23_HEAD_YAW"],
+}
+
 GROUP_TO_IDENTIFY = "left_arm"
 
 # Self-collision pairs (left-arm links vs trunk/base) — always checked.
@@ -80,7 +118,7 @@ GROUP_COLLISION_LINKS = {
 }
 
 # 桌子（桌面 + 桌腿）的碰撞几何体，命名同样带 "_0" 后缀。
-TABLE_COLLISION_GEOMS = ("table_0", "table_leg_0")
+TABLE_COLLISION_GEOMS = ("table_0", "table2_0")
 
 URDF_PATH = (
     Path(get_package_share_directory("identification"))
@@ -101,6 +139,7 @@ class TargetLimbRegressor:
         group_to_identify=GROUP_TO_IDENTIFY,
         print_info=False,
         gravity: np.ndarray | None = None,
+        fixed_pose: dict[int, float] | None = None,
         waist_yaw_offset: float = 0.0,
     ):
 
@@ -115,17 +154,24 @@ class TargetLimbRegressor:
         self.group_to_identify = list(VALID_LIMB_GROUPS[group_to_identify])
 
         self.model = self._model_from_urdf(urdf_path)
+        # 自定义重力向量（默认 -9.81 沿 Z）。
         self.model.gravity.linear[:] = (
             gravity if gravity is not None else np.array([0.0, 0.0, -9.81])
         )
         print(f"\033[91mGravity:\n{self.model.gravity}\033[0m")
+        self.data = self.model.createData()
+        self.urdf_dynamics = self._load_urdf_joint_dynamics(urdf_path)
+        self.all_joint_infos, self.target_joint_infos = self.collect_target_limb_info()
+        self.dof = len(self.group_to_identify)
 
-        # Fixed waist-yaw (J12_WAIST_YAW) value between the IMU/base frame and
-        # the upper body. During data collection this joint may be non-zero,
-        # which rotates the target limb (e.g. arm/neck) relative to gravity.
-        # It is applied to the full-state q whenever the waist is NOT the group
-        # being identified (i.e. only when the waist value is not provided by
-        # the target-limb states).
+        # 固定姿态：用于所有“非目标关节”的基础位形。
+        # 目标关节会被轨迹/随机采样覆盖；其余关节保持在该位形（速度/加速度为 0）。
+        # 手动固定位形 (fixed_pose / FIXED_HOME_POSE) 与从 SETUP 导入的
+        # 腰关节偏置 (waist_yaw_offset) 在这里合并成一个 fixed_pose。
+        self.fixed_pose = dict(fixed_pose) if fixed_pose else {}
+        # 腰关节 (J12_WAIST_YAW) 偏置：数据采集时腰可能非零，会把目标肢体
+        # (手臂/脖子等) 相对重力旋转。仅当腰不属于待辨识分组时生效——
+        # 否则目标关节状态里自带真实的腰值，不再覆盖。
         self.waist_yaw_offset = float(waist_yaw_offset)
         if (
             self.waist_yaw_offset != 0.0
@@ -140,11 +186,18 @@ class TargetLimbRegressor:
                     f"is outside waist joint limits "
                     f"[{q_lower:.4f}, {q_upper:.4f}]\033[0m"
                 )
+            self.fixed_pose[waist_idx] = self.waist_yaw_offset
         print(f"\033[91mWaist yaw offset (J12): {self.waist_yaw_offset:.4f}\033[0m")
-        self.data = self.model.createData()
-        self.urdf_dynamics = self._load_urdf_joint_dynamics(urdf_path)
-        self.all_joint_infos, self.target_joint_infos = self.collect_target_limb_info()
-        self.dof = len(self.group_to_identify)
+        self.base_config = pin.neutral(self.model)
+        for idx, val in self.fixed_pose.items():
+            if 0 <= idx < self.model.nq:
+                self.base_config[idx] = val
+        if print_info:
+            print("\033[93mFixed (non-target) joint pose:\033[0m")
+            for idx in sorted(self.fixed_pose):
+                print(
+                    f"  q[{idx}] ({self.model.names[idx + 1]:<24s}) = {self.fixed_pose[idx]:.4f}"
+                )
 
         self.limits = {
             "q_lower": self.model.lowerPositionLimit[self.group_to_identify],
@@ -314,20 +367,6 @@ class TargetLimbRegressor:
 
         return all_infos, target_infos
 
-    def _apply_fixed_joint_offsets(self, q: np.ndarray) -> np.ndarray:
-        """Apply fixed joint-position offsets for joints NOT being identified.
-
-        Currently only the waist-yaw (J12) offset between the IMU/base frame and
-        the upper body is applied; it is only used when the waist is not the
-        target group (otherwise the actual waist value comes from the data).
-        """
-        if (
-            self.waist_yaw_offset != 0.0
-            and WAIST_Q_INDICES[0] not in self.group_to_identify
-        ):
-            q[WAIST_Q_INDICES[0]] = self.waist_yaw_offset
-        return q
-
     def state_size_check_and_form(
         self, q: list | np.ndarray, v: list | np.ndarray, a: list | np.ndarray
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -336,7 +375,7 @@ class TargetLimbRegressor:
         assert len(v) == n, f"Expected v of length {n}, got {len(v)}"
         assert len(a) == n, f"Expected a of length {n}, got {len(a)}"
 
-        formed_q = np.zeros(self.model.nq)
+        formed_q = self.base_config.copy()
         formed_v = np.zeros(self.model.nv)
         formed_a = np.zeros(self.model.nv)
         for i, q_idx in enumerate(self.group_to_identify):
@@ -344,16 +383,14 @@ class TargetLimbRegressor:
         for i, v_idx in enumerate(self.group_to_identify):
             formed_v[v_idx] = v[i]
             formed_a[v_idx] = a[i]
-        self._apply_fixed_joint_offsets(formed_q)
         return formed_q, formed_v, formed_a
 
     def sample_state(self, target_v_indices):
-        q = pin.neutral(self.model)
+        q = self.base_config.copy()
         for q_idx in self.group_to_identify:
             low = self.model.lowerPositionLimit[q_idx]
             high = self.model.upperPositionLimit[q_idx]
             q[q_idx] = np.random.uniform(low, high)
-        self._apply_fixed_joint_offsets(q)
 
         v = np.zeros(self.model.nv)
         a = np.zeros(self.model.nv)
@@ -800,12 +837,9 @@ def main():
         tau_excess_normalized,
         collided,
     ) = regressor.compute_regressor(
-        # q=[-1.6, 1.5, 0.0, 0.0, 0.0],
-        # v=[0.5, 0.4, 0.3, 0.2, 0.1],
-        # a=[10.0, 8.0, 5.0, 3.0, 1.0],
-        q=[0, 0, 0, 0, 0],
-        v=[0, 0, 0, 0, 0],
-        a=[0, 0, 0, 0, 0],
+        q=[-1.6, 1.5, 0.0, 0.0, 0.0],
+        v=[0.5, 0.4, 0.3, 0.2, 0.1],
+        a=[10.0, 8.0, 5.0, 3.0, 1.0],
         print_info=True,
     )
     regressor.print_regressor_info(

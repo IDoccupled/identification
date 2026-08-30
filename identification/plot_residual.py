@@ -24,20 +24,16 @@ import pandas as pd
 import yaml
 
 from identification.fourier_trajectory import FourierTrajectory, TRAJ_PERIOD
+from identification.target_limb_regressor import (
+    GROUP_JOINT_NAMES,
+    VALID_LIMB_GROUPS,
+)
 
 PKG_DIR = Path(__file__).resolve().parent.parent
 BAG_DATA = PKG_DIR / "bag_data"
 COEFFS_DIR = PKG_DIR / "trajectory_coefficients"
 
 TOPIC_KEY = "hardware_joint_state"  # 与 fourier_fit.py 一致（实测状态）
-DEFAULT_JOINTS = [13, 14, 15, 16, 17]
-JOINT_NAMES = [
-    "J13_SHOULDER_PITCH_L",
-    "J14_SHOULDER_ROLL_L",
-    "J15_SHOULDER_YAW_L",
-    "J16_ELBOW_PITCH_L",
-    "J17_ELBOW_YAW_L",
-]
 
 
 def _yaml_meta(yaml_name: str) -> dict:
@@ -268,8 +264,8 @@ def main():
         "--joints",
         nargs="+",
         type=int,
-        default=DEFAULT_JOINTS,
-        help="YAML joint_i 对应的机器人关节号",
+        default=None,
+        help="YAML joint_i 对应的机器人关节号（默认按 YAML _meta.group 对应）",
     )
     ap.add_argument(
         "--sample-rate", type=float, default=500.0, help="生成理论轨迹的采样率 Hz"
@@ -294,6 +290,12 @@ def main():
     if not bag_name:
         raise ValueError(f"YAML {yaml_name} 没有 _meta.source_bag，请用 --bag 指定")
 
+    # 肢体组从 YAML _meta.group 读取（旧 recovered_*.yaml 无 group 时回退左臂）；
+    # 关节号/名字随之推导，不再手动写死。
+    group = FourierTrajectory.load_group(yaml_name, default="left_arm")
+    joints = args.joints if args.joints is not None else list(VALID_LIMB_GROUPS[group])
+    joint_names = GROUP_JOINT_NAMES[group]
+
     t, q, v = load_bag(bag_name)
 
     # time_coeffs 只从 YAML _meta 读取（fit 时写入），可 --time-coeffs 覆盖；不再读 bag summary.json
@@ -313,7 +315,7 @@ def main():
     )
 
     traj = FourierTrajectory(
-        dim=len(args.joints), sample_rate=args.sample_rate, time_coeffs=tc
+        dim=len(joints), sample_rate=args.sample_rate, time_coeffs=tc
     )
     q_th, v_th, _ = traj.generate_trajectory_from_yaml(yaml_name)
     t_th = traj.t_array
@@ -327,9 +329,8 @@ def main():
         raise ValueError(f"时间窗 [{t0w}, {t1w}] 内没有数据点")
     t, q, v = t[mask_t], q[mask_t], v[mask_t]
 
-    joint_names = JOINT_NAMES[: len(args.joints)]
     figs = []
-    for i, (j, name) in enumerate(zip(args.joints, joint_names)):
+    for i, (j, name) in enumerate(zip(joints, joint_names)):
         out_path = None
         if args.save:
             p = Path(args.save)

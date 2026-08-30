@@ -4,8 +4,8 @@ Combined node: first move all joints to a manually-set home (target) position,
 then start the Fourier trajectory on selected joints while holding others.
 
 Usage:
-    python joint_fourier_with_home.py --type unified --group left_arm
-    python joint_fourier_with_home.py --type unified --group left_arm --config_file /path/to/joint_test.yaml
+    python joint_fourier_with_home.py
+    python joint_fourier_with_home.py --config_file /path/to/joint_test.yaml
 
 Features:
     Phase 1 — Go to target positions defined in the YAML config (joint_test.yaml).
@@ -46,7 +46,6 @@ VALID_LIMB_GROUPS = {
     "neck": NECK_Q_INDICES,
 }
 
-DEFAULT_GROUP_TO_IDENTIFY = "left_arm"
 SOFT_START_DURATION = 3.0  # seconds
 CONTROL_FREQUENCY = 500.0
 CONTROL_PERIOD = 1.0 / CONTROL_FREQUENCY
@@ -75,7 +74,8 @@ HOME_POS = [
     # waist (12)
     0.0,
     # left arm (13-17)
-    0.01,
+    # 0.01,
+    -2,
     0.1,
     0.01,
     0.01,
@@ -156,7 +156,7 @@ class FourierWithHomeNode(Node):
         yaml_name: str,
         target_config_path: Path = DEFAULT_TARGET_CONFIG,
         pd_config_path: Path = PD_CONFIG_PATH,
-        group: str = DEFAULT_GROUP_TO_IDENTIFY,
+        group: str | None = None,
         time_coeffs: float = 1.0,
         dry_run: bool = True,
     ):
@@ -164,6 +164,9 @@ class FourierWithHomeNode(Node):
             f"Target config not found: {target_config_path}"
         )
         assert pd_config_path.exists(), f"PD config not found: {pd_config_path}"
+        # When not given explicitly, read the limb group from the YAML _meta.
+        if group is None:
+            group = FourierTrajectory.load_group(yaml_name)
         assert group in VALID_LIMB_GROUPS, (
             f"Invalid group '{group}', must be one of: {list(VALID_LIMB_GROUPS.keys())}"
         )
@@ -512,23 +515,17 @@ def main(argv=None):
         description="Home to target position, then run Fourier trajectory."
     )
     parser.add_argument(
-        "--type",
-        type=str,
-        default="unified",
-        choices=list(FourierTrajectory.VALID_TYPES.keys()),
-        help="Identification type: balance, armature, friction, or unified.",
-    )
-    parser.add_argument(
         "--yaml",
         type=str,
         default=None,
-        help="Directly specify a YAML filename from trajectory_coefficients/.",
+        help="Trajectory YAML filename in trajectory_coefficients/ "
+        "(default: latest pso_unified_*.yaml).",
     )
     parser.add_argument(
         "--group",
         type=str,
-        default=DEFAULT_GROUP_TO_IDENTIFY,
-        help=f"Limb group to identify (default: {DEFAULT_GROUP_TO_IDENTIFY}).",
+        default=None,
+        help="Limb group to identify (default: read from YAML _meta.group).",
     )
     parser.add_argument(
         "--config_file",
@@ -551,29 +548,29 @@ def main(argv=None):
 
     parsed_args, unknown_args = parser.parse_known_args(argv)
 
-    # Resolve Fourier YAML
+    # Resolve Fourier YAML: --yaml takes priority, otherwise latest unified.
     if parsed_args.yaml:
         yaml_path = FourierTrajectory._coeffs_dir / parsed_args.yaml
         if not yaml_path.is_file():
             print(f"ERROR: YAML file not found: {yaml_path}")
             return 1
         yaml_name = parsed_args.yaml
-    elif parsed_args.type:
-        yaml_name = FourierTrajectory.find_latest_yaml(parsed_args.type)
     else:
-        parser.error("Either --type or --yaml must be specified.")
+        yaml_name = FourierTrajectory.find_latest_yaml()
 
     print(f"Target config: {parsed_args.config_file}")
     print(f"Fourier YAML : {yaml_name}")
-    print(f"Limb group   : {parsed_args.group}")
+    group = parsed_args.group or FourierTrajectory.load_group(yaml_name)
+    print(f"Limb group   : {group}")
 
+    print(f"Time coeffs  : {parsed_args.time_coeffs}")
     print(f"Dry run      : {parsed_args.dry_run}")
 
     rclpy.init(args=unknown_args)
     node = FourierWithHomeNode(
         yaml_name=yaml_name,
         target_config_path=Path(parsed_args.config_file),
-        group=parsed_args.group,
+        group=group,
         time_coeffs=parsed_args.time_coeffs,
         dry_run=parsed_args.dry_run,
     )

@@ -42,7 +42,10 @@ URDF_PATH = (
 ).resolve()
 
 YAML_DIR = Path(__file__).resolve().parent.parent / "trajectory_coefficients"
-TARGET_GROUP = "left_arm"
+# TARGET_GROUP = "left_arm"
+TARGET_GROUP = "left_leg"
+
+FIXED_HOME_POSE: dict[int, float] = {13: -2.5}
 
 # ============================================================================
 #  Trajectory parameterisation
@@ -54,7 +57,7 @@ SAMPLE_RATE = 50.0  # [Hz] trajectory sample rate (coarse for PSO speed)
 # ============================================================================
 #  PSO hyper-parameters
 # ============================================================================
-POP = 2000
+POP = 500
 MAX_ITER = 300
 AMP_SCALE = 2.0  # Fourier coefficient amplitude scale
 PSO_W = 0.7  # inertia weight
@@ -546,6 +549,7 @@ def _save_yaml(
     yaml_dict = _coeffs_to_yaml_dict(coeffs, ft.dim, ft.n_harmonics)
     meta = {
         "stage": "unified",
+        "group": TARGET_GROUP,
         "started": t_start,
         "finished": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "elapsed_s": round(elapsed, 1),
@@ -606,7 +610,10 @@ def main():
     np.random.seed(RANDOM_SEED)
 
     reg = TargetLimbRegressor(
-        urdf_path=URDF_PATH, group_to_identify=TARGET_GROUP, print_info=False
+        urdf_path=URDF_PATH,
+        group_to_identify=TARGET_GROUP,
+        print_info=False,
+        fixed_pose=FIXED_HOME_POSE if TARGET_GROUP == "left_leg" else None,
     )
     ft = FourierTrajectory(dim=reg.dof, sample_rate=SAMPLE_RATE)
     ft.omega_f = 2.0 * np.pi / TRAJ_PERIOD
