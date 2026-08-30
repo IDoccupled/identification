@@ -38,7 +38,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <box size="0.5 0.25 0.02"/>
+                <box size="0.4 0.25 0.02"/>
             </geometry>
             <material name="">
                 <color rgba="0.55 0.35 0.2 1"/>
@@ -47,7 +47,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <box size="0.5 0.25 0.02"/>
+                <box size="0.4 0.25 0.02"/>
             </geometry>
         </collision>
     </link>
@@ -55,6 +55,28 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <origin xyz="-0.25 0 -0.11" rpy="0 0 0"/>
         <parent link="lay_down"/>
         <child link="table"/>
+    </joint>
+    <link name="table2">
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <box size="0.8 0.25 0.02"/>
+            </geometry>
+            <material name="">
+                <color rgba="0.55 0.35 0.2 1"/>
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <box size="0.8 0.25 0.02"/>
+            </geometry>
+        </collision>
+    </link>
+    <joint name="table2" type="fixed">
+        <origin xyz="0.5 -0.1 0.0" rpy="0 0 -0.2"/>
+        <parent link="table"/>
+        <child link="table2"/>
     </joint>
     <link name="table_leg">
         <visual>
@@ -74,8 +96,8 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         </collision>
     </link>
     <joint name="table_leg" type="fixed">
-        <origin xyz="-0.025 0.1 -0.51" rpy="0 0 0"/>
-        <parent link="lay_down"/>
+        <origin xyz="0.175 0.1 -0.4" rpy="0 0 0"/>
+        <parent link="table"/>
         <child link="table_leg"/>
     </joint>
 
