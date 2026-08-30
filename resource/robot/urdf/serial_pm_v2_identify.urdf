@@ -52,7 +52,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         </collision>
     </link>
     <joint name="table" type="fixed">
-        <origin xyz="-0.25 0 -0.11" rpy="0 0 0"/>
+        <origin xyz="-0.5 0 -0.11" rpy="0 0 0"/>
         <parent link="lay_down"/>
         <child link="table"/>
     </joint>
@@ -78,7 +78,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <parent link="table"/>
         <child link="table2"/>
     </joint>
-    <link name="table_leg">
+    <!-- <link name="table_leg">
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
@@ -99,7 +99,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <origin xyz="0.175 0.1 -0.4" rpy="0 0 0"/>
         <parent link="table"/>
         <child link="table_leg"/>
-    </joint>
+    </joint> -->
 
     <link name="LINK_HIP_PITCH_L">
         <inertial>
