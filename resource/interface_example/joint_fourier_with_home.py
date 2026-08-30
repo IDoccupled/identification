@@ -5,10 +5,9 @@ then start the Fourier trajectory on selected joints while holding others.
 
 Usage:
     python joint_fourier_with_home.py
-    python joint_fourier_with_home.py --config_file /path/to/joint_test.yaml
 
 Features:
-    Phase 1 — Go to target positions defined in the YAML config (joint_test.yaml).
+    Phase 1 — Go to the home (target) positions defined in HOME_POS.
     Phase 2 — Start the Fourier trajectory on the selected limb group,
               while non-selected joints stay at their target positions.
 """
@@ -51,19 +50,54 @@ CONTROL_FREQUENCY = 500.0
 CONTROL_PERIOD = 1.0 / CONTROL_FREQUENCY
 NUM_JOINTS = 24
 
+# Number of interpolation steps for the homing phase (same for every joint).
+HOMING_STEPS = 2000
+
 # ---------------------------------------------------------------------------
 # Home position for all 24 joints (set to 0.0 to keep the joint relaxed/uncontrolled)
 # Joint layout: left_leg[0-5], right_leg[6-11], waist[12],
 #               left_arm[13-17], right_arm[18-22], neck[23]
 # ---------------------------------------------------------------------------
+# HOME_POS = [
+#     # left leg (0-5)
+#     0.0,
+#     0.0,
+#     0.0,
+#     0.0,
+#     0.0,
+#     0.0,
+#     # right leg (6-11)
+#     0.0,
+#     0.0,
+#     0.0,
+#     0.0,
+#     0.0,
+#     0.0,
+#     # waist (12)
+#     0.0,
+#     # left arm (13-17)
+#     0.01,
+#     0.1,
+#     0.01,
+#     0.01,
+#     0.01,
+#     # right arm (18-22)
+#     0.0,
+#     -0.0,
+#     0.0,
+#     0.0,
+#     0.0,
+#     # neck (23)
+#     0.0,
+# ]  # left arm
 HOME_POS = [
     # left leg (0-5)
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
+    0.01,
+    0.01,
+    0.01,
+    0.01,
+    0.01,
+    0.01,
     # right leg (6-11)
     0.0,
     0.0,
@@ -74,12 +108,11 @@ HOME_POS = [
     # waist (12)
     0.0,
     # left arm (13-17)
-    # 0.01,
-    -2,
-    0.1,
-    0.01,
-    0.01,
-    0.01,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
     # right arm (18-22)
     0.0,
     -0.0,
@@ -88,16 +121,11 @@ HOME_POS = [
     0.0,
     # neck (23)
     0.0,
-]
+]  # left leg
 
-# Default path to the joint_test.yaml (used for num_steps, kp/kd, etc.)
-DEFAULT_TARGET_CONFIG = (
-    Path(__file__).resolve().parent / ".." / ".." / "config" / "joint_test.yaml"
-).resolve()
-
-# Default path to the PD config (kp/kd)
+# Single source of PD gains (kp/kd) for both the homing and the Fourier phase.
 PD_CONFIG_PATH = (
-    Path(__file__).resolve().parent / ".." / ".." / "config" / "joint_sine.yaml"
+    Path(__file__).resolve().parent / ".." / ".." / "config" / "pd_gain.yaml"
 ).resolve()
 
 
@@ -136,15 +164,6 @@ def _to_float_list(name, value):
         raise ValueError(f"{name} must contain numeric values") from exc
 
 
-def _load_grouped_config(config_dict, key):
-    """Load a key from config that has a grouped structure (list of lists)."""
-    raw = config_dict.get(key, [])
-    result = []
-    for group in raw:
-        result.extend(group)
-    return result
-
-
 # ---------------------------------------------------------------------------
 # Combined Node
 # ---------------------------------------------------------------------------
@@ -154,15 +173,11 @@ class FourierWithHomeNode(Node):
     def __init__(
         self,
         yaml_name: str,
-        target_config_path: Path = DEFAULT_TARGET_CONFIG,
         pd_config_path: Path = PD_CONFIG_PATH,
         group: str | None = None,
         time_coeffs: float = 1.0,
         dry_run: bool = True,
     ):
-        assert target_config_path.exists(), (
-            f"Target config not found: {target_config_path}"
-        )
         assert pd_config_path.exists(), f"PD config not found: {pd_config_path}"
         # When not given explicitly, read the limb group from the YAML _meta.
         if group is None:
@@ -173,26 +188,14 @@ class FourierWithHomeNode(Node):
 
         super().__init__("fourier_with_home_node")
 
-        # --- Load target-position config (Phase 1) ---
-        with target_config_path.open("r", encoding="utf-8") as f:
-            target_cfg = yaml.safe_load(f)
-
+        # --- Phase 1: target (home) positions come from HOME_POS; the homing
+        #     interpolation uses a fixed HOMING_STEPS for every joint. ---
         self.target_positions = list(HOME_POS)
-        self.num_steps_list = [
-            int(s) for s in _load_grouped_config(target_cfg, "num_steps")
-        ]
         # Identify joints that should remain relaxed (home pos == 0)
         self.relaxed_joints = [i for i, p in enumerate(HOME_POS) if p == 0.0]
 
-        # Phase-1 PD gains (from target config, or fallback to pd_config)
-        kp_phase1_raw = _load_grouped_config(target_cfg, "kp") or [100.0] * NUM_JOINTS
-        kd_phase1_raw = _load_grouped_config(target_cfg, "kd") or [1.0] * NUM_JOINTS
-
-        assert len(kd_phase1_raw) >= NUM_JOINTS
-        self.kp_phase1 = [float(v) for v in (kp_phase1_raw[:NUM_JOINTS])]
-        self.kd_phase1 = [float(v) for v in (kd_phase1_raw[:NUM_JOINTS])]
-
-        # --- Load PD config (Phase 2) ---
+        # --- Load PD gains: a single config (pd_config) is used for both the
+        #     homing and the Fourier phase. ---
         with pd_config_path.open("r", encoding="utf-8") as f:
             pd_cfg = yaml.safe_load(f)
 
@@ -288,11 +291,10 @@ class FourierWithHomeNode(Node):
                 self.interpolated_positions.append([initial_positions[i]])
                 self.reached_targets[i] = True
                 continue
-            num_steps_i = min(self.num_steps_list[i], 2000)
             start = initial_positions[i]
             end = self.target_positions[i]
-            step_size = (end - start) / (num_steps_i - 1)
-            interpolated = [start + step_size * j for j in range(num_steps_i)]
+            step_size = (end - start) / (HOMING_STEPS - 1)
+            interpolated = [start + step_size * j for j in range(HOMING_STEPS)]
             self.interpolated_positions.append(interpolated)
 
         self.get_logger().info(f"Homing trajectories generated for {NUM_JOINTS} joints")
@@ -344,8 +346,8 @@ class FourierWithHomeNode(Node):
         joint_command.velocity = [0.0] * NUM_JOINTS
         joint_command.feed_forward_torque = [0.0] * NUM_JOINTS
         joint_command.torque = [0.0] * NUM_JOINTS
-        joint_command.stiffness = list(self.kp_phase1)
-        joint_command.damping = list(self.kd_phase1)
+        joint_command.stiffness = list(self.kp_list)
+        joint_command.damping = list(self.kd_list)
 
         # Relax joints that have HOME_POS == 0
         for i in self.relaxed_joints:
@@ -399,8 +401,8 @@ class FourierWithHomeNode(Node):
         joint_command.velocity = [0.0] * NUM_JOINTS
         joint_command.feed_forward_torque = [0.0] * NUM_JOINTS
         joint_command.torque = [0.0] * NUM_JOINTS
-        joint_command.stiffness = list(self.kp_phase1)
-        joint_command.damping = list(self.kd_phase1)
+        joint_command.stiffness = list(self.kp_list)
+        joint_command.damping = list(self.kd_list)
 
         # Relax joints that have HOME_POS == 0
         for i in self.relaxed_joints:
@@ -528,12 +530,6 @@ def main(argv=None):
         help="Limb group to identify (default: read from YAML _meta.group).",
     )
     parser.add_argument(
-        "--config_file",
-        type=str,
-        default=str(DEFAULT_TARGET_CONFIG),
-        help="Path to joint_test.yaml with target positions (Phase 1).",
-    )
-    parser.add_argument(
         "--time_coeffs",
         type=float,
         default=1.0,
@@ -558,18 +554,17 @@ def main(argv=None):
     else:
         yaml_name = FourierTrajectory.find_latest_yaml()
 
-    print(f"Target config: {parsed_args.config_file}")
     print(f"Fourier YAML : {yaml_name}")
     group = parsed_args.group or FourierTrajectory.load_group(yaml_name)
     print(f"Limb group   : {group}")
-
+    print(f"Home positions: {HOME_POS}")
     print(f"Time coeffs  : {parsed_args.time_coeffs}")
+    print(f"PD config    : {PD_CONFIG_PATH}")
     print(f"Dry run      : {parsed_args.dry_run}")
 
     rclpy.init(args=unknown_args)
     node = FourierWithHomeNode(
         yaml_name=yaml_name,
-        target_config_path=Path(parsed_args.config_file),
         group=group,
         time_coeffs=parsed_args.time_coeffs,
         dry_run=parsed_args.dry_run,
