@@ -70,6 +70,7 @@ joint_4:
   q0: 0.76377956
 _meta:
   stage: unified
+  group: left_arm
   started: '2026-08-03 18:06:31'
   finished: '2026-08-03 18:08:59'
   elapsed_s: 148.1
