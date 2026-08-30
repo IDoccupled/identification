@@ -39,15 +39,15 @@ URDF_PATH = (
 YAML_DIR = Path(__file__).resolve().parent.parent / "trajectory_coefficients"
 N_HARMONICS = 5
 TRAJ_PERIOD = 5.0
-SAMPLE_RATE = 100.0
+SAMPLE_RATE = 50.0
 
 # Per-stage PSO parameters (overnight run)
 # High pop / moderate iter: better exploration coverage, avoids local minima.
 # amp_scale > 1.0 lets the optimizer explore larger accelerations within joint limits.
 STAGE_CONFIG = {
-    "balance": {"pop": 100, "iter": 50, "amp_scale": 1.0},
-    "armature": {"pop": 100, "iter": 50, "amp_scale": 3.0},
-    "friction": {"pop": 100, "iter": 50, "amp_scale": 1.0},
+    "balance": {"pop": 800, "iter": 300, "amp_scale": 1.0},
+    "armature": {"pop": 800, "iter": 300, "amp_scale": 3.0},
+    "friction": {"pop": 800, "iter": 300, "amp_scale": 1.0},
 }
 PSO_W = 0.7
 PSO_C1 = 1.5

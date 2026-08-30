@@ -2,7 +2,7 @@ import numpy as np
 
 from identification.fourier_trajectory import FourierTrajectory
 from identification.target_limb_regressor import TargetLimbRegressor
-from cache.bayesianJFA import VariationalBayesianJFA
+from cache.bayesian.bayesianJFA import VariationalBayesianJFA
 
 from sko.PSO import PSO
 from pathlib import Path
