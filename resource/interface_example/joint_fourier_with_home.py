@@ -531,12 +531,14 @@ def main(argv=None):
     )
     parser.add_argument(
         "--time_coeffs",
+        "-t",
         type=float,
         default=1.0,
         help="Time scaling coefficient for the trajectory (default: 1.0).",
     )
     parser.add_argument(
         "--dry_run",
+        "-d",
         type=lambda x: x.lower() in ("true", "1", "yes"),
         default=True,
         help="Dry run mode: skip publishing joint commands (default: True). Use '--dry_run False' to send commands.",
