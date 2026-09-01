@@ -273,7 +273,15 @@ class TargetLimbRegressor:
             armature = 0.0
             if dyn_elem is not None:
                 damping = float(dyn_elem.attrib.get("damping", "0.0"))
-                friction = float(dyn_elem.attrib.get("frictionloss", "0.0"))
+                # URDF attribute naming is inconsistent across the file:
+                # arm joints use "frictionloss", all other joints use the
+                # standard "friction" attribute. Read both so that leg/torso
+                # joints do not silently get friction = 0.
+                friction = float(
+                    dyn_elem.attrib.get(
+                        "frictionloss", dyn_elem.attrib.get("friction", "0.0")
+                    )
+                )
                 armature = float(dyn_elem.attrib.get("armature", "0.0"))
 
             dynamics_by_joint[name] = {
