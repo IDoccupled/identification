@@ -38,7 +38,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <box size="0.4 0.25 0.02"/>
+                <box size="0.8 0.25 0.02"/>
             </geometry>
             <material name="">
                 <color rgba="0.55 0.35 0.2 1"/>
@@ -47,7 +47,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <box size="0.4 0.25 0.02"/>
+                <box size="0.8 0.25 0.02"/>
             </geometry>
         </collision>
     </link>
