@@ -15,6 +15,7 @@ Y_aug structure per time step (left_arm, 5 DoF):
 """
 
 from dataclasses import dataclass
+import argparse
 import yaml
 import time
 import numpy as np
@@ -42,8 +43,7 @@ URDF_PATH = (
 ).resolve()
 
 YAML_DIR = Path(__file__).resolve().parent.parent / "trajectory_coefficients"
-# TARGET_GROUP = "left_arm"
-TARGET_GROUP = "left_leg"
+DEFAULT_TARGET_GROUP = "left_leg"  # overridable with --group
 
 FIXED_HOME_POSE: dict[int, float] = {13: -2.5}
 
@@ -57,13 +57,13 @@ SAMPLE_RATE = 50.0  # [Hz] trajectory sample rate (coarse for PSO speed)
 # ============================================================================
 #  PSO hyper-parameters
 # ============================================================================
-POP = 500
-MAX_ITER = 300
+POP = 200
+MAX_ITER = 100
 AMP_SCALE = 2.0  # Fourier coefficient amplitude scale
 PSO_W = 0.7  # inertia weight
 PSO_C1 = 1.5  # cognitive acceleration
 PSO_C2 = 1.5  # social acceleration
-RANDOM_SEED = 29
+RANDOM_SEED = 67
 
 # ============================================================================
 #  Constraint margins
@@ -93,31 +93,49 @@ class RewardConfig:
     sigma_floor_rel: float = 1e-6  # σ_floor = sigma_floor_rel · σ_max
 
     # --- Condition-number soft penalty ---
-    cond_threshold: float = 1000.0  # κ > cond_threshold → linear penalty
-    # penalty = max(0, κ / cond_threshold)
+    # r_cond = -w_cond · max(0, κ / cond_threshold)^cond_penalty_power
+    cond_threshold: float = 100.0  # κ > cond_threshold → penalty active
+    w_cond: float = 1.0  # overall weight multiplier (heavier than linear default)
+    cond_penalty_power: float = 2.0  # exponent: 1=linear, 2=quadratic
 
-    # --- Per-parameter variance reward ---
-    w_param_per: float = 1.0  # overall weight for per-param term
-    std_good: float = 0.1  # rel_std below this → saturated +1.0 reward
-    std_bad: float = 1.0  # rel_std above this → polynomial penalty
+    # --- Per-parameter variance reward (tanh score) ---
+    # score = tanh(tanh_k · (1 − rel_std / tanh_rel_zero)) ∈ (−1, 1)
+    #   rel_std → 0             : score → +1  (reward, bounded above)
+    #   rel_std = tanh_rel_zero : score = 0  (reward ↔ penalty boundary)
+    #   rel_std → ∞             : score → −1  (bad penalty, bounded below)
+    # rank_deficient & small params are EXCLUDED from the rating (score = 0).
+    w_param_per: float = 50.0  # overall weight for per-param term
+    tanh_rel_zero: float = (
+        1.0  # rel_std where score = 0 (below = reward, above = penalty)
+    )
+    tanh_k: float = 1.0  # tanh steepness (larger → sharper transition, bigger gradient)
     abs_std_good: float = (
-        0.01  # abs_std below this → always "good" (regardless of rel_std)
+        0.01  # abs_std below this → floor score at ≥ 0 (never penalised)
     )
     nominal_small: float = (
-        1e-4  # |nominal| < this → quality "small" (negligible dynamics impact)
+        1e-4  # |nominal| < this → quality "small" (excluded from rating)
     )
     nullspace_threshold: float = (
-        0.5  # nullspace weight > this → quality "rank_deficient"
+        0.3  # nullspace weight > this → quality "rank_deficient" (excluded from rating)
     )
-    score_slope: float = 1.5  # linear slope in transition zone [std_good, std_bad]
-    score_baseline: float = 0.5  # penalty magnitude at std_norm = std_bad
-    std_penalty_power: float = 2.0  # exponent for bad-zone: -(baseline)·(std/std_bad)^p
-    # p=1 → linear penalty (constant gradient)
-    # p=2 → quadratic (gradient ∝ std_norm, recommended)
 
 
 # Default config instance
 RWD = RewardConfig()
+
+
+# ---------------------------------------------------------------------------
+def _cond_penalty(cond: float, cfg: RewardConfig) -> float:
+    """Soft condition-number penalty.
+
+    Active only when κ > cfg.cond_threshold; grows as
+        -cfg.w_cond · max(0, κ / cfg.cond_threshold)^cfg.cond_penalty_power
+    (power 1 = linear, power 2 = quadratic).
+    """
+    if cond <= 0.0:
+        return 0.0
+    ratio = cond / cfg.cond_threshold
+    return -cfg.w_cond * max(0.0, ratio) ** cfg.cond_penalty_power
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +217,7 @@ def compute_fitness(
     r_cond = 0.0
     r_param = 0.0
     scores = np.array([])
+    rated = np.zeros(0, dtype=bool)  # rated = nonzero & not rank_deficient/small
 
     try:
         U, S, Vt = np.linalg.svd(Y_nz, full_matrices=False)
@@ -212,9 +231,9 @@ def compute_fitness(
         if r_eff >= 2:
             S_eff = S[:r_eff]
             cond = S_eff[0] / S_eff[-1]
-            r_cond = -max(0.0, cond / cfg.cond_threshold)
+            r_cond = _cond_penalty(cond, cfg)
 
-        # --- Per-parameter variance reward ---
+        # --- Per-parameter variance reward (tanh, rated params only) ---
         if r_eff >= 2:
             V_r = Vt[:r_eff, :].T  # (n_nz, r_eff)
             weighted = V_r / S_eff[np.newaxis, :]
@@ -224,8 +243,20 @@ def compute_fitness(
             theta_nom_nz = theta_nominal[nonzero_cols]
             std_norm = std_raw_nz / (np.abs(theta_nom_nz) + 1e-8)
 
-            # Piecewise scoring with dual threshold (relative + absolute)
-            scores = _score_param_std(std_norm, std_raw_nz, cfg)
+            # Rated = nonzero & NOT rank_deficient & NOT small (excluded from rating)
+            nullspace_weight = np.zeros_like(var_per_param_nz)
+            if r_eff < Y_nz.shape[1]:
+                null_V = Vt[r_eff:, :].T  # (n_nz, n_nz - r_eff)
+                nullspace_weight = np.sum(null_V**2, axis=1)  # ∈ [0, 1]
+            is_rank_def = nullspace_weight > cfg.nullspace_threshold
+            is_small = np.abs(theta_nom_nz) < cfg.nominal_small
+            rated = ~is_rank_def & ~is_small
+
+            scores = np.zeros_like(std_norm)
+            if rated.any():
+                scores[rated] = _score_param_std(
+                    std_norm[rated], std_raw_nz[rated], cfg
+                )
             r_param = cfg.w_param_per * float(np.sum(scores))
     except np.linalg.LinAlgError:
         r_dopt = -1e3
@@ -233,9 +264,12 @@ def compute_fitness(
     reward = r_dopt + r_cond + r_param
     total = -(reward) + penalty
     if verbose and np.random.random() < 0.05:
-        n_good = int(np.sum(scores > 0.5)) if len(scores) else 0
-        n_ok = int(np.sum((scores >= -0.5) & (scores <= 0.5))) if len(scores) else 0
-        n_bad = int(np.sum(scores < -0.5)) if len(scores) else 0
+        if len(scores) and len(rated) == len(scores):
+            n_good = int(np.sum((scores > 0.5) & rated))
+            n_ok = int(np.sum(((scores >= -0.5) & (scores <= 0.5)) & rated))
+            n_bad = int(np.sum((scores < -0.5) & rated))
+        else:
+            n_good = n_ok = n_bad = 0
         print(
             f"  d_opt={r_dopt:.1f}, cond={r_cond:.1f}, param={r_param:.1f} "
             f"[good:{n_good} ok:{n_ok} bad:{n_bad}], "
@@ -250,31 +284,23 @@ def _score_param_std(
     abs_std: np.ndarray,
     cfg: RewardConfig,
 ) -> np.ndarray:
-    """Piecewise per-parameter score with dual threshold (relative + absolute).
+    """tanh-based per-parameter score ∈ (−1, 1), bounded both ways.
 
-    Dual-threshold logic:
-      - If abs_std < cfg.abs_std_good → always at least "ok" (score ≥ 0)
-        even if rel_std is huge (small-nominal parameters are not unfairly penalised).
-      - Otherwise, use rel_std with the standard piecewise scoring.
+    score = tanh(tanh_k · (1 − rel_std / tanh_rel_zero))
 
-    std < cfg.std_good            →  +1.0 (saturated)
-    cfg.std_good .. cfg.std_bad   →  linear transition  +1 → -baseline
-    std > cfg.std_bad             →  -baseline · (std/std_bad)^p
+      - rel_std → 0             : score → +1 (reward saturated; upper bound)
+      - rel_std = tanh_rel_zero : score =  0 (reward ↔ penalty boundary)
+      - rel_std → ∞             : score → −1 (bad penalty saturated; lower bound)
+
+    tanh yields a smooth reward gradient (steepest around the boundary) and is
+    naturally bounded, so a single extreme rel_std can no longer blow up the
+    reward (this replaces the old piecewise + clamp scheme).  Dual threshold:
+    if abs_std < cfg.abs_std_good the score is floored at ≥ 0 (tiny absolute
+    uncertainty is never penalised).
     """
-    g, b = cfg.std_good, cfg.std_bad
-    # Standard rel_std-based score
-    score_rel = np.where(
-        std_norm < g,
-        1.0,
-        np.where(
-            std_norm < b,
-            1.0 - cfg.score_slope * (std_norm - g) / (b - g),
-            -cfg.score_baseline * (std_norm / b) ** cfg.std_penalty_power,
-        ),
-    )
-    # Dual-threshold: abs_std is good enough → floor score at 0 (not below)
+    score = np.tanh(cfg.tanh_k * (1.0 - std_norm / cfg.tanh_rel_zero))
     abs_good_mask = abs_std < cfg.abs_std_good
-    return np.where(abs_good_mask, np.maximum(score_rel, 0.0), score_rel)
+    return np.where(abs_good_mask, np.maximum(score, 0.0), score)
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +392,7 @@ def compute_regressor_diagnostics(
     theta_nominal: np.ndarray,
     param_names: list[str],
     cfg: RewardConfig,
+    traj_stats: dict | None = None,
 ) -> dict:
     """Compute comprehensive diagnostics from stacked regressor Y_full.
 
@@ -373,7 +400,8 @@ def compute_regressor_diagnostics(
       - "null"            — structurally zero column (constant zero across all rows)
       - "rank_deficient"  — significant nullspace component (linear dependency)
       - "small"           — |nominal| < cfg.nominal_small (negligible dynamics impact)
-      - "good" / "ok" / "bad"  — standard scoring from _score_param_std
+      - "good" / "ok" / "bad"  — tanh scoring from _score_param_std
+                                 (rank_deficient/small are NOT scored, score = 0)
 
     Priority: null > rank_deficient > small > good/ok/bad
     """
@@ -401,7 +429,19 @@ def compute_regressor_diagnostics(
     r_dopt = float(np.sum(np.log(S + sigma_floor)) - len(S) * np.log(sigma_floor))
 
     # Condition-number penalty
-    r_cond = float(-max(0.0, cond / cfg.cond_threshold)) if r_eff >= 2 else 0.0
+    r_cond = _cond_penalty(cond, cfg) if r_eff >= 2 else 0.0
+    cond_detail = {
+        "penalty": float(round(r_cond, 2)),
+        "cond": float(round(cond, 1)) if r_eff >= 2 else None,
+        "cond_threshold": cfg.cond_threshold,
+        "w_cond": cfg.w_cond,
+        "cond_penalty_power": cfg.cond_penalty_power,
+        "cond_ratio": (
+            float(round(cond / cfg.cond_threshold, 4)) if r_eff >= 2 else None
+        ),
+        "sigma_max": float(round(float(S[0]), 3)) if len(S) else None,
+        "sigma_min_eff": (float(round(float(S[r_eff - 1]), 3)) if r_eff >= 2 else None),
+    }
 
     # ---- Per-parameter variance & nullspace analysis ----
     param_entries = []
@@ -420,6 +460,7 @@ def compute_regressor_diagnostics(
     std_norm_nz = np.full(n_nz, np.nan)
     scores_nz = np.zeros(n_nz)
     nullspace_weight = np.zeros(n_nz)
+    rated_nz = np.zeros(n_nz, dtype=bool)
 
     if r_eff >= 2:
         S_eff = S[:r_eff]
@@ -430,13 +471,22 @@ def compute_regressor_diagnostics(
         theta_nom_nz = theta_nominal[nonzero_cols]
         std_norm_nz = std_raw_nz / (np.abs(theta_nom_nz) + 1e-8)
 
-        scores_nz = _score_param_std(std_norm_nz, std_raw_nz, cfg)
-        r_param = cfg.w_param_per * float(np.sum(scores_nz))
+        # Nullspace analysis: strong nullspace projection → rank-deficient
+        if r_eff < n_nz:
+            null_V = Vt[r_eff:, :].T  # (n_nz, n_nz - r_eff)
+            nullspace_weight = np.sum(null_V**2, axis=1)  # ∈ [0, 1]
 
-    # Nullspace analysis: columns with strong projection onto nullspace are rank-deficient
-    if r_eff < n_nz:
-        null_V = Vt[r_eff:, :].T  # (n_nz, n_nz - r_eff)
-        nullspace_weight = np.sum(null_V**2, axis=1)  # ∈ [0, 1]
+        # Rated = nonzero & NOT rank_deficient & NOT small (excluded from rating)
+        is_rank_def = nullspace_weight > cfg.nullspace_threshold
+        is_small = np.abs(theta_nom_nz) < cfg.nominal_small
+        rated_nz = ~is_rank_def & ~is_small
+
+        # tanh score only for rated params; non-rated → 0 (neutral)
+        if rated_nz.any():
+            scores_nz[rated_nz] = _score_param_std(
+                std_norm_nz[rated_nz], std_raw_nz[rated_nz], cfg
+            )
+        r_param = cfg.w_param_per * float(np.sum(scores_nz))
 
     # ---- Build per-param entries for ALL 65 columns ----
     nz_idx_map = {int(idx): j for j, idx in enumerate(nz_indices)}
@@ -508,13 +558,66 @@ def compute_regressor_diagnostics(
             ],
         }
 
-    return {
-        "reward_breakdown": {
-            "d_opt": float(round(r_dopt, 2)),
-            "cond_penalty": float(round(r_cond, 2)),
-            "param_reward": float(round(r_param, 2)),
-            "total_reward": float(round(r_dopt + r_cond + r_param, 2)),
-        },
+    # ---- Param-reward breakdown (like cond_detail) ----
+    # value = w_param_per · sum_scores (rated params only);
+    # sum_scores = Σ good + Σ ok + Σ bad  (rank_deficient/small excluded)
+    n_rated = int(rated_nz.sum())
+    if n_rated:
+        good_m = rated_nz & (scores_nz > 0.5)
+        ok_m = rated_nz & (scores_nz >= -0.5) & (scores_nz <= 0.5)
+        bad_m = rated_nz & (scores_nz < -0.5)
+        rated_scores = scores_nz[rated_nz]
+        param_detail = {
+            "value": float(round(r_param, 2)),
+            "w_param_per": cfg.w_param_per,
+            "sum_scores": float(round(float(np.sum(rated_scores)), 4)),
+            "n_nonzero": int(n_nz),
+            "n_rated": n_rated,
+            "score_min": float(round(float(rated_scores.min()), 4)),
+            "score_max": float(round(float(rated_scores.max()), 4)),
+            "score_mean": float(round(float(rated_scores.mean()), 4)),
+            "by_quality": {
+                "good": {
+                    "count": int(good_m.sum()),
+                    "score_sum": float(round(float(scores_nz[good_m].sum()), 4)),
+                },
+                "ok": {
+                    "count": int(ok_m.sum()),
+                    "score_sum": float(round(float(scores_nz[ok_m].sum()), 4)),
+                },
+                "bad": {
+                    "count": int(bad_m.sum()),
+                    "score_sum": float(round(float(scores_nz[bad_m].sum()), 4)),
+                },
+            },
+        }
+    else:
+        param_detail = {
+            "value": float(round(r_param, 2)),
+            "w_param_per": cfg.w_param_per,
+            "sum_scores": 0.0,
+            "n_nonzero": int(n_nz),
+            "n_rated": 0,
+            "score_min": None,
+            "score_max": None,
+            "score_mean": None,
+            "by_quality": None,
+        }
+
+    # Assemble reward_breakdown (excess is moved here from trajectory_stats)
+    reward_breakdown = {
+        "d_opt": float(round(r_dopt, 2)),
+        "cond_penalty": cond_detail,
+        "param_reward": param_detail,
+        "total_reward": float(round(r_dopt + r_cond + r_param, 2)),
+    }
+    traj_stats_out = traj_stats
+    if traj_stats is not None and "excess" in traj_stats:
+        reward_breakdown["excess"] = traj_stats["excess"]
+        traj_stats_out = {k: v for k, v in traj_stats.items() if k != "excess"}
+
+    result = {
+        "reward_breakdown": reward_breakdown,
         "regression": {
             "total_cols": int(n_total),
             "nonzero_cols": int(n_nz),
@@ -529,6 +632,16 @@ def compute_regressor_diagnostics(
         "quality_summary": quality_summary_named,
         "per_param": param_entries,
     }
+    if traj_stats_out is not None:
+        # trajectory_stats sits right before regression
+        result = {
+            "reward_breakdown": result["reward_breakdown"],
+            "trajectory_stats": traj_stats_out,
+            "regression": result["regression"],
+            "quality_summary": result["quality_summary"],
+            "per_param": result["per_param"],
+        }
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +655,7 @@ def _save_yaml(
     amp_scale,
     best_fitness,
     cfg: RewardConfig,
+    group: str,
     extra_meta=None,
     diagnostics=None,
 ):
@@ -549,7 +663,7 @@ def _save_yaml(
     yaml_dict = _coeffs_to_yaml_dict(coeffs, ft.dim, ft.n_harmonics)
     meta = {
         "stage": "unified",
-        "group": TARGET_GROUP,
+        "group": group,
         "started": t_start,
         "finished": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "elapsed_s": round(elapsed, 1),
@@ -564,15 +678,14 @@ def _save_yaml(
             "w_collision": cfg.w_collision,
             "sigma_floor_rel": cfg.sigma_floor_rel,
             "cond_threshold": cfg.cond_threshold,
+            "w_cond": cfg.w_cond,
+            "cond_penalty_power": cfg.cond_penalty_power,
             "w_param_per": cfg.w_param_per,
-            "std_good": cfg.std_good,
-            "std_bad": cfg.std_bad,
+            "tanh_rel_zero": cfg.tanh_rel_zero,
+            "tanh_k": cfg.tanh_k,
             "abs_std_good": cfg.abs_std_good,
             "nominal_small": cfg.nominal_small,
             "nullspace_threshold": cfg.nullspace_threshold,
-            "score_slope": cfg.score_slope,
-            "score_baseline": cfg.score_baseline,
-            "std_penalty_power": cfg.std_penalty_power,
         },
         "best_fitness": float(best_fitness[0])
         if hasattr(best_fitness, "__iter__")
@@ -584,7 +697,7 @@ def _save_yaml(
     if diagnostics:
         yaml_dict["_diagnostics"] = diagnostics
     uid = datetime.now().strftime("%y%m%d_%H%M%S")
-    yaml_path = YAML_DIR / f"pso_unified_{uid}.yaml"
+    yaml_path = YAML_DIR / f"pso_unified_{uid}_{group}.yaml"
     yaml_path.parent.mkdir(parents=True, exist_ok=True)
     with open(yaml_path, "w") as f:
         yaml.dump(yaml_dict, f, default_flow_style=False, sort_keys=False)
@@ -594,16 +707,32 @@ def _save_yaml(
 
 # ---------------------------------------------------------------------------
 def main():
+    parser = argparse.ArgumentParser(
+        description="PSO unified excitation trajectory optimization"
+    )
+    parser.add_argument(
+        "--group",
+        type=str,
+        default=DEFAULT_TARGET_GROUP,
+        help="limb group to identify, e.g. left_arm, left_leg (default: %(default)s)",
+    )
+    args = parser.parse_args()
+    target_group = args.group
+
     cfg = RWD  # use the default RewardConfig; edit RWD above to tune
 
     print(f"\n{'=' * 60}\n  PSO Unified Excitation Optimization\n{'=' * 60}")
-    print(f"  pop={POP}, iter={MAX_ITER}, amp_scale={AMP_SCALE}, seed={RANDOM_SEED}")
+    print(
+        f"  target_group={target_group}, pop={POP}, iter={MAX_ITER}, amp_scale={AMP_SCALE}, seed={RANDOM_SEED}"
+    )
     print(
         f"  reward cfg: w_q={cfg.w_q_limit}, w_v={cfg.w_v_limit}, "
         f"w_tau={cfg.w_tau_limit}, w_coll={cfg.w_collision}, "
         f"σ_floor={cfg.sigma_floor_rel}, cond_thr={cfg.cond_threshold}, "
+        f"cond_w={cfg.w_cond}, cond_p={cfg.cond_penalty_power}, "
         f"w_param={cfg.w_param_per}, "
-        f"std_g/b/a={cfg.std_good}/{cfg.std_bad}/{cfg.abs_std_good}, "
+        f"tanh_z0={cfg.tanh_rel_zero}, tanh_k={cfg.tanh_k}, "
+        f"abs_good={cfg.abs_std_good}, "
         f"nom_small={cfg.nominal_small}"
     )
 
@@ -611,9 +740,9 @@ def main():
 
     reg = TargetLimbRegressor(
         urdf_path=URDF_PATH,
-        group_to_identify=TARGET_GROUP,
+        group_to_identify=target_group,
         print_info=False,
-        fixed_pose=FIXED_HOME_POSE if TARGET_GROUP == "left_leg" else None,
+        fixed_pose=FIXED_HOME_POSE if target_group == "left_leg" else None,
     )
     ft = FourierTrajectory(dim=reg.dof, sample_rate=SAMPLE_RATE)
     ft.omega_f = 2.0 * np.pi / TRAJ_PERIOD
@@ -702,12 +831,42 @@ def main():
     q, v, a = ft.generate_trajectory(coeffs_best)
     collisions = 0
     Y_aug_all = []
+    # Per-joint exceedance over limits (physical units), max over trajectory.
+    # NOTE: acceleration has NO limit in the model (Pinocchio limits are q/v/tau only).
+    q_lo = np.asarray(reg.q_lower_limit, dtype=float)
+    q_hi = np.asarray(reg.q_upper_limit, dtype=float)
+    v_lim = np.asarray(reg.v_limit, dtype=float)
+    tau_lim = np.asarray(reg.tau_limit, dtype=float)
+    q_over = np.zeros(reg.dof)
+    v_over = np.zeros(reg.dof)
+    tau_over = np.zeros(reg.dof)
+    q_viol_steps = 0
+    v_viol_steps = 0
+    tau_viol_steps = 0
     for t_idx in range(len(ft.t_array)):
         res = reg.compute_regressor(q=q[:, t_idx], v=v[:, t_idx], a=a[:, t_idx])
         if res[18]:  # collided
             collisions += 1
         else:
             Y_aug_all.append(res[0])
+        tau_aug = np.asarray(res[4])
+        # Per-joint exceedance at this sample (rad, rad/s, Nm)
+        dq = np.maximum(np.maximum(q_lo - q[:, t_idx], q[:, t_idx] - q_hi), 0.0)
+        dv = np.maximum(np.abs(v[:, t_idx]) - v_lim, 0.0)
+        dt = np.maximum(np.abs(tau_aug) - tau_lim, 0.0)
+        q_over = np.maximum(q_over, dq)
+        v_over = np.maximum(v_over, dv)
+        tau_over = np.maximum(tau_over, dt)
+        q_viol_steps += int(np.any(dq > 0.0))
+        v_viol_steps += int(np.any(dv > 0.0))
+        tau_viol_steps += int(np.any(dt > 0.0))
+
+    def _excess_entry(max_over, viol_steps, unit):
+        return {
+            "max_over": [round(float(x), 4) for x in max_over],
+            "violating_steps": int(viol_steps),
+            "unit": unit,
+        }
 
     zc = np.sum(np.diff(np.sign(v), axis=1) != 0, axis=1)
     traj_stats = {
@@ -715,24 +874,48 @@ def main():
         "v_max": round(float(np.abs(v).max()), 2),
         "a_max": round(float(np.abs(a).max()), 2),
         "zero_crossings": [int(x) for x in zc],
+        "excess": {
+            "q": {
+                **_excess_entry(q_over, q_viol_steps, "rad"),
+                "limit_lo": [round(float(x), 4) for x in q_lo],
+                "limit_hi": [round(float(x), 4) for x in q_hi],
+            },
+            "v": {
+                **_excess_entry(v_over, v_viol_steps, "rad/s"),
+                "limit": [round(float(x), 4) for x in v_lim],
+            },
+            "tau": {
+                **_excess_entry(tau_over, tau_viol_steps, "Nm"),
+                "limit": [round(float(x), 4) for x in tau_lim],
+            },
+        },
     }
 
     diagnostics = {}
     if len(Y_aug_all) > 10:
         Y_full = np.vstack(Y_aug_all)
         diagnostics = compute_regressor_diagnostics(
-            Y_full, theta_nominal, param_names, cfg
+            Y_full, theta_nominal, param_names, cfg, traj_stats=traj_stats
         )
-        diagnostics["trajectory_stats"] = traj_stats
 
         # Console summary
         rd = diagnostics.get("reward_breakdown", {})
         rg = diagnostics.get("regression", {})
         qs = diagnostics.get("quality_summary", {})
         counts = {k: v["count"] for k, v in qs.items()}
+        cond_pen = rd.get("cond_penalty", {})
+        cond_pen_val = (
+            cond_pen.get("penalty", "?") if isinstance(cond_pen, dict) else cond_pen
+        )
+        param_reward = rd.get("param_reward", {})
+        param_val = (
+            param_reward.get("value", "?")
+            if isinstance(param_reward, dict)
+            else param_reward
+        )
         print(
-            f"  d_opt={rd.get('d_opt', '?')}, cond_pen={rd.get('cond_penalty', '?')}, "
-            f"param={rd.get('param_reward', '?')}, "
+            f"  d_opt={rd.get('d_opt', '?')}, cond_pen={cond_pen_val}, "
+            f"param={param_val}, "
             f"rank={rg.get('eff_rank', '?')}/{rg.get('nonzero_cols', '?')} "
             f"(nullspace={rg.get('nullspace_dim', '?')}), "
             f"κ={rg.get('cond', '?')}, "
@@ -748,6 +931,12 @@ def main():
             f"|v|max={traj_stats['v_max']}, |a|max={traj_stats['a_max']}, "
             f"zc={traj_stats['zero_crossings']}"
         )
+        for key in ("q", "v", "tau"):
+            e = rd.get("excess", {}).get(key, {})
+            print(
+                f"  excess {key}: max_over={e.get('max_over', '?')} "
+                f"{e.get('unit', '')} [{e.get('violating_steps', 0)} steps]"
+            )
     else:
         print("  Not enough data for diagnostics.")
         diagnostics = {"error": "Too few valid samples"}
@@ -765,6 +954,7 @@ def main():
         AMP_SCALE,
         pso.gbest_y,
         cfg=cfg,
+        group=target_group,
         extra_meta=extra,
         diagnostics=diagnostics,
     )
