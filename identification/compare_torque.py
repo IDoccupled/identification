@@ -3,11 +3,13 @@
 compare_torque.py — 把恢复出的实际运动轨迹（傅里叶系数）作用到机器人 URDF 上，
 用 TargetLimbRegressor 算出"理论上需要的关节力矩"，与实测数据对比。
 
-每个关节单独一张图，4 个子图分别对比：
-    ① 位置：实际(joint_state) vs 还原
-    ② 速度：实际(joint_state) vs 还原
-    ③ 加速度：仅还原（解析求导，bag 无实测加速度）
-    ④ 力矩：实际(joint_state) vs 还原(URDF+轨迹)
+每个关节单独一张图，3 个子图：
+    ① 力矩：实际(joint_state) vs 还原(URDF+轨迹)
+    ② 力矩残差：实际 - 还原（时序，标题含 RMS）
+    ③ 残差频谱：力矩残差的 |FFT| vs Hz（竖虚线标 f0 整数倍）
+
+注：q/v/a 的还原与残差对比已由 plot_residual.py（轨迹拟合质量）负责，
+本脚本只聚焦力矩层面的动力学模型验证。
 
 背景 / 约定
 ----------
@@ -25,7 +27,7 @@ compare_torque.py — 把恢复出的实际运动轨迹（傅里叶系数）作�
 * 测量时机器人并非站立：机体系下的重力向量为 [x,y,z]=[-9.712746, 0.390467, -1.393897]，
   腰关节 J12 角度 = 0.076485634 rad（固定，不参与辨识），这两个参数传给
   TargetLimbRegressor(gravity=..., waist_yaw_offset=...)。
-* 理论力矩 = 惯性项(pin.rnea) + armature·a + damping·v + frictionloss·tanh(v·1e2)，
+* 理论力矩 = 惯性项(pin.rnea) + armature·a + damping·v + friction·tanh(v·1e2)，
   与 regressor 内部 tau_aug 的口径一致（见 plot_unified_trajectory.py）。
 
 用法（需先 source install/setup.bash，让 ament 找到 identification 包）：
@@ -162,14 +164,13 @@ def _setup_cjk_font():
             return
 
 
-def _plot_residual_spectrum(ax, t, rq, rv, f0):
-    """在 ax 上画位置/速度残差的频谱（|FFT| vs Hz），竖虚线标出 f0 的整数倍。"""
+def _plot_residual_spectrum(ax, t, r, f0, label="residual", title="Residual Spectrum"):
+    """在 ax 上画一条残差的频谱（|FFT| vs Hz），竖虚线标出 f0 的整数倍。"""
     dt = np.median(np.diff(t))
-    freq = np.fft.rfftfreq(len(rq), dt)
-    mag_q = np.maximum(np.abs(np.fft.rfft(rq)), 1e-15)
-    mag_v = np.maximum(np.abs(np.fft.rfft(rv)), 1e-15)
-    ax.semilogy(freq, mag_q, lw=0.9, color="C2", label="q residual spectrum")
-    ax.semilogy(freq, mag_v, lw=0.9, color="C4", label="v residual spectrum")
+    freq = np.fft.rfftfreq(len(r), dt)
+    r_fft = np.where(np.isnan(r), 0.0, r)  # 兜底：被 mask 掉的 NaN 样本不参与 FFT
+    mag = np.maximum(np.abs(np.fft.rfft(r_fft)), 1e-15)
+    ax.semilogy(freq, mag, lw=0.9, color="C2", label=f"{label} spectrum")
     fmax = freq.max()
     k = 1
     while k * f0 <= fmax and k <= 25:
@@ -177,90 +178,48 @@ def _plot_residual_spectrum(ax, t, rq, rv, f0):
         k += 1
     ax.set_xlabel("frequency (Hz)")
     ax.set_ylabel("|FFT(residual)|")
-    ax.set_title("Residual Spectrum (q & v)", loc="left", fontsize=11)
+    ax.set_title(title, loc="left", fontsize=11)
     ax.grid(alpha=0.3)
     ax.legend(loc="upper right", fontsize=8)
 
 
 def plot_joint_compare(
     t,
-    q_meas,
-    v_meas,
     tau_meas,
-    q_rec,
-    v_rec,
-    a_rec,
     tau_rec,
     f0,
     joint_number,
     joint_name,
     out_png=None,
 ):
-    """单个关节一张图：5 个子图 —— 位置/速度/加速度/力矩 + 残差频谱。"""
+    """单个关节一张图：3 个子图 —— 力矩(实际 vs 还原)、力矩残差、残差频谱。"""
     import matplotlib.pyplot as plt
 
     C_ACT = "C0"  # 实际
     C_REC = "C3"  # 还原
 
-    fig, axs = plt.subplots(5, 1, figsize=(13, 16), sharex=True)
-    axs[4].get_shared_x_axes().remove(axs[4])  # 频谱子图不共享时间轴
+    fig, axs = plt.subplots(
+        3,
+        1,
+        figsize=(13, 11),
+        sharex=True,
+        gridspec_kw={"height_ratios": [3, 1.6, 3]},
+    )
+    # 频谱子图不共享时间轴。新 matplotlib 的 get_shared_x_axes() 只返回只读视图
+    # (GrouperView，无 remove)，需改用私有 grouper 解除共享；解除后底部的时间
+    # 子图(axs[1])不会自动恢复刻度，需重新打开 x 刻度显示。
+    axs[2]._shared_axes["x"].remove(axs[2])
+    axs[1].tick_params(labelbottom=True)
 
-    # ① 位置：实际 vs 还原
+    # ① 力矩：实际 vs 还原
     axs[0].plot(
-        t,
-        q_meas,
-        lw=0.8,
-        color=C_ACT,
-        label=f"actual q_{joint_number} (joint_state)",
-    )
-    axs[0].plot(
-        t, q_rec, lw=1.4, color=C_REC, alpha=0.5, label=f"recovered q_{joint_number}"
-    )
-    axs[0].set_ylabel("q (rad)")
-    axs[0].set_title("Position", loc="left", fontsize=11)
-    axs[0].legend(loc="upper right", fontsize=8)
-    axs[0].grid(alpha=0.3)
-
-    # ② 速度：实际 vs 还原
-    axs[1].plot(
-        t,
-        v_meas,
-        lw=0.8,
-        color=C_ACT,
-        label=f"actual v_{joint_number} (joint_state)",
-    )
-    axs[1].plot(
-        t, v_rec, lw=1.4, color=C_REC, alpha=0.5, label=f"recovered v_{joint_number}"
-    )
-    axs[1].set_ylabel("v (rad/s)")
-    axs[1].set_title("Velocity", loc="left", fontsize=11)
-    axs[1].legend(loc="upper right", fontsize=8)
-    axs[1].grid(alpha=0.3)
-
-    # ③ 加速度：仅还原（解析求导，bag 无实测加速度）
-    axs[2].plot(
-        t,
-        a_rec,
-        lw=1.2,
-        color=C_REC,
-        label=f"recovered a_{joint_number} (analytic)",
-    )
-    axs[2].set_ylabel("a (rad/s²)")
-    axs[2].set_title(
-        "Acceleration (recovered only, no measured)", loc="left", fontsize=11
-    )
-    axs[2].legend(loc="upper right", fontsize=8)
-    axs[2].grid(alpha=0.3)
-
-    # ④ 力矩：实际 vs 还原
-    axs[3].plot(
         t,
         tau_meas,
         lw=0.8,
         color=C_ACT,
         label=f"actual tau_{joint_number} (joint_state)",
     )
-    axs[3].plot(
+    axs[0].plot(
         t,
         tau_rec,
         lw=1.4,
@@ -268,18 +227,38 @@ def plot_joint_compare(
         color=C_REC,
         label=f"recovered tau_{joint_number} (URDF + recovered traj)",
     )
-    axs[3].set_ylabel("tau (Nm)")
-    axs[3].set_title("Torque", loc="left", fontsize=11)
-    axs[3].legend(loc="upper right", fontsize=8)
-    axs[3].grid(alpha=0.3)
+    axs[0].set_ylabel("tau (Nm)")
+    axs[0].set_title("Torque", loc="left", fontsize=11)
+    axs[0].legend(loc="upper right", fontsize=8)
+    axs[0].grid(alpha=0.3)
 
-    axs[3].set_xlabel("t (s)")
+    # ② 力矩残差（实际 - 还原，时序）
+    r = tau_meas - tau_rec
+    axs[1].plot(t, r, lw=0.6, color="C2")
+    axs[1].set_ylabel("tau residual (Nm)")
+    axs[1].set_xlabel("t (s)")
+    axs[1].axhline(0, color="gray", lw=0.6)
+    axs[1].grid(alpha=0.3)
+    rms = np.sqrt(np.nanmean(r**2))
+    pct = (100 * rms / np.nanstd(tau_meas)) if np.nanstd(tau_meas) else np.nan
+    axs[1].set_title(
+        f"Torque residual — RMS {rms:.4f} Nm = {pct:.2f}% of tau std",
+        loc="left",
+        fontsize=10,
+    )
 
-    # ⑤ 残差频谱（位置/速度残差）
-    _plot_residual_spectrum(axs[4], t, q_meas - q_rec, v_meas - v_rec, f0)
+    # ③ 力矩残差频谱
+    _plot_residual_spectrum(
+        axs[2],
+        t,
+        r,
+        f0,
+        label=f"tau_{joint_number} residual",
+        title="Torque Residual Spectrum (FFT)",
+    )
 
     fig.suptitle(
-        f"{joint_name} (joint {joint_number}) — actual vs recovered\n"
+        f"{joint_name} (joint {joint_number}) — actual vs recovered torque\n"
         f"gravity={GRAVITY.tolist()}, waist={WAIST_YAW_OFFSET:.4f} rad",
         fontsize=13,
     )
@@ -394,8 +373,8 @@ def main():
     #    （extract 时写入），也可 --time-coeffs 覆盖，f0 = time_coeffs / TRAJ_PERIOD。
     bag_name = args.bag or (meta_bag or DEFAULT_BAG)
 
-    # 1) 实测数据（位置/速度/力矩，全部 joint_state）
-    t, q_meas, v_meas, tau_meas = load_bag(bag_name)
+    # 1) 实测数据（只用时间轴与力矩；q/v 还原对比由 plot_residual.py 负责）
+    t, _, _, tau_meas = load_bag(bag_name)
 
     # 2) time_coeffs 只从 YAML _meta 读取（fit 时写入），可 --time-coeffs 覆盖；不再读 bag summary.json
     time_coeffs = args.time_coeffs
@@ -437,23 +416,11 @@ def main():
         f"重力向量: {reg.model.gravity.linear}   腰关节偏移: {reg.waist_yaw_offset:.6f} rad"
     )
 
-    # 5) 一周期理论量，按相位折叠到实测时间轴上
+    # 5) 一周期理论力矩，按相位折叠到实测时间轴上
     #    轨迹拟合(joint_state 位置) 与实测(joint_state) 同源，还原量统一按
     #    phase=mod(t, period) 对齐，无需滞后补偿。
     tau_th = compute_theoretical_torque(reg, q_th, v_th, a_th)  # (dof, N_th)
     phase = np.mod(t, period)
-    q_rec = np.stack(
-        [np.interp(phase, ft.t_array, q_th[i], period=period) for i in range(reg.dof)],
-        axis=1,
-    )
-    v_rec = np.stack(
-        [np.interp(phase, ft.t_array, v_th[i], period=period) for i in range(reg.dof)],
-        axis=1,
-    )
-    a_rec = np.stack(
-        [np.interp(phase, ft.t_array, a_th[i], period=period) for i in range(reg.dof)],
-        axis=1,
-    )
     tau_rec = np.stack(
         [
             np.interp(phase, ft.t_array, tau_th[i], period=period)
@@ -474,15 +441,10 @@ def main():
     if not np.any(mask_t):
         raise ValueError(f"时间窗 [{t0}, {t1}] 内没有数据点")
     t = t[mask_t]
-    q_meas = q_meas[mask_t]
-    v_meas = v_meas[mask_t]
     tau_meas_plot = tau_meas_plot[mask_t]
-    q_rec = q_rec[mask_t]
-    v_rec = v_rec[mask_t]
-    a_rec = a_rec[mask_t]
     tau_rec = tau_rec[mask_t]
 
-    # 8) 每个关节单独一张 4 子图（位置/速度/加速度/力矩），收集后一起 show
+    # 8) 每个关节单独一张 3 子图（力矩/力矩残差/残差频谱），收集后一起 show
     figs = []
     for i, (j, name) in enumerate(zip(joints, joint_names)):
         out_path = None
@@ -492,12 +454,7 @@ def main():
         figs.append(
             plot_joint_compare(
                 t,
-                q_meas[:, j],
-                v_meas[:, j],
                 tau_meas_plot[:, j],
-                q_rec[:, i],
-                v_rec[:, i],
-                a_rec[:, i],
                 tau_rec[:, i],
                 f0=f0,
                 joint_number=j,
