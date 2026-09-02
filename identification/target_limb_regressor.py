@@ -255,7 +255,13 @@ class TargetLimbRegressor:
 
     @staticmethod
     def _load_urdf_joint_dynamics(urdf_path: Path):
-        """Load damping/friction values from URDF joint dynamics tags."""
+        """Load damping/friction values from URDF joint dynamics tags.
+
+        Reads ONLY the standard URDF ``friction`` attribute (MuJoCo-style
+        ``frictionloss`` is NOT accepted). Any non-fixed joint whose
+        ``<dynamics>`` omits ``friction`` raises an error instead of silently
+        defaulting to 0.0 (which previously zeroed leg/torso friction).
+        """
         tree = ET.parse(str(urdf_path))
         root = tree.getroot()
 
@@ -267,21 +273,28 @@ class TargetLimbRegressor:
             elif name == "LAY_DOWN":
                 continue  # LAY_DOWN is used only to tune the pose when identify
 
+            joint_type = joint_elem.attrib.get("type", "")
             dyn_elem = joint_elem.find("dynamics")
+
+            if joint_type != "fixed":
+                friction_attr = (
+                    dyn_elem.attrib.get("friction") if dyn_elem is not None else None
+                )
+                if friction_attr is None:
+                    attrs = sorted(dyn_elem.attrib) if dyn_elem is not None else []
+                    raise ValueError(
+                        f"Joint '{name}' ({joint_type}) in {urdf_path.name} is "
+                        f'missing <dynamics friction="..."> (attrs={attrs}). '
+                        f"Only the standard URDF 'friction' attribute is "
+                        f"supported — MuJoCo-style 'frictionloss' is not read."
+                    )
+
             damping = 0.0
             friction = 0.0
             armature = 0.0
             if dyn_elem is not None:
                 damping = float(dyn_elem.attrib.get("damping", "0.0"))
-                # URDF attribute naming is inconsistent across the file:
-                # arm joints use "frictionloss", all other joints use the
-                # standard "friction" attribute. Read both so that leg/torso
-                # joints do not silently get friction = 0.
-                friction = float(
-                    dyn_elem.attrib.get(
-                        "frictionloss", dyn_elem.attrib.get("friction", "0.0")
-                    )
-                )
+                friction = float(dyn_elem.attrib.get("friction", "0.0"))
                 armature = float(dyn_elem.attrib.get("armature", "0.0"))
 
             dynamics_by_joint[name] = {
