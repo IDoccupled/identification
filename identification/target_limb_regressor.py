@@ -141,6 +141,7 @@ class TargetLimbRegressor:
         gravity: np.ndarray | None = None,
         fixed_pose: dict[int, float] | None = None,
         waist_yaw_offset: float = 0.0,
+        q_margin: float = 0.0,
     ):
 
         assert urdf_path.is_file(), f"URDF file not found at: {urdf_path}"
@@ -199,23 +200,44 @@ class TargetLimbRegressor:
                     f"  q[{idx}] ({self.model.names[idx + 1]:<24s}) = {self.fixed_pose[idx]:.4f}"
                 )
 
-        self.limits = {
-            "q_lower": self.model.lowerPositionLimit[self.group_to_identify],
-            "q_upper": self.model.upperPositionLimit[self.group_to_identify],
-            "v_limit": self.model.velocityLimit[self.group_to_identify],
-            "effort_limit": self.model.effortLimit[self.group_to_identify],
-        }
-        self.q_upper_limit, self.q_lower_limit, self.v_limit, self.tau_limit = (
+        # 位置软约束余量 [rad]：上下限各往内收 q_margin。
+        # q 一旦越过收缩后的有效限位（进入余量带）就触发 q-excess 惩罚（soft），
+        # 允许轻微进入但把优化往“不越出 URDF 原始限位”的方向推。
+        # 原始 URDF 限位另存为 *_raw_* 属性，供诊断/物理硬限位检查使用。
+        self.q_margin = float(q_margin)
+        self.q_lower_limit, self.q_upper_limit, self.v_limit, self.tau_limit = (
             [],
             [],
             [],
             [],
         )
+        self.raw_q_lower_limit, self.raw_q_upper_limit = [], []
         for idx in self.group_to_identify:
-            self.q_upper_limit.append(self.model.upperPositionLimit[idx])
-            self.q_lower_limit.append(self.model.lowerPositionLimit[idx])
+            raw_lo = float(self.model.lowerPositionLimit[idx])
+            raw_hi = float(self.model.upperPositionLimit[idx])
+            self.raw_q_lower_limit.append(raw_lo)
+            self.raw_q_upper_limit.append(raw_hi)
+            eff_lo = raw_lo + self.q_margin
+            eff_hi = raw_hi - self.q_margin
+            if eff_lo >= eff_hi:
+                print(
+                    f"\033[93mWarning: q_margin={self.q_margin:.3f} rad is >= half of "
+                    f"the URDF range of joint {self.model.names[idx + 1]} "
+                    f"[{raw_lo:.4f}, {raw_hi:.4f}] — effective range empty\033[0m"
+                )
+            self.q_lower_limit.append(eff_lo)
+            self.q_upper_limit.append(eff_hi)
             self.v_limit.append(self.model.velocityLimit[idx])
             self.tau_limit.append(self.model.effortLimit[idx])
+
+        self.limits = {
+            "q_lower": self.q_lower_limit,
+            "q_upper": self.q_upper_limit,
+            "q_lower_raw": self.raw_q_lower_limit,
+            "q_upper_raw": self.raw_q_upper_limit,
+            "v_limit": self.v_limit,
+            "effort_limit": self.tau_limit,
+        }
 
         np.random.seed(int(RNG_SEED))
 
@@ -408,10 +430,9 @@ class TargetLimbRegressor:
 
     def sample_state(self, target_v_indices):
         q = self.base_config.copy()
-        for q_idx in self.group_to_identify:
-            low = self.model.lowerPositionLimit[q_idx]
-            high = self.model.upperPositionLimit[q_idx]
-            q[q_idx] = np.random.uniform(low, high)
+        for i, q_idx in enumerate(self.group_to_identify):
+            # 采样同样尊重余量：只在有效（收缩后）限位内取随机位形。
+            q[q_idx] = np.random.uniform(self.q_lower_limit[i], self.q_upper_limit[i])
 
         v = np.zeros(self.model.nv)
         a = np.zeros(self.model.nv)
@@ -586,8 +607,9 @@ class TargetLimbRegressor:
             v_i = v[joint_id]
             tau_i = self.tau_aug[i]
 
-            q_lower = self.model.lowerPositionLimit[joint_id]
-            q_upper = self.model.upperPositionLimit[joint_id]
+            # 用已含余量的有效限位做约束判罚（余量在 __init__ 里收缩好）。
+            q_lower = self.q_lower_limit[i]
+            q_upper = self.q_upper_limit[i]
             v_limit = self.model.velocityLimit[joint_id]
             tau_limit = self.model.effortLimit[joint_id]
 
