@@ -87,6 +87,26 @@ DEFAULT_URDF_PATH = (
     / "serial_pm_v2_identify.urdf"
 ).resolve()
 
+TRUE_URDF_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "resource"
+    / "robot"
+    / "urdf"
+    / "serial_pm_v2_identify_true.urdf"
+).resolve()
+
+VAL_YAML_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "trajectory_coefficients"
+    / "recovered_260817_142958.yaml"
+).resolve()
+
+QUALITY_YAML_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "trajectory_coefficients"
+    / "pso_unified_260803_180859.yaml"
+).resolve()
+
 # 机体系重力向量（IMU 读得）与腰关节固定偏置 J12_WAIST_YAW (rad)。
 SETUP = {
     "gravity": np.array([-9.712746, 0.390467, -1.393897]),
@@ -869,6 +889,7 @@ def prepare_data_from_urdf(
     yaml_filename: str,
     limb_group: str | None = None,
     sample_rate: float = 200.0,
+    time_coeffs: float = 1.0,
     urdf_true_path: str | Path | None = None,
     verbose: bool = True,
     gravity: np.ndarray | None = None,
@@ -885,6 +906,10 @@ def prepare_data_from_urdf(
         "True" robot URDF.  If None, same as urdf_path (debug mode).
         When different: only used to generate tau_measured; its params
         are treated as unknown by the solver.
+    time_coeffs : float
+        Fourier-trajectory playback speed (>1 speeds up, <1 slows down;
+        physical period = TRAJ_PERIOD / time_coeffs).  Velocity/acceleration
+        are scaled by time_coeffs / time_coeffs**2 accordingly.
     """
     from identification.fourier_trajectory import FourierTrajectory
     from identification.target_limb_regressor import (
@@ -902,12 +927,17 @@ def prepare_data_from_urdf(
 
     # --- Trajectory ---
     dof_limb = len(VALID_LIMB_GROUPS[limb_group])
-    ft = FourierTrajectory(dim=dof_limb, sample_rate=sample_rate)
+    ft = FourierTrajectory(
+        dim=dof_limb, sample_rate=sample_rate, time_coeffs=time_coeffs
+    )
     yaml_name = Path(yaml_filename).name
     q_traj, v_traj, a_traj = ft.generate_trajectory_from_yaml(yaml_name)
     N = q_traj.shape[1]
     if verbose:
-        print(f"Trajectory: {N} steps from {yaml_name}")
+        print(
+            f"Trajectory: {N} steps from {yaml_name} "
+            f"(time_coeffs={time_coeffs}, period={ft.duration:.3f}s)"
+        )
 
     # --- Initial (prior) model: regressor, pi_prior, subtree, joint order ---
     reg = TargetLimbRegressor(
@@ -1109,6 +1139,34 @@ def _yaml_source_bag(trajectory_yaml: str) -> str:
             f"{trajectory_yaml} _meta has no source_bag; pass bag_name explicitly"
         )
     return str(sb)
+
+
+def _latest_pso_yaml_for_group(group: str, exclude: str | None = None) -> str | None:
+    """Latest ``pso_unified_*.yaml`` whose ``_meta.group`` matches ``group``.
+
+    Used to auto-link the parameter-quality YAML (from the PSO excitation
+    design) to a recovered (measured) trajectory YAML, which carries no
+    ``_diagnostics``.  Returns ``None`` if no match is found.
+    """
+    from identification.fourier_trajectory import FourierTrajectory
+
+    matches = sorted(FourierTrajectory._coeffs_dir.glob("pso_unified_*.yaml"))
+    for m in reversed(matches):
+        if exclude and m.name == exclude:
+            continue
+        if FourierTrajectory.load_meta(m.name).get("group") == group:
+            return m.name
+    return None
+
+
+def _yaml_has_quality(yaml_name: str) -> bool:
+    """True if a coeffs YAML carries ``_diagnostics.per_param`` quality labels."""
+    from identification.fourier_trajectory import FourierTrajectory
+
+    path = FourierTrajectory._coeffs_dir / yaml_name
+    if not path.is_file():
+        return False
+    return bool(load_yaml_param_quality(path))
 
 
 def _recovered_at_times(
@@ -1721,19 +1779,18 @@ def plot_torque_comparison_measured(
 def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description=(
-            "Sequential SDP 参数辨识：sim = 用 URDF 合成力矩（prepare_data_from_urdf）；"
-            "meas = 用 bag 实测力矩（data_from_measurement）。"
+            "Sequential SDP 参数辨识：默认用 bag 实测力矩（meas）；加 --sim "
+            "改用 URDF 合成力矩做仿真验证。"
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    # ---- 数据来源 / 模式 ----
+    # ---- 模式 / 数据来源 ----
     ap.add_argument(
-        "--mode",
-        choices=["sim", "meas"],
-        default="meas",
-        help="'sim'=仿真（tau 由 URDF 合成，pi_true 已知）；"
-        "'meas'=实测（tau 取自 bag CSV，pi_true 未知）",
+        "--sim",
+        action="store_true",
+        help="仿真模式：tau 由 URDF 合成（prepare_data_from_urdf），pi_true 已知；"
+        "不加 --sim 即实测模式（data_from_measurement，默认）",
     )
     ap.add_argument(
         "--urdf",
@@ -1742,34 +1799,24 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--urdf-true",
-        default=None,
-        help="[sim] '真值' URDF，用于合成 tau_measured（None = 同 --urdf）",
+        default=str(TRUE_URDF_PATH),
+        help="[sim] '真值' URDF，用于合成 tau_measured",
     )
     ap.add_argument(
         "--yaml",
         default=None,
         metavar="NAME",
-        help="trajectory_coefficients/ 下的轨迹系数 YAML（默认：meas=最新 "
-        "recovered_*.yaml，sim=最新 pso_unified_*.yaml）",
+        help="trajectory_coefficients/ 下的轨迹系数 YAML（bag/group 从该 YAML 读）；"
+        "默认：meas=最新 recovered_*.yaml，sim=最新 pso_unified_*.yaml",
     )
     ap.add_argument(
         "--quality-yaml",
-        default=None,
+        default=QUALITY_YAML_PATH,
         metavar="NAME",
-        help="带 _diagnostics.per_param 质量标签的 YAML，用于 apply_yaml_quality "
-        "（默认：最新 pso_unified_*.yaml）",
-    )
-    ap.add_argument(
-        "--bag",
-        default=None,
-        help="[meas] bag_data/ 下的 bag 名（全名或短片段；默认读 --yaml 的 "
-        "_meta.source_bag）",
-    )
-    ap.add_argument(
-        "--group",
-        default=None,
-        help="肢体组（left_arm / left_leg / ...；默认读 --yaml 的 _meta.group，"
-        "缺省回退 left_arm）",
+        help="带 _diagnostics.per_param 质量标签的 pso_unified YAML，用于边界冻结/"
+        "放宽（实测的 recovered YAML 不带质量，须指向训练它的 pso_unified）。"
+        "默认：--yaml 本身带质量则用它；否则自动取与 --yaml 同 _meta.group 的"
+        "最新 pso_unified_*.yaml；找不到则退化为相对区间 ParamBounds",
     )
     ap.add_argument(
         "--csv-topic",
@@ -1781,6 +1828,14 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=100.0,
         help="[meas] CSV(~500Hz) 抽取到 ~sample_rate Hz 作为回归采样率",
+    )
+    ap.add_argument(
+        "--time-coeffs",
+        "-t",
+        type=float,
+        default=1.0,
+        help="[sim] 傅立叶轨迹回放时间倍率（>1 加速，<1 减速；默认 1.0 = "
+        "正常速度，物理周期 = TRAJ_PERIOD/time_coeffs）",
     )
 
     # ---- 模型 / 环境 ----
@@ -1799,42 +1854,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="腰关节 J12_WAIST_YAW 固定角度 (rad)",
     )
 
-    # ---- 边界 / 求解器 ----
-    ap.add_argument(
-        "--lmi-eps",
-        type=float,
-        default=LMI_EPS,
-        help="6×6 pseudo-inertia LMI 严格正定余量（J ≽ eps·I₆）",
-    )
-    ap.add_argument(
-        "--no-quality-bounds",
-        action="store_true",
-        help="跳过 apply_yaml_quality，只用相对区间 ParamBounds",
-    )
-    ap.add_argument(
-        "--auto-freeze-threshold",
-        type=float,
-        default=0.0,
-        help=">0 时按敏感度自动冻结参数（低于该比例 × max 者冻结）",
-    )
-    ap.add_argument(
-        "--solver",
-        default="MOSEK",
-        help="凸求解器（MOSEK / SCS / ...）",
-    )
-
     # ---- 验证 / 绘图 ----
     ap.add_argument(
         "--val-yaml",
-        default=None,
+        default=str(VAL_YAML_PATH),
         metavar="NAME",
-        help="[meas] 验证用轨迹 YAML（应不同于 --yaml；默认：最新的、且不同于 "
-        "--yaml 的 recovered_*.yaml）",
-    )
-    ap.add_argument(
-        "--val-bag",
-        default=None,
-        help="[meas] 验证用 bag（默认读 --val-yaml 的 _meta.source_bag）",
+        help="[meas] 验证用轨迹 YAML（默认取文件顶部 VAL_YAML_PATH 常量）；"
+        "其 bag 也从该 YAML 的 _meta.source_bag 读取",
     )
     ap.add_argument(
         "-w",
@@ -1863,27 +1889,52 @@ def main(argv: list[str] | None = None) -> None:
 
     from identification.fourier_trajectory import FourierTrajectory
 
-    # ---- 解析默认 YAML ----
-    if args.mode == "sim":
+    is_sim = args.sim
+
+    # ---- 解析默认 YAML（bag / group 跟着它走） ----
+    if is_sim:
         traj_yaml = args.yaml or FourierTrajectory.find_latest_yaml()  # pso_unified
     else:
         traj_yaml = args.yaml or _latest_recovered_yaml()
-    quality_yaml = args.quality_yaml or FourierTrajectory.find_latest_yaml()
+
+    # ---- 质量边界 YAML：recovered（实测）不带 _diagnostics，须指向训练它/同一
+    #     肢体组的 pso_unified YAML（可用 --quality-yaml 显式指定） ----
+    if args.quality_yaml:
+        quality_yaml = args.quality_yaml
+    elif _yaml_has_quality(traj_yaml):
+        quality_yaml = traj_yaml  # 轨迹 YAML 本身带质量标签（如 pso_unified）
+    else:
+        group = FourierTrajectory.load_meta(traj_yaml).get("group") or "left_arm"
+        quality_yaml = _latest_pso_yaml_for_group(group, exclude=traj_yaml)
+        if quality_yaml:
+            print(
+                f"  [quality] 自动关联 pso_unified 质量 YAML: "
+                f"{quality_yaml} (group={group})"
+            )
+        else:
+            print(
+                f"  [quality] 未找到 group='{group}' 的 pso_unified_*.yaml"
+                " → 退化为相对区间 ParamBounds"
+            )
+
     gravity = np.asarray(args.gravity, dtype=float)
 
     # ---- 配置回显 ----
     print("\n" + "=" * 100)
     print("SDP IDENTIFICATION".center(100))
     print("=" * 100)
-    print(f"mode            : {args.mode}")
+    print(f"mode            : {'sim' if is_sim else 'meas'}")
     print(f"urdf (prior)    : {args.urdf}")
-    if args.mode == "sim":
-        print(f"urdf (true)     : {args.urdf_true or args.urdf}")
+    if is_sim:
+        print(f"urdf (true)     : {args.urdf_true}")
+        print(f"time_coeffs     : {args.time_coeffs}")
     print(f"trajectory yaml : {traj_yaml}")
-    print(f"quality yaml    : {quality_yaml}")
-    if args.mode == "meas":
-        print(f"bag             : {args.bag or '(from yaml _meta.source_bag)'}")
-    print(f"group           : {args.group or '(from yaml _meta.group)'}")
+    if args.quality_yaml:
+        print(f"quality yaml    : {quality_yaml}  (--quality-yaml)")
+    else:
+        print(f"quality yaml    : {quality_yaml or '(none → relative bounds)'}")
+    print(f"bag             : (auto: 从 {traj_yaml} _meta.source_bag)")
+    print(f"group           : (auto: 从 {traj_yaml} _meta.group)")
     print(f"sample_rate     : {args.sample_rate}")
 
     # 1. Prepare data
@@ -1892,12 +1943,13 @@ def main(argv: list[str] | None = None) -> None:
     # meas：tau 直接取自 bag 的 CSV（torque_<limb> 列），回归状态 q/v/a 全部来自
     #       恢复的 Fourier 轨迹（在 CSV 时间上直接求值）；加速度不用实测速度差分
     #       （CSV 无加速度列，量化噪声大）。测量模式无地面真值 → pi_true 为 None。
-    if args.mode == "sim":
+    if is_sim:
         data = prepare_data_from_urdf(
             urdf_path=args.urdf,  # 先验模型 → regressor / pi_prior / bounds
             yaml_filename=traj_yaml,
-            limb_group=args.group,
+            limb_group=None,  # 从 YAML _meta.group 读取
             sample_rate=args.sample_rate,
+            time_coeffs=args.time_coeffs,  # 傅立叶轨迹回放倍率
             urdf_true_path=args.urdf_true,
             gravity=gravity,
             waist_yaw_offset=args.waist_offset,
@@ -1905,8 +1957,8 @@ def main(argv: list[str] | None = None) -> None:
     else:
         data = data_from_measurement(
             urdf_path=args.urdf,  # 先验模型 → regressor / pi_prior / bounds
-            bag_name=args.bag,
-            limb_group=args.group,
+            bag_name=None,  # 从 YAML _meta.source_bag 读取
+            limb_group=None,  # 从 YAML _meta.group 读取
             csv_topic=args.csv_topic,  # 实测力矩
             sample_rate=args.sample_rate,  # CSV(~500Hz) 抽取到 ~sample_rate Hz
             gravity=gravity,
@@ -1915,22 +1967,26 @@ def main(argv: list[str] | None = None) -> None:
             twin=args.twin_id,  # 辨识用时间窗（选一个质量好的周期，None=全程）
         )
 
-    # 2. Configure bounds — baseline from relative intervals around prior,
-    #    then refine (freeze/widen) per-parameter below.
+    # 2. Configure bounds — 先验相对区间，再用质量 YAML 的 _diagnostics.per_param
+    #    按质量标签冻结/放宽；无质量 YAML 时退化为纯相对区间 ParamBounds。
     #    LMI_EPS：6×6 pseudo-inertia 严格正定余量（J ≽ eps·I₆，min_eig ≥ eps > 0）。
-    bounds = ParamBounds(pi_prior=data["pi_prior"], inertia_eps=args.lmi_eps)
+    bounds = ParamBounds(pi_prior=data["pi_prior"], inertia_eps=LMI_EPS)
     quality_map = None
-    if not args.no_quality_bounds:
+    if quality_yaml is not None:
         quality_path = FourierTrajectory._coeffs_dir / quality_yaml
+        if quality_path.is_file():
+            quality_map = load_yaml_param_quality(quality_path)
+    if quality_map:
         bounds.apply_yaml_quality(quality_path, data["pi_prior"])
-        quality_map = load_yaml_param_quality(quality_path)
         from collections import Counter
 
         qc = Counter(quality_map.values())
         print(f"  YAML quality distribution: {dict(qc)}")
+    else:
+        print("  无 _diagnostics.per_param 质量标签 → 仅用相对区间 ParamBounds")
 
     # 3. Solve
-    solver = SDPSolver(solver_name=args.solver, verbose=True)
+    solver = SDPSolver(solver_name="MOSEK", verbose=True)
     result = solver.solve(
         Y_stack=data["Y_stack"],
         tau_measured=data["tau_measured"],
@@ -1938,7 +1994,7 @@ def main(argv: list[str] | None = None) -> None:
         subtree_mask=data["subtree_mask"],
         joint_order=data["joint_order"],
         bounds=bounds,
-        auto_freeze_threshold=args.auto_freeze_threshold,
+        auto_freeze_threshold=0.0,
         joint_names=data["joint_names"],
     )
 
@@ -1960,10 +2016,10 @@ def main(argv: list[str] | None = None) -> None:
     # 5. Cross-validation / comparison plot
     #    sim：真值 vs prior vs identified 对比。
     #    meas：用另一条轨迹/bag 验证辨识结果 —— pi_prior 与 pi_identified 分别在
-    #          验证轨迹上算关节 tau，与验证 bag 的实测 tau 对比；验证 yaml/bag
-    #          与辨识用的不同。
+    #          验证轨迹上算关节 tau，与验证 bag 的实测 tau 对比；验证 bag 也
+    #          从验证 YAML 的 _meta.source_bag 读取。
     if not args.no_plot:
-        if args.mode == "sim":
+        if is_sim:
             plot_torque_comparison_simulated(
                 result,
                 joint_names=data["joint_names"],
@@ -1973,14 +2029,13 @@ def main(argv: list[str] | None = None) -> None:
                 twin=args.twin,
             )
         else:
-            val_yaml = args.val_yaml or _latest_recovered_yaml(exclude=traj_yaml)
             plot_torque_comparison_measured(
                 result,
                 urdf_path=args.urdf,  # 先验模型（regressor）
-                val_yaml=val_yaml,
-                val_bag_name=args.val_bag,
+                val_yaml=args.val_yaml,
+                val_bag_name=None,  # 从 val YAML _meta.source_bag 读取
                 joint_names=data["joint_names"],
-                limb_group=args.group,
+                limb_group=None,
                 csv_topic=args.csv_topic,
                 sample_rate=args.sample_rate,
                 gravity=gravity,
