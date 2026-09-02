@@ -1,7 +1,10 @@
 pin
-numpy<2
+numpy=2.0.1
+matplotlib=3.10.3
 meshcat
 scikit-opt
+cvxpy
+mosek
 pyyaml
 rosbags
 pandas
