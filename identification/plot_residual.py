@@ -180,7 +180,11 @@ def plot_joint_residual(
         sharex=True,
         gridspec_kw={"height_ratios": [3, 3, 1.5, 1.5, 3.5]},
     )
-    axs[4].get_shared_x_axes().remove(axs[4])  # 频谱子图不共享时间轴
+    # 频谱子图不共享时间轴。新 matplotlib 的 get_shared_x_axes() 只返回只读视图
+    # (GrouperView，无 remove)，需改用私有 grouper 解除共享；解除后底部的时间
+    # 子图(axs[3])不会自动恢复刻度，需重新打开 x 刻度显示。
+    axs[4]._shared_axes["x"].remove(axs[4])
+    axs[3].tick_params(labelbottom=True)
 
     # ① 位置：原始 vs 理论
     axs[0].plot(
