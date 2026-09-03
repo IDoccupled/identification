@@ -1,0 +1,1067 @@
+joint_0:
+  a:
+  - -0.67180291
+  - -1.35314679
+  - 2.02972018
+  - 0.45140267
+  - 3.38286697
+  b:
+  - 0.67657339
+  - -0.00805731
+  - -2.02972018
+  - -2.70629358
+  - -3.38286697
+  q0: -0.31590104
+joint_1:
+  a:
+  - 0.29270233
+  - -0.58559287
+  - 0.51861681
+  - 1.17118574
+  - -1.46398218
+  b:
+  - -0.00953516
+  - -0.58559287
+  - 0.87838931
+  - 1.17118574
+  - -0.57742259
+  q0: 1.18377424
+joint_2:
+  a:
+  - -0.67648305
+  - -1.35314679
+  - 0.36877493
+  - -1.37851118
+  - 3.38286697
+  b:
+  - -0.67657339
+  - 1.35314679
+  - -2.02972018
+  - -2.06544134
+  - -2.98076892
+  q0: 1.97571289
+joint_3:
+  a:
+  - -0.31921095
+  - -0.63842189
+  - 0.95763284
+  - 1.27684379
+  - 1.59605473
+  b:
+  - -0.31921095
+  - -0.63842189
+  - -0.95763284
+  - 1.27679355
+  - -0.20311559
+  q0: 1.28919094
+joint_4:
+  a:
+  - -0.15142477
+  - 0.30272155
+  - -0.4542743
+  - 0.60569906
+  - -0.75712383
+  b:
+  - 0.12976332
+  - 0.30284953
+  - 0.4542743
+  - 0.6050358
+  - 0.75712383
+  q0: 0.02473497
+joint_5:
+  a:
+  - -0.01450212
+  - 0.08132955
+  - 0.12199433
+  - -0.1626591
+  - 0.20332388
+  b:
+  - 0.04065133
+  - -0.08132955
+  - -0.12199433
+  - 0.1626591
+  - -0.20332388
+  q0: -0.02041944
+_meta:
+  stage: unified
+  group: left_leg
+  started: '2026-09-02 19:01:39'
+  finished: '2026-09-03 04:50:11'
+  elapsed_s: 35311.9
+  pop: 1000
+  iter: 300
+  amp_scale: 2.0
+  seed: 67
+  reward_config:
+    w_q_limit: 2000.0
+    w_v_limit: 500.0
+    w_tau_limit: 1000.0
+    w_collision: 100000.0
+    sigma_floor_rel: 1.0e-06
+    cond_threshold: 100.0
+    w_cond: 5.0
+    cond_penalty_power: 2.0
+    w_param_per: 50.0
+    tanh_rel_zero: 1.0
+    tanh_k: 1.0
+    abs_std_good: 0.01
+    nominal_small: 0.0001
+    nullspace_threshold: 0.3
+  best_fitness: -936.940306050499
+  status: completed
+_diagnostics:
+  reward_breakdown:
+    d_opt: 635.51
+    cond_penalty:
+      penalty: -44.54
+      cond: 298.4
+      cond_threshold: 100.0
+      w_cond: 5.0
+      cond_penalty_power: 2.0
+      cond_ratio: 2.9845
+      sigma_max: 803.101
+      sigma_min_eff: 2.691
+    param_reward:
+      value: 341.2
+      w_param_per: 50.0
+      sum_scores: 6.8239
+      n_nonzero: 74
+      n_rated: 33
+      score_min: -1.0
+      score_max: 0.7523
+      score_mean: 0.2068
+      by_quality:
+        good:
+          count: 14
+          score_sum: 8.9502
+        ok:
+          count: 16
+          score_sum: 0.8719
+        bad:
+          count: 3
+          score_sum: -2.9982
+    total_reward: 932.18
+    excess:
+      q:
+        max_over:
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        violating_steps: 0
+        unit: rad
+        limit_lo:
+        - -3.141
+        - -0.436
+        - -1.57
+        - -0.3491
+        - -0.6807
+        - -0.2618
+        limit_hi:
+        - 2.443
+        - 2.094
+        - 4.014
+        - 2.3911
+        - 0.7243
+        - 0.2618
+        margin: 0.1
+      v:
+        max_over:
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        violating_steps: 0
+        unit: rad/s
+        limit:
+        - 26.3
+        - 26.3
+        - 35.2
+        - 26.3
+        - 35.2
+        - 35.2
+      tau:
+        max_over:
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        violating_steps: 0
+        unit: Nm
+        limit:
+        - 164.0
+        - 164.0
+        - 61.0
+        - 164.0
+        - 61.0
+        - 61.0
+  trajectory_stats:
+    collisions: 0/250
+    v_max: 10.29
+    a_max: 50.86
+    zero_crossings:
+    - 10
+    - 8
+    - 8
+    - 8
+    - 10
+    - 10
+  regression:
+    total_cols: 78
+    nonzero_cols: 74
+    eff_rank: 54
+    nullspace_dim: 20
+    cond: 298.4
+    sigma_floor: 0.0008031007333683993
+    singular_values:
+    - 803.101
+    - 789.827
+    - 750.095
+    - 691.82
+    - 626.504
+    - 533.286
+    - 474.019
+    - 465.136
+    - 424.514
+    - 381.375
+    - 330.906
+    - 286.884
+    - 269.664
+    - 261.299
+    - 246.325
+    - 234.822
+    - 225.002
+    - 209.97
+    - 200.155
+    - 184.438
+    - 179.469
+    - 175.173
+    - 172.869
+    - 154.777
+    - 144.124
+    - 137.69
+    - 132.804
+    - 129.704
+    - 123.731
+    - 115.029
+    - 107.58
+    - 102.46
+    - 97.475
+    - 92.643
+    - 88.734
+    - 81.343
+    - 75.298
+    - 70.624
+    - 67.116
+    - 58.227
+    - 54.983
+    - 49.451
+    - 34.642
+    - 33.947
+    - 28.489
+    - 23.665
+    - 19.515
+    - 15.142
+    - 8.451
+    - 8.289
+    - 7.34
+    - 7.171
+    - 7.036
+    - 2.691
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+  quality_summary:
+    'null':
+      count: 4
+      indices:
+      - 0
+      - 4
+      - 5
+      - 7
+      names:
+      - J00_HIP_PITCH_L/mass
+      - J00_HIP_PITCH_L/Ixx
+      - J00_HIP_PITCH_L/Ixy
+      - J00_HIP_PITCH_L/Ixz
+    rank_deficient:
+      count: 27
+      indices:
+      - 1
+      - 2
+      - 6
+      - 8
+      - 9
+      - 10
+      - 11
+      - 13
+      - 14
+      - 16
+      - 19
+      - 20
+      - 22
+      - 23
+      - 24
+      - 26
+      - 29
+      - 30
+      - 32
+      - 34
+      - 39
+      - 40
+      - 41
+      - 50
+      - 51
+      - 60
+      - 61
+      names:
+      - J00_HIP_PITCH_L/mcx
+      - J00_HIP_PITCH_L/mcy
+      - J00_HIP_PITCH_L/Iyy
+      - J00_HIP_PITCH_L/Iyz
+      - J00_HIP_PITCH_L/Izz
+      - J01_HIP_ROLL_L/mass
+      - J01_HIP_ROLL_L/mcx
+      - J01_HIP_ROLL_L/mcz
+      - J01_HIP_ROLL_L/Ixx
+      - J01_HIP_ROLL_L/Iyy
+      - J01_HIP_ROLL_L/Izz
+      - J02_HIP_YAW_L/mass
+      - J02_HIP_YAW_L/mcy
+      - J02_HIP_YAW_L/mcz
+      - J02_HIP_YAW_L/Ixx
+      - J02_HIP_YAW_L/Iyy
+      - J02_HIP_YAW_L/Izz
+      - J03_KNEE_PITCH_L/mass
+      - J03_KNEE_PITCH_L/mcy
+      - J03_KNEE_PITCH_L/Ixx
+      - J03_KNEE_PITCH_L/Izz
+      - J04_ANKLE_PITCH_L/mass
+      - J04_ANKLE_PITCH_L/mcx
+      - J05_ANKLE_ROLL_L/mass
+      - J05_ANKLE_ROLL_L/mcx
+      - J00_HIP_PITCH_L/armature
+      - J01_HIP_ROLL_L/armature
+    small:
+      count: 14
+      indices:
+      - 15
+      - 18
+      - 25
+      - 42
+      - 44
+      - 45
+      - 46
+      - 47
+      - 48
+      - 49
+      - 52
+      - 55
+      - 57
+      - 58
+      names:
+      - J01_HIP_ROLL_L/Ixy
+      - J01_HIP_ROLL_L/Iyz
+      - J02_HIP_YAW_L/Ixy
+      - J04_ANKLE_PITCH_L/mcy
+      - J04_ANKLE_PITCH_L/Ixx
+      - J04_ANKLE_PITCH_L/Ixy
+      - J04_ANKLE_PITCH_L/Iyy
+      - J04_ANKLE_PITCH_L/Ixz
+      - J04_ANKLE_PITCH_L/Iyz
+      - J04_ANKLE_PITCH_L/Izz
+      - J05_ANKLE_ROLL_L/mcy
+      - J05_ANKLE_ROLL_L/Ixy
+      - J05_ANKLE_ROLL_L/Ixz
+      - J05_ANKLE_ROLL_L/Iyz
+    good:
+      count: 14
+      indices:
+      - 31
+      - 33
+      - 36
+      - 62
+      - 63
+      - 64
+      - 66
+      - 67
+      - 69
+      - 70
+      - 71
+      - 73
+      - 75
+      - 77
+      names:
+      - J03_KNEE_PITCH_L/mcx
+      - J03_KNEE_PITCH_L/mcz
+      - J03_KNEE_PITCH_L/Iyy
+      - J02_HIP_YAW_L/armature
+      - J03_KNEE_PITCH_L/armature
+      - J04_ANKLE_PITCH_L/armature
+      - J00_HIP_PITCH_L/damping
+      - J00_HIP_PITCH_L/friction
+      - J01_HIP_ROLL_L/friction
+      - J02_HIP_YAW_L/damping
+      - J02_HIP_YAW_L/friction
+      - J03_KNEE_PITCH_L/friction
+      - J04_ANKLE_PITCH_L/friction
+      - J05_ANKLE_ROLL_L/friction
+    ok:
+      count: 16
+      indices:
+      - 3
+      - 17
+      - 21
+      - 27
+      - 28
+      - 35
+      - 37
+      - 38
+      - 53
+      - 54
+      - 56
+      - 59
+      - 65
+      - 68
+      - 72
+      - 74
+      names:
+      - J00_HIP_PITCH_L/mcz
+      - J01_HIP_ROLL_L/Ixz
+      - J02_HIP_YAW_L/mcx
+      - J02_HIP_YAW_L/Ixz
+      - J02_HIP_YAW_L/Iyz
+      - J03_KNEE_PITCH_L/Ixy
+      - J03_KNEE_PITCH_L/Ixz
+      - J03_KNEE_PITCH_L/Iyz
+      - J05_ANKLE_ROLL_L/mcz
+      - J05_ANKLE_ROLL_L/Ixx
+      - J05_ANKLE_ROLL_L/Iyy
+      - J05_ANKLE_ROLL_L/Izz
+      - J05_ANKLE_ROLL_L/armature
+      - J01_HIP_ROLL_L/damping
+      - J03_KNEE_PITCH_L/damping
+      - J04_ANKLE_PITCH_L/damping
+    bad:
+      count: 3
+      indices:
+      - 12
+      - 43
+      - 76
+      names:
+      - J01_HIP_ROLL_L/mcy
+      - J04_ANKLE_PITCH_L/mcz
+      - J05_ANKLE_ROLL_L/damping
+  per_param:
+  - idx: 0
+    name: J00_HIP_PITCH_L/mass
+    quality: 'null'
+  - idx: 1
+    name: J00_HIP_PITCH_L/mcx
+    nominal: 0.017045954167553994
+    abs_std: 0.0061742012928471405
+    rel_std: 0.3622089799179195
+    nullspace_weight: 0.4999297622953647
+    score: 0.0
+    quality: rank_deficient
+  - idx: 2
+    name: J00_HIP_PITCH_L/mcy
+    nominal: 0.07629760046923557
+    abs_std: 0.0060507427358470174
+    rel_std: 0.07930448540438596
+    nullspace_weight: 0.9330127808297557
+    score: 0.0
+    quality: rank_deficient
+  - idx: 3
+    name: J00_HIP_PITCH_L/mcz
+    nominal: -0.020176166442463193
+    abs_std: 0.02258169328779992
+    rel_std: 1.1192256051188185
+    nullspace_weight: 0.06698721917060083
+    score: -0.11866387830271763
+    quality: ok
+  - idx: 4
+    name: J00_HIP_PITCH_L/Ixx
+    quality: 'null'
+  - idx: 5
+    name: J00_HIP_PITCH_L/Ixy
+    quality: 'null'
+  - idx: 6
+    name: J00_HIP_PITCH_L/Iyy
+    nominal: 0.0024361861426422356
+    abs_std: 0.002023136622655931
+    rel_std: 0.8304489885866453
+    nullspace_weight: 0.680720464026143
+    score: 0.0
+    quality: rank_deficient
+  - idx: 7
+    name: J00_HIP_PITCH_L/Ixz
+    quality: 'null'
+  - idx: 8
+    name: J00_HIP_PITCH_L/Iyz
+    nominal: 0.0008732316339023472
+    abs_std: 0.0010841952924964316
+    rel_std: 1.2415753560115697
+    nullspace_weight: 0.9083071585199817
+    score: 0.0
+    quality: rank_deficient
+  - idx: 9
+    name: J00_HIP_PITCH_L/Izz
+    nominal: 0.005827465015033187
+    abs_std: 0.0001452579152114504
+    rel_std: 0.024926390046585752
+    nullspace_weight: 0.9983541896223791
+    score: 0.0
+    quality: rank_deficient
+  - idx: 10
+    name: J01_HIP_ROLL_L/mass
+    nominal: 0.63274283
+    abs_std: 0.0002944991259259479
+    rel_std: 0.0004654325696138227
+    nullspace_weight: 0.9988498219978328
+    score: 0.0
+    quality: rank_deficient
+  - idx: 11
+    name: J01_HIP_ROLL_L/mcx
+    nominal: -0.011777628267916295
+    abs_std: 0.006098063077734592
+    rel_std: 0.5177662056701512
+    nullspace_weight: 0.49996174881763905
+    score: 0.0
+    quality: rank_deficient
+  - idx: 12
+    name: J01_HIP_ROLL_L/mcy
+    nominal: 0.0014855029968475996
+    abs_std: 0.020798730649205142
+    rel_std: 14.001042530992349
+    nullspace_weight: 7.966439293608525e-06
+    score: -0.999999999989803
+    quality: bad
+  - idx: 13
+    name: J01_HIP_ROLL_L/mcz
+    nominal: -0.02911867950574909
+    abs_std: 0.007042982891233675
+    rel_std: 0.24187156121305298
+    nullspace_weight: 0.5501185905352434
+    score: 0.0
+    quality: rank_deficient
+  - idx: 14
+    name: J01_HIP_ROLL_L/Ixx
+    nominal: 0.0026821024786540457
+    abs_std: 0.004678774811342138
+    rel_std: 1.7444364651291842
+    nullspace_weight: 0.5934966091694404
+    score: 0.0
+    quality: rank_deficient
+  - idx: 15
+    name: J01_HIP_ROLL_L/Ixy
+    nominal: -1.8779426562847565e-05
+    abs_std: 0.007863212937458494
+    rel_std: 418.4913739201848
+    nullspace_weight: 7.849588358729794e-09
+    score: 0.0
+    quality: small
+  - idx: 16
+    name: J01_HIP_ROLL_L/Iyy
+    nominal: 0.0030067091128622558
+    abs_std: 0.005361249209101234
+    rel_std: 1.7830894765549203
+    nullspace_weight: 0.5373478874812141
+    score: 0.0
+    quality: rank_deficient
+  - idx: 17
+    name: J01_HIP_ROLL_L/Ixz
+    nominal: -0.0002217737440350061
+    abs_std: 0.0037342667157088862
+    rel_std: 16.83742301293044
+    nullspace_weight: 0.0005420495060611254
+    score: 0.0
+    quality: ok
+  - idx: 18
+    name: J01_HIP_ROLL_L/Iyz
+    nominal: 9.898250624923724e-05
+    abs_std: 0.0022932856632004077
+    rel_std: 23.166255205485093
+    nullspace_weight: 1.3996909406178604e-06
+    score: 0.0
+    quality: small
+  - idx: 19
+    name: J01_HIP_ROLL_L/Izz
+    nominal: 0.0014748617243997284
+    abs_std: 0.004067637722682824
+    rel_std: 2.757960340136258
+    nullspace_weight: 0.4662588932695745
+    score: 0.0
+    quality: rank_deficient
+  - idx: 20
+    name: J02_HIP_YAW_L/mass
+    nominal: 1.85800304
+    abs_std: 0.0006450185089089499
+    rel_std: 0.00034715686226077504
+    nullspace_weight: 0.9966010620673309
+    score: 0.0
+    quality: rank_deficient
+  - idx: 21
+    name: J02_HIP_YAW_L/mcx
+    nominal: -0.006710270879112
+    abs_std: 0.009944599629708119
+    rel_std: 1.4819945407447876
+    nullspace_weight: 0.0014866107686077777
+    score: 0.0
+    quality: ok
+  - idx: 22
+    name: J02_HIP_YAW_L/mcy
+    nominal: 0.0021783041840656
+    abs_std: 0.00490545810838757
+    rel_std: 2.251951598291499
+    nullspace_weight: 0.6298401428929237
+    score: 0.0
+    quality: rank_deficient
+  - idx: 23
+    name: J02_HIP_YAW_L/mcz
+    nominal: -0.17298130930600641
+    abs_std: 0.007169114309220732
+    rel_std: 0.041444442313094326
+    nullspace_weight: 0.5569009308110069
+    score: 0.0
+    quality: rank_deficient
+  - idx: 24
+    name: J02_HIP_YAW_L/Ixx
+    nominal: 0.03248616788609569
+    abs_std: 0.004433915609961349
+    rel_std: 0.13648621963186056
+    nullspace_weight: 0.5016504321891848
+    score: 0.0
+    quality: rank_deficient
+  - idx: 25
+    name: J02_HIP_YAW_L/Ixy
+    nominal: -5.415294552403789e-05
+    abs_std: 0.004508378930548176
+    rel_std: 83.2373292650291
+    nullspace_weight: 0.0004264272222802812
+    score: 0.0
+    quality: small
+  - idx: 26
+    name: J02_HIP_YAW_L/Iyy
+    nominal: 0.032396348542846794
+    abs_std: 0.005037602203091008
+    rel_std: 0.1554990261151843
+    nullspace_weight: 0.36690907137851286
+    score: 0.0
+    quality: rank_deficient
+  - idx: 27
+    name: J02_HIP_YAW_L/Ixz
+    nominal: 0.0004790693523758926
+    abs_std: 0.003795030828707456
+    rel_std: 7.9215078042641665
+    nullspace_weight: 8.318464722366878e-05
+    score: 0.0
+    quality: ok
+  - idx: 28
+    name: J02_HIP_YAW_L/Iyz
+    nominal: -0.00021112844278273118
+    abs_std: 0.00493869515245914
+    rel_std: 23.390790835476746
+    nullspace_weight: 0.03524327362630247
+    score: 0.0
+    quality: ok
+  - idx: 29
+    name: J02_HIP_YAW_L/Izz
+    nominal: 0.0034606683008358134
+    abs_std: 0.005780999504954946
+    rel_std: 1.6704816230849124
+    nullspace_weight: 0.38376001645070684
+    score: 0.0
+    quality: rank_deficient
+  - idx: 30
+    name: J03_KNEE_PITCH_L/mass
+    nominal: 4.29474062
+    abs_std: 0.0024677462990213826
+    rel_std: 0.0005745972834269582
+    nullspace_weight: 0.9505832335924649
+    score: 0.0
+    quality: rank_deficient
+  - idx: 31
+    name: J03_KNEE_PITCH_L/mcx
+    nominal: -0.0420327123427524
+    abs_std: 0.010340801566688637
+    rel_std: 0.24601788773911465
+    nullspace_weight: 0.0009995783490139767
+    score: 0.637518618083624
+    quality: good
+  - idx: 32
+    name: J03_KNEE_PITCH_L/mcy
+    nominal: 0.0091130530689842
+    abs_std: 0.004610126097158817
+    rel_std: 0.5058810700925711
+    nullspace_weight: 0.6465666636795254
+    score: 0.0
+    quality: rank_deficient
+  - idx: 33
+    name: J03_KNEE_PITCH_L/mcz
+    nominal: -0.5124019387374854
+    abs_std: 0.011157497705310035
+    rel_std: 0.021774893192348613
+    nullspace_weight: 0.18403793360074988
+    score: 0.7522965407289143
+    quality: good
+  - idx: 34
+    name: J03_KNEE_PITCH_L/Ixx
+    nominal: 0.11429615709559784
+    abs_std: 0.00681702281643785
+    rel_std: 0.05964349452537687
+    nullspace_weight: 0.36149193151307374
+    score: 0.0
+    quality: rank_deficient
+  - idx: 35
+    name: J03_KNEE_PITCH_L/Ixy
+    nominal: 0.00016389963264720975
+    abs_std: 0.005767832228957331
+    rel_std: 35.189098625897735
+    nullspace_weight: 0.00043484662725857344
+    score: 0.0
+    quality: ok
+  - idx: 36
+    name: J03_KNEE_PITCH_L/Iyy
+    nominal: 0.116351865013513
+    abs_std: 0.006758756890940336
+    rel_std: 0.05808893831883139
+    nullspace_weight: 0.02452139054473319
+    score: 0.736099053818591
+    quality: good
+  - idx: 37
+    name: J03_KNEE_PITCH_L/Ixz
+    nominal: 0.0008042019775374547
+    abs_std: 0.006106924915051538
+    rel_std: 7.593675654708983
+    nullspace_weight: 0.00013174972666423786
+    score: 0.0
+    quality: ok
+  - idx: 38
+    name: J03_KNEE_PITCH_L/Iyz
+    nominal: 0.0016582207978264576
+    abs_std: 0.005027078083019084
+    rel_std: 3.031591313831812
+    nullspace_weight: 0.08006203294906032
+    score: 0.0
+    quality: ok
+  - idx: 39
+    name: J03_KNEE_PITCH_L/Izz
+    nominal: 0.006041142074790373
+    abs_std: 0.007241561177177154
+    rel_std: 1.198705327647034
+    nullspace_weight: 0.35253611662441886
+    score: 0.0
+    quality: rank_deficient
+  - idx: 40
+    name: J04_ANKLE_PITCH_L/mass
+    nominal: 0.11534469
+    abs_std: 0.0040083323258079595
+    rel_std: 0.034750901652247215
+    nullspace_weight: 0.8490971590891501
+    score: 0.0
+    quality: rank_deficient
+  - idx: 41
+    name: J04_ANKLE_PITCH_L/mcx
+    nominal: 0.0001458095295228
+    abs_std: 0.0038821814414458787
+    rel_std: 26.62319275168742
+    nullspace_weight: 0.49994375632741317
+    score: 0.0
+    quality: rank_deficient
+  - idx: 42
+    name: J04_ANKLE_PITCH_L/mcy
+    nominal: 0.0
+    abs_std: 0.004571861015353381
+    rel_std: 457186.1015353381
+    nullspace_weight: 0.6074264607322544
+    score: 0.0
+    quality: small
+  - idx: 43
+    name: J04_ANKLE_PITCH_L/mcz
+    nominal: -0.0007629416847705
+    abs_std: 0.014682796311543234
+    rel_std: 19.244726244965168
+    nullspace_weight: 0.00019101002781904335
+    score: -0.9999999999999998
+    quality: bad
+  - idx: 44
+    name: J04_ANKLE_PITCH_L/Ixx
+    nominal: 1.8506439626830235e-05
+    abs_std: 0.008129134603227598
+    rel_std: 439.02255331249097
+    nullspace_weight: 0.3768415119820724
+    score: 0.0
+    quality: small
+  - idx: 45
+    name: J04_ANKLE_PITCH_L/Ixy
+    nominal: 0.0
+    abs_std: 0.0063632537826124455
+    rel_std: 636325.3782612445
+    nullspace_weight: 3.4057066502927564e-31
+    score: 0.0
+    quality: small
+  - idx: 46
+    name: J04_ANKLE_PITCH_L/Iyy
+    nominal: 2.0340760369290594e-05
+    abs_std: 0.009056046531487836
+    rel_std: 444.9979444086747
+    nullspace_weight: 0.27355042764964344
+    score: 0.0
+    quality: small
+  - idx: 47
+    name: J04_ANKLE_PITCH_L/Ixz
+    nominal: 2.0944498425520846e-06
+    abs_std: 0.008394332652553143
+    rel_std: 3988.84900120654
+    nullspace_weight: 0.00011248734517367019
+    score: 0.0
+    quality: small
+  - idx: 48
+    name: J04_ANKLE_PITCH_L/Iyz
+    nominal: 0.0
+    abs_std: 0.009552164939220288
+    rel_std: 955216.4939220288
+    nullspace_weight: 3.920952625529364e-31
+    score: 0.0
+    quality: small
+  - idx: 49
+    name: J04_ANKLE_PITCH_L/Izz
+    nominal: 1.2714320742460363e-05
+    abs_std: 0.008360275949526012
+    rel_std: 657.031217519394
+    nullspace_weight: 0.46196676398769587
+    score: 0.0
+    quality: small
+  - idx: 50
+    name: J05_ANKLE_ROLL_L/mass
+    nominal: 0.71886765
+    abs_std: 0.0038661180790433903
+    rel_std: 0.005378066498419737
+    nullspace_weight: 0.8489334569735555
+    score: 0.0
+    quality: rank_deficient
+  - idx: 51
+    name: J05_ANKLE_ROLL_L/mcx
+    nominal: 0.010469562168560497
+    abs_std: 0.0038412029025214484
+    rel_std: 0.3668920602177377
+    nullspace_weight: 0.49994375632741317
+    score: 0.0
+    quality: rank_deficient
+  - idx: 52
+    name: J05_ANKLE_ROLL_L/mcy
+    nominal: 2.5142625034999996e-06
+    abs_std: 0.007645971551956143
+    rel_std: 3028.9922467868028
+    nullspace_weight: 2.5576123966547134e-31
+    score: 0.0
+    quality: small
+  - idx: 53
+    name: J05_ANKLE_ROLL_L/mcz
+    nominal: -0.015982203711614497
+    abs_std: 0.008876308755936408
+    rel_std: 0.5553866889845097
+    nullspace_weight: 3.173165185637948e-31
+    score: 0.41746109744536103
+    quality: ok
+  - idx: 54
+    name: J05_ANKLE_ROLL_L/Ixx
+    nominal: 0.0009338671627081429
+    abs_std: 0.006069479258604615
+    rel_std: 6.499226558880379
+    nullspace_weight: 3.2261132127809064e-31
+    score: 0.0
+    quality: ok
+  - idx: 55
+    name: J05_ANKLE_ROLL_L/Ixy
+    nominal: -2.892065854898059e-05
+    abs_std: 0.004168394481588041
+    rel_std: 144.0822535902806
+    nullspace_weight: 2.7339779266792055e-31
+    score: 0.0
+    quality: small
+  - idx: 56
+    name: J05_ANKLE_ROLL_L/Iyy
+    nominal: 0.0032733886692262472
+    abs_std: 0.00838208915619041
+    rel_std: 2.5606685904139304
+    nullspace_weight: 0.2735525944988793
+    score: 0.0
+    quality: ok
+  - idx: 57
+    name: J05_ANKLE_ROLL_L/Ixz
+    nominal: 8.644296590052262e-05
+    abs_std: 0.005639594758193835
+    rel_std: 65.23309755136745
+    nullspace_weight: 1.272498025443104e-31
+    score: 0.0
+    quality: small
+  - idx: 58
+    name: J05_ANKLE_ROLL_L/Iyz
+    nominal: -1.9541616864831785e-06
+    abs_std: 0.00912615060466698
+    rel_std: 4646.333683968403
+    nullspace_weight: 9.602462008117542e-32
+    score: 0.0
+    quality: small
+  - idx: 59
+    name: J05_ANKLE_ROLL_L/Izz
+    nominal: 0.003076217020751249
+    abs_std: 0.009811164166199078
+    rel_std: 3.1893498431735
+    nullspace_weight: 0.2735525944988795
+    score: 0.0
+    quality: ok
+  - idx: 60
+    name: J00_HIP_PITCH_L/armature
+    nominal: 0.045325
+    abs_std: 0.002168391079118134
+    rel_std: 0.0478409398942909
+    nullspace_weight: 0.633228232908513
+    score: 0.0
+    quality: rank_deficient
+  - idx: 61
+    name: J01_HIP_ROLL_L/armature
+    nominal: 0.045325
+    abs_std: 0.004678774811342198
+    rel_std: 0.10322722071858778
+    nullspace_weight: 0.5934966091694396
+    score: 0.0
+    quality: rank_deficient
+  - idx: 62
+    name: J02_HIP_YAW_L/armature
+    nominal: 0.039175
+    abs_std: 0.0031833052388622147
+    rel_std: 0.08125856863501028
+    nullspace_weight: 1.3782817024690823e-31
+    score: 0.7253014759506159
+    quality: good
+  - idx: 63
+    name: J03_KNEE_PITCH_L/armature
+    nominal: 0.045325
+    abs_std: 0.00801048102846655
+    rel_std: 0.1767342363182391
+    nullspace_weight: 2.098947666500586e-31
+    score: 0.6768434505008448
+    quality: good
+  - idx: 64
+    name: J04_ANKLE_PITCH_L/armature
+    nominal: 0.039175
+    abs_std: 0.012190698750264085
+    rel_std: 0.3111855938330095
+    nullspace_weight: 2.030003512231638e-31
+    score: 0.5972198142352882
+    quality: good
+  - idx: 65
+    name: J05_ANKLE_ROLL_L/armature
+    nominal: 0.039175
+    abs_std: 0.042015908336893434
+    rel_std: 1.0725181266550647
+    nullspace_weight: 2.8528192594403467e-31
+    score: -0.07239127214964512
+    quality: ok
+  - idx: 66
+    name: J00_HIP_PITCH_L/damping
+    nominal: 0.12
+    abs_std: 0.026575476612612572
+    rel_std: 0.22146228664991424
+    nullspace_weight: 1.5288086441483756e-30
+    score: 0.6518665902639039
+    quality: good
+  - idx: 67
+    name: J00_HIP_PITCH_L/friction
+    nominal: 0.55
+    abs_std: 0.11798943063683234
+    rel_std: 0.21452623362103634
+    nullspace_weight: 1.05179499907251e-29
+    score: 0.655837289203288
+    quality: good
+  - idx: 68
+    name: J01_HIP_ROLL_L/damping
+    nominal: 0.12
+    abs_std: 0.06791696634848078
+    rel_std: 0.5659746724061172
+    nullspace_weight: 1.6552354742814677e-30
+    score: 0.4086798361286282
+    quality: ok
+  - idx: 69
+    name: J01_HIP_ROLL_L/friction
+    nominal: 0.55
+    abs_std: 0.1243163402525323
+    rel_std: 0.22602970544042766
+    nullspace_weight: 4.801101116823963e-30
+    score: 0.6492321797381846
+    quality: good
+  - idx: 70
+    name: J02_HIP_YAW_L/damping
+    nominal: 0.08
+    abs_std: 0.028305178209376343
+    rel_std: 0.35381468339036887
+    nullspace_weight: 7.762963282237166e-31
+    score: 0.569096346301553
+    quality: good
+  - idx: 71
+    name: J02_HIP_YAW_L/friction
+    nominal: 0.3
+    abs_std: 0.11811369608837058
+    rel_std: 0.39371230717082506
+    nullspace_weight: 1.4677364946037345e-29
+    score: 0.5415086332432415
+    quality: good
+  - idx: 72
+    name: J03_KNEE_PITCH_L/damping
+    nominal: 0.12
+    abs_std: 0.06233498310433157
+    rel_std: 0.5194581492479173
+    nullspace_weight: 1.0493683568768777e-30
+    score: 0.4466774554950233
+    quality: ok
+  - idx: 73
+    name: J03_KNEE_PITCH_L/friction
+    nominal: 0.55
+    abs_std: 0.13083681947962694
+    rel_std: 0.23788512200141038
+    nullspace_weight: 6.665731196342016e-31
+    score: 0.6423209788283586
+    quality: good
+  - idx: 74
+    name: J04_ANKLE_PITCH_L/damping
+    nominal: 0.08
+    abs_std: 0.09704284426128433
+    rel_std: 1.213035401636629
+    nullspace_weight: 1.5212213488669987e-30
+    score: -0.2098700465339366
+    quality: ok
+  - idx: 75
+    name: J04_ANKLE_PITCH_L/friction
+    nominal: 0.3
+    abs_std: 0.1095910762749277
+    rel_std: 0.36530357540630654
+    nullspace_weight: 1.69803816894294e-30
+    score: 0.5612775919789788
+    quality: good
+  - idx: 76
+    name: J05_ANKLE_ROLL_L/damping
+    nominal: 0.08
+    abs_std: 0.36015346787153957
+    rel_std: 4.501917785654522
+    nullspace_weight: 9.135797001164962e-30
+    score: -0.9981848666982791
+    quality: bad
+  - idx: 77
+    name: J05_ANKLE_ROLL_L/friction
+    nominal: 0.3
+    abs_std: 0.11283862369319173
+    rel_std: 0.376128733106348
+    nullspace_weight: 2.7891712126844238e-30
+    score: 0.5538176767090046
+    quality: good
