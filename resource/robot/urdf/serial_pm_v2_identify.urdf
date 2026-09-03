@@ -129,7 +129,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_HIP_PITCH_L"/>
         <axis xyz="0 0.96593 -0.25882"/>
         <limit lower="-3.141" upper="2.443" effort="164" velocity="26.3"/>
-        <dynamics damping="0.12" friction="0.55"/>
+        <dynamics armature="0.045325" damping="0.12" friction="0.55"/>
     </joint>
     <link name="LINK_HIP_ROLL_L">
         <inertial>
@@ -159,7 +159,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_HIP_ROLL_L"/>
         <axis xyz="1 0 0"/>
         <limit lower="-0.436" upper="2.094" effort="164" velocity="26.3"/>
-        <dynamics damping="0.12" friction="0.55"/>
+        <dynamics armature="0.045325" damping="0.12" friction="0.55"/>
     </joint>
     <link name="LINK_HIP_YAW_L">
         <inertial>
@@ -189,7 +189,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_HIP_YAW_L"/>
         <axis xyz="0 0 1"/>
         <limit lower="-1.57" upper="4.014" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
     <link name="LINK_KNEE_PITCH_L">
         <inertial>
@@ -219,7 +219,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_KNEE_PITCH_L"/>
         <axis xyz="0 1 0"/>
         <limit lower="-0.3491" upper="2.3911" effort="164" velocity="26.3"/>
-        <dynamics damping="0.12" friction="0.55"/>
+        <dynamics armature="0.045325" damping="0.12" friction="0.55"/>
     </joint>
     <link name="LINK_ANKLE_PITCH_L">
         <inertial>
@@ -249,7 +249,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_ANKLE_PITCH_L"/>
         <axis xyz="0 1 0"/>
         <limit lower="-0.6807" upper="0.7243" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
     <link name="LINK_ANKLE_ROLL_L">
         <inertial>
@@ -279,7 +279,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_ANKLE_ROLL_L"/>
         <axis xyz="1 0 0"/>
         <limit lower="-0.2618" upper="0.2618" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
 
     <link name="LINK_FOOT_L">
@@ -331,7 +331,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_HIP_PITCH_R"/>
         <axis xyz="0 0.96593 0.25882"/>
         <limit lower="-3.141" upper="2.443" effort="164" velocity="26.3"/>
-        <dynamics damping="0.12" friction="0.55"/>
+        <dynamics armature="0.045325" damping="0.12" friction="0.55"/>
     </joint>
     <link name="LINK_HIP_ROLL_R">
         <inertial>
@@ -361,7 +361,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_HIP_ROLL_R"/>
         <axis xyz="1 0 0"/>
         <limit lower="-2.094" upper="0.436" effort="164" velocity="26.3"/>
-        <dynamics damping="0.12" friction="0.55"/>
+        <dynamics armature="0.045325" damping="0.12" friction="0.55"/>
     </joint>
     <link name="LINK_HIP_YAW_R">
         <inertial>
@@ -391,7 +391,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_HIP_YAW_R"/>
         <axis xyz="0 0 1"/>
         <limit lower="-4.014" upper="1.57" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
     <link name="LINK_KNEE_PITCH_R">
         <inertial>
@@ -421,7 +421,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_KNEE_PITCH_R"/>
         <axis xyz="0 1 0"/>
         <limit lower="-0.3491" upper="2.3911" effort="164" velocity="26.3"/>
-        <dynamics damping="0.12" friction="0.55"/>
+        <dynamics armature="0.045325" damping="0.12" friction="0.55"/>
     </joint>
     <link name="LINK_ANKLE_PITCH_R">
         <inertial>
@@ -451,7 +451,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_ANKLE_PITCH_R"/>
         <axis xyz="0 1 0"/>
         <limit lower="-0.6807" upper="0.7243" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
     <link name="LINK_ANKLE_ROLL_R">
         <inertial>
@@ -481,7 +481,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_ANKLE_ROLL_R"/>
         <axis xyz="1 0 0"/>
         <limit lower="-0.2618" upper="0.2618" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
     <link name="LINK_TORSO_YAW">
         <inertial>
@@ -511,7 +511,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_TORSO_YAW"/>
         <axis xyz="0 0 1"/>
         <limit lower="-4.014" upper="1.57" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
 
     <link name="LINK_FOOT_R">
@@ -563,7 +563,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_SHOULDER_PITCH_L"/>
         <axis xyz="0 0.99803 0.062791"/>
         <limit lower="-2.9671" upper="2.7925" effort="61" velocity="35.2"/>
-        <dynamics armature="0.039175" damping="0.08" frictionloss="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
     <link name="LINK_SHOULDER_ROLL_L">
         <inertial>
@@ -593,7 +593,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_SHOULDER_ROLL_L"/>
         <axis xyz="1 0 0"/>
         <limit lower="-0.6108" upper="2.3562" effort="61" velocity="35.2"/>
-        <dynamics armature="0.039175" damping="0.08" frictionloss="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
     <link name="LINK_SHOULDER_YAW_L">
         <inertial>
@@ -623,7 +623,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_SHOULDER_YAW_L"/>
         <axis xyz="0 -0.062803 0.99803"/>
         <limit lower="-2.618" upper="2.618" effort="61" velocity="35.2"/>
-        <dynamics armature="0.039175" damping="0.08" frictionloss="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
     <link name="LINK_ELBOW_PITCH_L">
         <inertial>
@@ -653,7 +653,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_ELBOW_PITCH_L"/>
         <axis xyz="0.0027243 0.99802 0.062803"/>
         <limit lower="-2.1948" upper="0.7374" effort="61" velocity="35.2"/>
-        <dynamics armature="0.039175" damping="0.08" frictionloss="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
     <link name="LINK_ELBOW_YAW_L">
         <inertial>
@@ -683,7 +683,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_ELBOW_YAW_L"/>
         <axis xyz="-0.21479 -0.061921 0.9747"/>
         <limit lower="-2.618" upper="2.618" effort="61" velocity="35.2"/>
-        <dynamics armature="0.039175" damping="0.08" frictionloss="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
 
     <link name="LINK_SHOULDER_PITCH_R">
@@ -714,7 +714,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_SHOULDER_PITCH_R"/>
         <axis xyz="0 0.99803 -0.062791"/>
         <limit lower="-2.9671" upper="2.7925" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
     <link name="LINK_SHOULDER_ROLL_R">
         <inertial>
@@ -744,7 +744,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_SHOULDER_ROLL_R"/>
         <axis xyz="1 0 0"/>
         <limit lower="-2.3562" upper="0.6108" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
     <link name="LINK_SHOULDER_YAW_R">
         <inertial>
@@ -774,7 +774,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_SHOULDER_YAW_R"/>
         <axis xyz="0 0.062791 0.99803"/>
         <limit lower="-2.618" upper="2.618" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
     <link name="LINK_ELBOW_PITCH_R">
         <inertial>
@@ -804,7 +804,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_ELBOW_PITCH_R"/>
         <axis xyz="0.0027243 0.99802 -0.06279"/>
         <limit lower="-2.1948" upper="0.7374" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
     <link name="LINK_ELBOW_YAW_R">
         <inertial>
@@ -834,7 +834,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_ELBOW_YAW_R"/>
         <axis xyz="-0.21479 0.061909 0.9747"/>
         <limit lower="-2.618" upper="2.618" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
 
     <link name="LINK_HEAD_YAW">
@@ -865,6 +865,6 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_HEAD_YAW"/>
         <axis xyz="0 0 1"/>
         <limit lower="-0.6109" upper="0.6109" effort="61" velocity="35.2"/>
-        <dynamics damping="0.08" friction="0.30"/>
+        <dynamics armature="0.039175" damping="0.08" friction="0.30"/>
     </joint>
 </robot>
