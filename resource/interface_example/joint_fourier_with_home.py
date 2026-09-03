@@ -518,6 +518,7 @@ def main(argv=None):
     )
     parser.add_argument(
         "--yaml",
+        "-y",
         type=str,
         default=None,
         help="Trajectory YAML filename in trajectory_coefficients/ "
