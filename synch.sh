@@ -7,12 +7,12 @@ declare -A HOST_CONFIGS
 HOST_CONFIGS["nezha,REMOTE_HOST"]="192.168.0.163"
 HOST_CONFIGS["nezha,REMOTE_USER"]="user"
 HOST_CONFIGS["nezha,REMOTE_PASSWORD"]="1"
-HOST_CONFIGS["nezha,REMOTE_PATH"]="/home/user/deployments/sysid_ws"
+HOST_CONFIGS["nezha,REMOTE_PATH"]="/home/user/deployments/sysid_ws/src"
 
 HOST_CONFIGS["orin,REMOTE_HOST"]="192.168.0.162"
 HOST_CONFIGS["orin,REMOTE_USER"]="ubuntu"
 HOST_CONFIGS["orin,REMOTE_PASSWORD"]="ubuntu"
-HOST_CONFIGS["orin,REMOTE_PATH"]="/home/ubuntu/deployments/sysid_ws"
+HOST_CONFIGS["orin,REMOTE_PATH"]="/home/ubuntu/deployments/sysid_ws/src"
 
 # --- Specify the synch files
 SYNC_FILES=(
