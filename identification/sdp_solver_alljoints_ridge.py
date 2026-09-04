@@ -1689,6 +1689,120 @@ def plot_torque_comparison_measured(
     )
 
 
+def plot_torque_comparison_simulated_validation(
+    result: IdentificationResult,
+    urdf_path: str | Path,
+    val_yaml: str,
+    pi_true: np.ndarray,
+    joint_names: list[str] | None = None,
+    limb_group: str | None = None,
+    sample_rate: float = 100.0,
+    time_coeffs: float = 1.0,
+    gravity: np.ndarray | None = None,
+    waist_yaw_offset: float = 0.0,
+    offset: float | None = None,
+    show_residual: bool = True,
+    verbose: bool = True,
+    twin: str | None = None,
+    plot: bool = True,
+):
+    """Held-out cross-validation of sim identification on a different YAML.
+
+    The sim identification was fit on one (training) excitation YAML whose
+    synthetic torque came from the true URDF.  This stage is the sim analogue
+    of ``plot_torque_comparison_measured`` (which validates on a different
+    measured bag): it re-runs **both** the URDF prior and the identified
+    parameters on a *different* (manually specified, e.g. ``verify_*.yaml``)
+    trajectory, and compares their predicted torques against the true torque
+    ``tau_true = Y_val @ pi_true`` synthesised from the **same true model** on
+    that new trajectory:
+
+        1. Build the URDF regressor (prior model) at the validation
+           trajectory's q/v/a (same sample_rate / time_coeffs playback as
+           identification).
+        2. ``tau_true  = Y_val @ pi_true``
+           ``tau_prior = Y_val @ pi_prior``
+           ``tau_ident = Y_val @ pi_identified``.
+        3. Per-joint RMSE table (prior vs identified) on the held-out data and
+           per-joint plots — so you can see whether identification actually
+           *generalises* (does it still beat the URDF prior on a trajectory it
+           never saw?), as opposed to merely memorising the training data.
+
+    ``plot=False`` prints only the RMSE table (no figures).
+    """
+    from identification.fourier_trajectory import FourierTrajectory
+    from identification.target_limb_regressor import TargetLimbRegressor
+
+    # The validation regressor must belong to the identified limb (same dof).
+    # If not given, it is read from the validation yaml's _meta.group.
+    if limb_group is None:
+        limb_group = FourierTrajectory.load_group(val_yaml, default="left_arm")
+
+    dof = len(result.joint_order)
+    if joint_names is None:
+        joint_names = [f"joint_{d}" for d in range(dof)]
+
+    # --- 1) Regressor: same prior (URDF) model as identification ---
+    reg = TargetLimbRegressor(
+        urdf_path=Path(urdf_path),
+        group_to_identify=limb_group,
+        print_info=False,
+        gravity=gravity,
+        waist_yaw_offset=waist_yaw_offset,
+    )
+    assert reg.dof == dof, (
+        f"limb_group '{limb_group}' dof={reg.dof} != identification dof={dof} "
+        f"— the validation yaml must belong to the same limb group"
+    )
+
+    # --- 2) Generate the held-out trajectory (same playback convention as the
+    #        identification data, i.e. same sample_rate / time_coeffs). ---
+    ft = FourierTrajectory(dim=dof, sample_rate=sample_rate, time_coeffs=time_coeffs)
+    q_val, v_val, a_val = ft.generate_trajectory_from_yaml(Path(val_yaml).name)
+    N = q_val.shape[1]
+    if verbose:
+        print(
+            f"  [sim validation] held-out yaml={Path(val_yaml).name}  "
+            f"N={N} steps  (time_coeffs={time_coeffs}, "
+            f"period={ft.duration:.3f}s)"
+        )
+
+    # --- 3) Stack regressor + reference true torque on the new trajectory.
+    #        Y depends only on kinematics/geometry, so the true torque is
+    #        Y_val @ pi_true (pi_true from the true URDF) — same as the
+    #        training-data preparation. ---
+    Y_val = _stack_regressor(reg, q_val.T, v_val.T, a_val.T)  # (N*dof, 13*dof)
+    tau_true = Y_val @ np.asarray(pi_true)
+    if verbose:
+        print(f"  [sim validation] Y_val: {Y_val.shape}, tau_true: {tau_true.shape}")
+
+    # --- 4) RMSE table on the held-out data (prior vs identified) ---
+    print_rmse_comparison(result, joint_names, Y_val, tau_true)
+
+    # --- 5) Optional plot ---
+    if not plot:
+        return []
+    return _plot_torque_comparison_panels(
+        tau_true,
+        Y_val @ result.pi_prior,
+        Y_val @ result.pi_identified,
+        joint_names,
+        result.joint_order,
+        dof,
+        sample_rate=sample_rate,
+        offset=offset,
+        show_residual=show_residual,
+        true_label="true",
+        title=(
+            "Joint Torque Comparison (sim held-out validation, different yaml): "
+            "true vs prior vs identified\n"
+            f"held-out yaml={Path(val_yaml).name}   "
+            "(identified on a different training yaml)"
+        ),
+        twin=twin,
+    )
+
+
 # ============================================================================
 # main / demo — argparse CLI
 # ============================================================================
@@ -1785,10 +1899,15 @@ def _build_parser() -> argparse.ArgumentParser:
     # ---- 验证 / 绘图 ----
     ap.add_argument(
         "--val-yaml",
-        default=str(VAL_YAML_PATH),
+        "-v-y",
+        default=None,
         metavar="NAME",
-        help="[meas] 验证用轨迹 YAML（默认取文件顶部 VAL_YAML_PATH 常量）；"
-        "其 bag 也从该 YAML 的 _meta.source_bag 读取",
+        help="交叉验证用轨迹 YAML（手动指定，与 --yaml 不同的一条）：\n"
+        "  [sim]  辨识后把它当作 held-out 轨迹：在它上面用同一 pi_true 重算真值"
+        "tau，打印 prior vs identified 的 RMSE 改善，判断辨识是否泛化。不给 → "
+        "默认不做交叉对比\n"
+        "  [meas] 在其 _meta.source_bag 对应 bag 的实测数据上验证；不给则默认用"
+        "文件顶部 VAL_YAML_PATH 常量",
     )
     ap.add_argument(
         "-w",
@@ -1866,6 +1985,14 @@ def main(argv: list[str] | None = None) -> None:
     print(f"sample_rate     : {args.sample_rate}")
     print(f"ridge_lambda    : {args.ridge_lambda}")
     print(f"twin-id         : {args.twin_id or '(全程)'}")
+
+    # ---- 交叉验证轨迹 YAML（--val-yaml，手动指定）----
+    #   meas：在另一条轨迹/bag 上做 held-out 验证（不给时默认 VAL_YAML_PATH 常量）。
+    #   sim：只有显式给了 --val-yaml 才在辨识后做 held-out 交叉对比；不给 = 不做。
+    if is_sim:
+        val_yaml = args.val_yaml  # None → 默认不交叉对比
+    else:
+        val_yaml = args.val_yaml or str(VAL_YAML_PATH)
 
     # 1. Prepare data
     # ------------------------------------------------------------------
@@ -1961,7 +2088,7 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     # 5. Cross-validation / comparison plot
-    #    sim：真值 vs prior vs identified 对比。
+    #    sim：真值 vs prior vs identified 对比（训练轨迹上）。
     #    meas：用另一条轨迹/bag 验证辨识结果 —— pi_prior 与 pi_identified 分别在
     #          验证轨迹上算关节 tau，与验证 bag 的实测 tau 对比；验证 bag 也
     #          从验证 YAML 的 _meta.source_bag 读取。
@@ -1979,7 +2106,7 @@ def main(argv: list[str] | None = None) -> None:
             plot_torque_comparison_measured(
                 result,
                 urdf_path=args.urdf,  # 先验模型（regressor）
-                val_yaml=args.val_yaml,
+                val_yaml=val_yaml,
                 val_bag_name=None,  # 从 val YAML _meta.source_bag 读取
                 joint_names=data["joint_names"],
                 limb_group=None,
@@ -1989,6 +2116,29 @@ def main(argv: list[str] | None = None) -> None:
                 waist_yaw_offset=args.waist_offset,
                 twin=args.twin,  # 时间窗缩放，如 "0:13.4"
             )
+
+    # 5b. sim held-out cross-validation（可选）—— 只有显式给了 --val-yaml（一条
+    #     *不同的* 轨迹）才做：用同一 pi_true 在它上面重算真值 tau，看 identified
+    #     相对 prior 在新轨迹上是否仍有改善（Improve %）——即辨识是泛化还是只背
+    #     下了训练数据。不给 --val-yaml = 默认不做。即使 --no-plot 也打印 RMSE 表。
+    if is_sim and val_yaml is not None:
+        print("\n" + "=" * 100)
+        print("SIM HELD-OUT CROSS-VALIDATION (different trajectory yaml)".center(100))
+        print("=" * 100)
+        plot_torque_comparison_simulated_validation(
+            result,
+            urdf_path=args.urdf,
+            val_yaml=val_yaml,
+            pi_true=data["pi_true"],
+            joint_names=data["joint_names"],
+            limb_group=None,  # 从 val YAML 的 _meta.group 读取（须与辨识同 dof）
+            sample_rate=args.sample_rate,
+            time_coeffs=args.time_coeffs,
+            gravity=gravity,
+            waist_yaw_offset=args.waist_offset,
+            twin=args.twin,  # 时间窗缩放，如 "0:13.4"
+            plot=not args.no_plot,
+        )
 
     print("\n" + "=" * 100)
     print("SDP identification finished.".center(100))
