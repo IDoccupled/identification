@@ -38,6 +38,9 @@ Options
 -------
     bags ...            bag dirs / a directory containing bag dirs / a .db3 file
                         (default: the package's `bags/` directory)
+                        relative names are resolved against the cwd first, then
+                        against `src/identification/bags`, so a bare bag name
+                        (e.g. `rosbag2_1970_01_01-08_56_49`) works from anywhere
     --out-dir DIR       output root (default: src/identification/bag_data)
     --topics a,b,c      only extract these topics
     --format FMT        npz | csv | both  (default: csv)
@@ -58,6 +61,17 @@ import sys
 from pathlib import Path
 
 import numpy as np
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+# Package root, i.e. src/identification/
+PKG_ROOT = Path(__file__).resolve().parent.parent
+# Raw rosbag2 recordings live here.
+DEFAULT_BAGS_DIR = PKG_ROOT / "bags"
+# Decoded output (summary.json + csv/ + npz) goes here.
+DEFAULT_OUT_DIR = PKG_ROOT / "bag_data"
+
 
 # ---------------------------------------------------------------------------
 # Recording-era interface_protocol message definitions
@@ -464,11 +478,7 @@ def extract_bag(
 
     bag_dir = Path(bag_dir)
     bag_name = bag_dir.name
-    out_root = (
-        Path(out_root)
-        if out_root
-        else Path(__file__).resolve().parent.parent / "bag_data"
-    )
+    out_root = Path(out_root) if out_root else DEFAULT_OUT_DIR
     out_bag = out_root / bag_name
 
     # --- summary-only path (no deserialization needed) ---
@@ -545,9 +555,29 @@ def _print_summary(bag_name, summary):
 # ---------------------------------------------------------------------------
 # Discovery / CLI
 # ---------------------------------------------------------------------------
+def _bag_candidates(path) -> list[Path]:
+    """Candidate locations for a bag input, in resolution order.
+
+    Relative inputs are looked up in the current working directory first, then
+    under the package's ``bags/`` directory, so that ``--bags <bag_name>`` works
+    regardless of where the script is launched from.  A leading ``bags/``
+    component is stripped for the second candidate.
+    """
+    p = Path(path).expanduser()
+    if p.is_absolute():
+        return [p]
+    rel = Path(*p.parts[1:]) if p.parts and p.parts[0] == DEFAULT_BAGS_DIR.name else p
+    return list(dict.fromkeys([Path.cwd() / p, DEFAULT_BAGS_DIR / rel]))
+
+
 def discover_bags(path) -> list[Path]:
     """Return bag directories (those containing a metadata.yaml)."""
-    p = Path(path).expanduser().resolve()
+    candidates = _bag_candidates(path)
+    p = next((c for c in candidates if c.exists()), None)
+    if p is None:
+        tried = "\n".join(f"    {c}" for c in candidates)
+        raise FileNotFoundError(f"Bag path not found: {path}\n  tried:\n{tried}")
+    p = p.resolve()
     if p.is_file():
         if p.name == "metadata.yaml":
             return [p.parent]
@@ -569,15 +599,19 @@ def _parse_topics(arg: str | None) -> set[str] | None:
 
 
 def main(argv=None):
-    default_bags = Path(__file__).resolve().parent.parent / "bags"
     parser = argparse.ArgumentParser(
         description="Decode recorded rosbag2 data into npz/csv files."
     )
     parser.add_argument(
-        "bags",
+        "--bags",
+        "-b",
         nargs="*",
-        default=[str(default_bags)],
-        help="bag dirs, a directory of bags, or a .db3 file (default: %(default)s)",
+        default=[str(DEFAULT_BAGS_DIR)],
+        help=(
+            "bag dirs, a directory of bags, or a .db3 file. "
+            "Relative names are resolved against the cwd first, then against "
+            f"{DEFAULT_BAGS_DIR} (default: %(default)s)"
+        ),
     )
     parser.add_argument(
         "--out-dir",
@@ -592,6 +626,7 @@ def main(argv=None):
     parser.add_argument("--format", choices=["npz", "csv", "both"], default="csv")
     parser.add_argument(
         "--time-coeffs",
+        "-t",
         type=float,
         help="录制时 fourier_trajectory 的时间系数（如 0.75），写入 summary.json 供下游读取",
     )
@@ -664,10 +699,10 @@ def main(argv=None):
             bd,
             store,
             topics,
-            args.out_dir,
-            args.format,
-            args.max_messages,
+            out_root=args.out_dir,
+            fmt=args.format,
             time_coeffs=args.time_coeffs,
+            max_messages=args.max_messages,
         )
 
     print("\nDone.")
