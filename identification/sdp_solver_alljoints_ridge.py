@@ -126,7 +126,7 @@ SETUP = {
     "waist_yaw_offset": 0.076485634,
 }
 
-# 6×6 pseudo-inertia 严格正定余量（J ≽ eps·I₆，min_eig ≥ eps > 0）。
+# 4×4 pseudo-inertia 严格正定余量（J ≽ eps·I₄，min_eig ≥ eps > 0）。
 LMI_EPS = 1e-7
 
 
@@ -145,20 +145,25 @@ def join_joint_params(pi_list: list[np.ndarray]) -> np.ndarray:
 
 
 # ============================================================================
-# Physical-consistency LMI  — 6×6 pseudo-inertia (Jung et al. eq.22)
+# Physical-consistency LMI  —  4×4 pseudo-inertia, second-moment form
+#
+#   J = [[Σ_O, h], [hᵀ, m]] ≽ 0 ,   Σ_O = ½·tr(I_O)·I₃ − I_O
+#
+# Schur complement: Σ_O − h·hᵀ/m = Σ_C = ½·tr(I_C)·I₃ − I_C ≽ 0, which is
+# equivalent to {m > 0, I_C ≻ 0, triangle inequality on the principal moments},
+# i.e. realizability by a non-negative mass density (Wensing et al. 2017).
+# Putting I_O in the (1,1) block instead would only enforce I_C ≻ 0 and would
+# silently admit inertias that violate the triangle inequality (e.g.
+# I_C = diag(10,1,1)), which MuJoCo rejects at model load.
+# Both forms are affine in π and therefore valid LMIs; the second-moment form is
+# the complete one, and it is 4×4 instead of 6×6.
 # ============================================================================
-def _skew3(v) -> cp.Expression:
-    if isinstance(v, np.ndarray):
-        v = cp.Constant(v)
-    return cp.bmat([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
-
-
 def build_pseudo_inertia_LMI(
     m: cp.Variable,
     mc: cp.Variable,
     I_vec: cp.Variable,
 ) -> cp.Expression:
-    """6×6  [I, S(mc); S(mc)ᵀ, m·I₃] ≽ 0.  Pinocchio ordering."""
+    """4×4 pseudo-inertia [[Σ_O, h]; [hᵀ, m]] ≽ 0.  Pinocchio ordering."""
     I_mat = cp.bmat(
         [
             [I_vec[0], I_vec[1], I_vec[3]],  # Ixx Ixy Ixz
@@ -166,11 +171,18 @@ def build_pseudo_inertia_LMI(
             [I_vec[3], I_vec[4], I_vec[5]],  # Ixz Iyz Izz
         ]
     )
-    S = _skew3(mc)
-    return cp.bmat([[I_mat, S], [S.T, m * np.eye(3)]])
+    tr_I = I_vec[0] + I_vec[2] + I_vec[5]  # tr(I_O) = Ixx + Iyy + Izz
+    Sigma = 0.5 * tr_I * np.eye(3) - I_mat
+    return cp.bmat(
+        [
+            [Sigma, cp.reshape(mc, (3, 1), order="F")],
+            [cp.reshape(mc, (1, 3), order="F"), cp.reshape(m, (1, 1), order="F")],
+        ]
+    )
 
 
 def check_lmi_feasibility(pi: np.ndarray) -> tuple[bool, float, np.ndarray]:
+    """Numeric counterpart of ``build_pseudo_inertia_LMI`` (same ordering)."""
     m_val, mc_val = pi[0], pi[1:4]
     I_vals = pi[4:10]
     I_mat = np.array(
@@ -180,14 +192,14 @@ def check_lmi_feasibility(pi: np.ndarray) -> tuple[bool, float, np.ndarray]:
             [I_vals[3], I_vals[4], I_vals[5]],
         ]
     )
-    S = np.array(
+    tr_I = I_vals[0] + I_vals[2] + I_vals[5]
+    Sigma = 0.5 * tr_I * np.eye(3) - I_mat
+    J = np.block(
         [
-            [0, -mc_val[2], mc_val[1]],
-            [mc_val[2], 0, -mc_val[0]],
-            [-mc_val[1], mc_val[0], 0],
+            [Sigma, mc_val.reshape(3, 1)],
+            [mc_val.reshape(1, 3), np.array([[m_val]])],
         ]
     )
-    J = np.block([[I_mat, S], [S.T, m_val * np.eye(3)]])
     eig_min = np.linalg.eigvalsh(J).min()
     return eig_min > 0, eig_min, J
 
@@ -203,7 +215,7 @@ def print_lmi_feasibility(
     """Run ``check_lmi_feasibility`` per joint and print the results.
 
     The solver enforces the *strictly* positive-definite LMI
-    ``J ≽ inertia_eps·I₆`` (``min_eig ≥ inertia_eps > 0``, the same margin the
+    ``J ≽ inertia_eps·I₄`` (``min_eig ≥ inertia_eps > 0``, the same margin the
     solver uses), so an accepted solution must satisfy ``min_eig > 0``.
     A joint is marked ``YES`` if ``min_eig > 0``, else ``NO``.  Non-``YES``
     joints also print their identified ``(m, mc, I)`` and the eigenvalues of
@@ -318,7 +330,7 @@ class SDPSolver:
 
     All joints are identified **simultaneously** in a single SDP/SOCP — there
     is no distal→proximal sequencing and no fixed-joint torque compensation:
-    one SOC per joint over its own torque rows, plus one 6×6 pseudo-inertia
+    one SOC per joint over its own torque rows, plus one 4×4 pseudo-inertia
     LMI per joint.  Instead of per-quality box constraints, a **quality
     weighted ridge (L2-toward-prior)** term is added to the objective —
     good-quality parameters may deviate freely from the URDF prior, poor ones
@@ -351,7 +363,7 @@ class SDPSolver:
         Run **global (all-at-once) weighted-ridge** identification.
 
         All ``dof`` joints are identified simultaneously in a single SDP/SOCP:
-        one SOC per joint over its own torque rows, one 6×6 pseudo-inertia LMI
+        one SOC per joint over its own torque rows, one 4×4 pseudo-inertia LMI
         per joint, and a **quality-weighted ridge** penalty pulling every
         parameter toward its URDF prior (good quality → small penalty, poor
         quality → large penalty).  There is no per-quality box constraint and
@@ -372,7 +384,7 @@ class SDPSolver:
             quality labels — these are too small for a large ridge weight to
             pin exactly, so they are frozen literally).  ``None`` = no freeze.
         inertia_eps : float
-            Strict positive-definiteness margin of the LMI (J ≽ eps·I₆).
+            Strict positive-definiteness margin of the LMI (J ≽ eps·I₄).
         """
         dof = len(joint_order)
         pi_identified = np.zeros(dof * N_PER_JOINT)
@@ -445,7 +457,7 @@ class SDPSolver:
             columns are full because the cross-coupling of a proximal joint
             with its distal subtree members is resolved inside this one
             problem)
-          · LMI  6×6 pseudo-inertia J_d ≽ inertia_eps·I₆  (strict, PD)
+          · LMI  4×4 pseudo-inertia J_d ≽ inertia_eps·I₄  (strict, PD)
           · hard physical non-negativity of armature/damping/friction
             (mass ≥ eps is implied by the LMI)
         plus the weighted-ridge epigraph SOC ``‖√c ⊙ (pi − prior)‖₂ ≤ u`` with
@@ -525,10 +537,10 @@ class SDPSolver:
             #    every joint's parameters are optimised together)
             cstr.append(cp.SOC(lam[idx], Y_d @ pi - tau_d))
 
-            # 2) physical consistency: 6×6 pseudo-inertia LMI strictly
-            #    positive definite: J ≽ eps·I₆  (min_eig ≥ inertia_eps > 0)
+            # 2) physical consistency: 4×4 pseudo-inertia LMI strictly
+            #    positive definite: J ≽ eps·I₄  (min_eig ≥ inertia_eps > 0)
             J = build_pseudo_inertia_LMI(pi_d[0], pi_d[1:4], pi_d[4:10])
-            cstr.append(J - inertia_eps * np.eye(6) >> 0)
+            cstr.append(J - inertia_eps * np.eye(4) >> 0)
 
             # 3) hard physical non-negativity of armature/damping/friction
             for i in (10, 11, 12):
