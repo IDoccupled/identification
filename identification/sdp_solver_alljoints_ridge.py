@@ -31,13 +31,21 @@ Architecture:  solver (pure)  ←  data (prepared externally)
 This design means you can later swap in real sensor torque data
 by only changing the data-preparation step — the solver stays the same.
 
+After solving, ``main`` writes the identified parameters back out as a URDF
+(``write_identified_urdf``): link inertials + joint armature/damping/friction
+replace their prior values in a copy of the prior URDF, saved next to it with
+a ``<name>_<YYMMDD_HHMMSS>.urdf`` timestamp suffix.
+
 Dependencies: cvxpy + MOSEK (or SCS), numpy
 """
 
 from __future__ import annotations
 
 import argparse
+import re
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import cvxpy as cp
@@ -81,15 +89,15 @@ _PARAM_LABELS = [
 RIDGE_QUALITY_WEIGHTS = {
     "good": 1.0,
     "ok": 3.0,
-    "bad": 12.0,
-    "rank_deficient": 100.0,
+    "bad": 10.0,
+    "rank_deficient": 20.0,
     "small": 1e5,
     "null": 1e5,
 }
 # 需要“字面冻结”（pi == prior，完全不动）的质量标签。
 RIDGE_FREEZE_QUALITIES = frozenset({"null", "small"})
 DEFAULT_QUALITY = "ok"  # 无质量标签参数的兜底分档
-RIDGE_LAMBDA = 1.0  # 全局岭强度（乘在每个分档权重上，--ridge-lambda）
+RIDGE_LAMBDA = 3.0  # 全局岭强度（乘在每个分档权重上，--ridge-lambda）
 RIDGE_SCALE_FLOOR = 1e-4  # 相对尺度下限：scale_i = max(|prior_i|, floor)
 
 DEFAULT_URDF_PATH = (
@@ -108,23 +116,29 @@ TRUE_URDF_PATH = (
     / "serial_pm_v2_identify_true.urdf"
 ).resolve()
 
+TRAJ_YAML_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "trajectory_coefficients"
+    / "recovered_exc_arm_1.yaml"
+).resolve()
+
 VAL_YAML_PATH = (
     Path(__file__).resolve().parent.parent
     / "trajectory_coefficients"
-    / "recovered_260817_142958.yaml"
+    / "verify_left_arm.yaml"
 ).resolve()
 
 QUALITY_YAML_PATH = (
     Path(__file__).resolve().parent.parent
     / "trajectory_coefficients"
-    / "pso_unified_260803_180859.yaml"
+    / "excite_left_arm.yaml"
 ).resolve()
 
-# 机体系重力向量（IMU 读得）与腰关节固定偏置 J12_WAIST_YAW (rad)。
-SETUP = {
-    "gravity": np.array([-9.712746, 0.390467, -1.393897]),
-    "waist_yaw_offset": 0.076485634,
-}
+SIM_GRAVITY = np.array([-9.76935626, 0.39412975, -0.98615969])
+SIM_WAIST_YAW_OFFSET = 0.02079
+
+# bag CSV 的 topic 名：IMU 读数用于求重力，关节状态用于求腰关节角度。
+IMU_CSV_TOPIC = "hardware_imu_info"
 
 # 4×4 pseudo-inertia 严格正定余量（J ≽ eps·I₄，min_eig ≥ eps > 0）。
 LMI_EPS = 1e-7
@@ -605,11 +619,16 @@ class SDPSolver:
         quality_map: dict[int, str] | None = None,
         Y_stack: np.ndarray | None = None,
         tau_measured: np.ndarray | None = None,
+        is_sim: bool = False,
     ):
         """Pretty-print identification results joint by joint.
 
         If ``Y_stack`` and ``tau_measured`` are provided, prints a per-joint
         torque RMSE comparison (prior vs identified) instead of Σ‖τ_residual‖₂.
+
+        ``is_sim=True`` (真值已知): the ``Err%`` column is replaced by a
+        before→after comparison ``prior→identified`` 相对真值的误差，例如
+        ``+5.00% -> +3.00%``；``small`` / ``null`` 档参数直接显示 ``N/A``。
         """
         if pi_reference is None:
             pi_reference = result.pi_reference
@@ -626,12 +645,21 @@ class SDPSolver:
         for d in result.joint_order:
             name = joint_names[d] if joint_names else f"joint_{d}"
             print(f"\n--- Joint {d}: {name} ---")
-            hdr = (
-                f"{'Param':<10s} {'Prior':>12s} {'Identified':>12s} "
-                f"{'True':>12s} {'Err%':>8s} {'Δ%':>8s} {'Quality':>10s}"
-                if has_ref
-                else f"{'Param':<10s} {'Prior':>12s} {'Identified':>12s} {'Δ%':>8s} {'Quality':>10s}"
-            )
+            if has_ref and is_sim:
+                hdr = (
+                    f"{'Param':<10s} {'Prior':>12s} {'Identified':>12s} "
+                    f"{'True':>12s} {'Err% (prior→id)':>20s} {'Δ%':>8s} {'Quality':>10s}"
+                )
+            elif has_ref:
+                hdr = (
+                    f"{'Param':<10s} {'Prior':>12s} {'Identified':>12s} "
+                    f"{'True':>12s} {'Err%':>8s} {'Δ%':>8s} {'Quality':>10s}"
+                )
+            else:
+                hdr = (
+                    f"{'Param':<10s} {'Prior':>12s} {'Identified':>12s} "
+                    f"{'Δ%':>8s} {'Quality':>10s}"
+                )
             print(hdr)
             print("-" * len(hdr))
 
@@ -641,7 +669,20 @@ class SDPSolver:
                 g = d * N_PER_JOINT + i
                 q = quality_map.get(g, "?") if quality_map else "?"
                 dp = (ident - pr) / max(abs(pr), 1e-12) * 100  # Δ% from prior
-                if has_ref:
+                if has_ref and is_sim:
+                    ref = pi_ref[d][i]
+                    if q in RIDGE_FREEZE_QUALITIES:
+                        err_str = "N/A"
+                    else:
+                        denom = abs(ref) if abs(ref) > 1e-12 else 1.0
+                        err_prior = (pr - ref) / denom * 100
+                        err_ident = (ident - ref) / denom * 100
+                        err_str = f"{err_prior:+.2f}% -> {err_ident:+.2f}%"
+                    print(
+                        f"{_PARAM_LABELS[i]:<10s} {pr:>12.6g} {ident:>12.6g} "
+                        f"{ref:>12.6g} {err_str:>20s} {dp:>7.2f}% {q:>10s}"
+                    )
+                elif has_ref:
                     ref = pi_ref[d][i]
                     denom = abs(ref) if abs(ref) > 1e-12 else 1.0
                     err = (ident - ref) / denom * 100
@@ -718,7 +759,7 @@ def prepare_data_from_urdf(
     urdf_true_path: str | Path | None = None,
     verbose: bool = True,
     gravity: np.ndarray | None = None,
-    waist_yaw_offset: float = 0.0,
+    waist_yaw_offset: float | None = None,
 ) -> dict:
     """
     Prepare all data needed by ``SDPSolver.solve()``.
@@ -955,6 +996,62 @@ def _load_measurement_csv(
     return t, q, v, tau
 
 
+def read_setup_from_bag(bag_name: str) -> tuple[np.ndarray, float]:
+    """从 bag 读数求平均，得到机体系重力向量与腰关节固定角度。
+
+    * ``gravity = -mean(IMU linear_acceleration.x/y/z)``：加速度计测的是“比力”，
+      机器人静止时读数 ≈ -g（指向支撑力方向），所以重力方向与 IMU 读数**相反**。
+      测量时整体姿态固定不动，因此对全部样本取平均即可。
+    * ``waist_yaw_offset = mean(joint_state position_12)``：测量时 J12_WAIST_YAW
+      固定不动。注意这是**全程均值**——若该 bag 录制期间腰关节真的动过，均值只是
+      近似，请改用 ``--waist-offset`` 手动指定。
+
+    Returns ``(gravity (3,), waist_yaw_offset)``.
+    """
+    import pandas as pd
+
+    from identification.target_limb_regressor import WAIST_Q_INDICES
+
+    bag_dir = _resolve_bag_dir(bag_name)
+
+    # --- 重力：IMU 线加速度取平均后取负 ---
+    imu_path = bag_dir / "csv" / f"{IMU_CSV_TOPIC}.csv"
+    if not imu_path.is_file():
+        raise FileNotFoundError(
+            f"IMU CSV not found: {imu_path} → 用 --gravity 手动指定"
+        )
+    acc = pd.read_csv(
+        imu_path,
+        usecols=[
+            "linear_acceleration.x",
+            "linear_acceleration.y",
+            "linear_acceleration.z",
+        ],
+    ).to_numpy(dtype=float)
+    acc_mean = acc.mean(axis=0)
+    gravity = -acc_mean  # 重力方向与 IMU 读数相反
+
+    # --- 腰关节：joint_state 位置列求平均 ---
+    waist_idx = WAIST_Q_INDICES[0]
+    _, q, _, _ = _load_measurement_csv(bag_name, verbose=False)
+    waist_col = q[:, waist_idx]
+    waist_yaw = float(waist_col.mean())
+
+    print(f"  [setup] bag={bag_dir.name}")
+    print(
+        f"    IMU {imu_path.name}: N={len(acc)}  "
+        f"mean(linear_acc)=[{acc_mean[0]:.6f}, {acc_mean[1]:.6f}, {acc_mean[2]:.6f}]"
+        f"  -> gravity=[{gravity[0]:.6f}, {gravity[1]:.6f}, {gravity[2]:.6f}]"
+        f"  |g|={np.linalg.norm(gravity):.6f} m/s²"
+    )
+    print(
+        f"    joint_state position_{waist_idx}: N={len(waist_col)}  "
+        f"mean={waist_yaw:.9f} rad "
+        f"(min={waist_col.min():.6f}, max={waist_col.max():.6f})"
+    )
+    return gravity, waist_yaw
+
+
 def _latest_recovered_yaml(exclude: str | None = None) -> str:
     """Return the latest ``recovered_*.yaml`` in ``trajectory_coefficients/``.
 
@@ -1071,7 +1168,7 @@ def data_from_measurement(
     sample_rate: float = 100.0,
     verbose: bool = True,
     gravity: np.ndarray | None = None,
-    waist_yaw_offset: float = 0.0,
+    waist_yaw_offset: float | None = None,
     trajectory_yaml: str | None = None,
     twin: str | None = None,
 ) -> dict:
@@ -1570,7 +1667,7 @@ def plot_torque_comparison_measured(
     csv_topic: str = "hardware_joint_state",
     sample_rate: float = 100.0,
     gravity: np.ndarray | None = None,
-    waist_yaw_offset: float = 0.0,
+    waist_yaw_offset: float | None = None,
     grid_sample_rate: float = 500.0,
     offset: float | None = None,
     show_residual: bool = True,
@@ -1711,7 +1808,7 @@ def plot_torque_comparison_simulated_validation(
     sample_rate: float = 100.0,
     time_coeffs: float = 1.0,
     gravity: np.ndarray | None = None,
-    waist_yaw_offset: float = 0.0,
+    waist_yaw_offset: float | None = None,
     offset: float | None = None,
     show_residual: bool = True,
     verbose: bool = True,
@@ -1816,6 +1913,336 @@ def plot_torque_comparison_simulated_validation(
 
 
 # ============================================================================
+# URDF export — write the identified parameters back out as a URDF
+# ============================================================================
+# Per-joint parameter layout (Pinocchio ``toDynamicParameters()`` order):
+#   [m, mc_x, mc_y, mc_z, Ixx, Ixy, Iyy, Ixz, Iyz, Izz, arm, damp, fric]
+# The 6 inertia entries are the inertia **about the joint/link frame origin**
+# (I_O).  A URDF ``<inertial>`` stores mass + CoM + inertia **about the CoM**
+# (I_C), so the parallel-axis theorem is applied in reverse:
+#
+#   I_C = I_O − m·(‖c‖²·I₃ − c·cᵀ) ,   c = mc / m
+#
+# (verified numerically against ``pin.Inertia.FromDynamicParameters`` and
+# against the URDF values read by ``pin.buildModelFromUrdf`` — round-trip
+# exact to ~1e-19).
+#
+# ``pin.Inertia`` for joint ``j`` == the URDF inertial of joint j's *child*
+# link (Pinocchio's URDF convention: the joint frame IS the child link frame),
+# and the URDF inertia component order is
+#   [Ixx, Ixy, Ixz, Iyy, Iyz, Izz]
+# i.e. the same physical tensor, just laid out differently from π.
+URDF_NUM_DECIMALS = 8
+
+
+def _fmt_urdf(v: float) -> str:
+    """URDF-style decimal formatting (fixed decimals, no exponent)."""
+    return f"{float(v):.{URDF_NUM_DECIMALS}f}"
+
+
+def dynamic_params_to_inertial(
+    pi_joint: np.ndarray,
+) -> tuple[float, np.ndarray, np.ndarray]:
+    """One joint's 13 params → ``(mass, com, I_about_com)``.
+
+    ``pi_joint`` = [m, mc_x, mc_y, mc_z, Ixx, Ixy, Iyy, Ixz, Iyz, Izz, arm,
+    damp, fric] (Pinocchio ordering; the 6 inertia entries are about the
+    frame origin).  Returns the mass, the CoM ``c = mc/m`` and the inertia
+    tensor about the CoM — exactly what a URDF ``<inertial>`` needs.
+    """
+    p = np.asarray(pi_joint, dtype=float).reshape(-1)
+    if p.size != N_PER_JOINT:
+        raise ValueError(f"expected {N_PER_JOINT} params, got {p.size}")
+    m = float(p[0])
+    if m <= 0.0:
+        raise ValueError(f"identified mass must be > 0 (got {m:.6g})")
+    mc = p[1:4]
+    # Pinocchio inertia layout: [Ixx, Ixy, Iyy, Ixz, Iyz, Izz] about origin
+    I_O = np.array(
+        [
+            [p[4], p[5], p[7]],
+            [p[5], p[6], p[8]],
+            [p[7], p[8], p[9]],
+        ]
+    )
+    com = mc / m
+    I_C = I_O - m * (float(com @ com) * np.eye(3) - np.outer(com, com))
+    I_C = 0.5 * (I_C + I_C.T)  # guard tiny numeric asymmetry
+    return m, com, I_C
+
+
+def _urdf_child_link_map(root: ET.Element) -> dict[str, str]:
+    """joint name → child link name (URDF has one child link per joint)."""
+    out: dict[str, str] = {}
+    for joint in root.findall("joint"):
+        name = joint.attrib.get("name")
+        child = joint.find("child")
+        if name and child is not None:
+            out[name] = child.attrib.get("link", "")
+    return out
+
+
+def _inertial_block_lines(indent: str, upd: dict) -> list[str]:
+    """Render a fresh ``<inertial>`` block (used for links that had none)."""
+    ine = upd["inertia"]
+    return [
+        f"{indent}<inertial>",
+        f'{indent}    <origin xyz="{upd["xyz"]}" rpy="0 0 0"/>',
+        f'{indent}    <mass value="{upd["mass"]}"/>',
+        (
+            f'{indent}    <inertia ixx="{ine["ixx"]}" ixy="{ine["ixy"]}" '
+            f'ixz="{ine["ixz"]}" iyy="{ine["iyy"]}" iyz="{ine["iyz"]}" '
+            f'izz="{ine["izz"]}"/>'
+        ),
+        f"{indent}</inertial>",
+    ]
+
+
+def _rewrite_urdf_text(
+    text: str,
+    link_updates: dict[str, dict],
+    joint_updates: dict[str, dict],
+) -> str:
+    """Rewrite only the targeted ``<inertial>`` / ``<dynamics>`` values.
+
+    Everything else (header comments, mesh paths, environment links, tag
+    layout, ``/>`` style) is preserved verbatim — this file's layout keeps one
+    element per line.  Target links that have no ``<inertial>`` at all get one
+    inserted at the end of the ``<link>`` block.
+    """
+    lines = text.splitlines()
+    out: list[str] = []
+    cur_link: str | None = None
+    cur_joint: str | None = None
+    in_inertial = False
+    link_had_inertial: set[str] = set()
+
+    for line in lines:
+        stripped = line.strip()
+        indent = line[: len(line) - len(line.lstrip())]
+
+        lm = re.match(r'<link\s+name="([^"]+)"', stripped)
+        if lm:
+            cur_link, cur_joint = lm.group(1), None
+        jm = re.match(r'<joint\s+name="([^"]+)"', stripped)
+        if jm:
+            cur_joint, cur_link = jm.group(1), None
+
+        if stripped.startswith("<inertial"):
+            in_inertial = True
+            link_had_inertial.add(cur_link or "")
+
+        upd = link_updates.get(cur_link) if cur_link else None
+        if in_inertial and upd is not None:
+            if stripped.startswith("<origin"):
+                line = re.sub(r'xyz="[^"]*"', f'xyz="{upd["xyz"]}"', line, count=1)
+            elif stripped.startswith("<mass"):
+                line = re.sub(r'value="[^"]*"', f'value="{upd["mass"]}"', line, count=1)
+            elif stripped.startswith("<inertia"):
+                for key, val in upd["inertia"].items():
+                    line = re.sub(rf'{key}="[^"]*"', f'{key}="{val}"', line, count=1)
+
+        if stripped.startswith("</inertial>"):
+            in_inertial = False
+
+        jupd = joint_updates.get(cur_joint) if cur_joint else None
+        if jupd is not None and stripped.startswith("<dynamics"):
+            line = (
+                f'{indent}<dynamics armature="{jupd["armature"]}" '
+                f'damping="{jupd["damping"]}" friction="{jupd["friction"]}"/>'
+            )
+
+        if stripped == "</link>":
+            # Link without <inertial> (e.g. a bare frame link) → add one.
+            lupd = link_updates.get(cur_link) if cur_link else None
+            if lupd is not None and cur_link not in link_had_inertial:
+                out.extend(_inertial_block_lines(indent + "    ", lupd))
+            cur_link = None
+        elif stripped == "</joint>":
+            cur_joint = None
+
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def _provenance_comment(prov: dict) -> list[str]:
+    """XML comment block recording where the identified URDF came from."""
+    body = [f"  · {k}: {v}" for k, v in prov.items() if v not in (None, "")]
+    if not body:
+        return []
+    header = "    identified model — generated by sdp_solver_alljoints_ridge.py"
+    return ["    <!--", header, *body, "    -->"]
+
+
+def _unique_path(path: Path) -> Path:
+    """Append ``_1``, ``_2``, … until the path does not exist (uniqueness)."""
+    if not path.exists():
+        return path
+    for k in range(1, 1000):
+        cand = path.with_name(f"{path.stem}_{k}{path.suffix}")
+        if not cand.exists():
+            return cand
+    raise RuntimeError(f"cannot find a free filename for {path}")
+
+
+def write_identified_urdf(
+    pi_full: np.ndarray,
+    joint_names: list[str],
+    prior_urdf: str | Path,
+    out_path: str | Path | None = None,
+    out_dir: str | Path | None = None,
+    provenance: dict | None = None,
+    timestamp: str | None = None,
+    verbose: bool = True,
+) -> Path:
+    """Write the identified parameters into a copy of the prior URDF.
+
+    The identified link inertials (mass / CoM / inertia-about-CoM) and joint
+    dynamics (armature / damping / friction) replace their prior values; every
+    other element of the prior URDF is copied verbatim (mesh paths, limits,
+    the simulation environment, comments).
+
+    Parameters
+    ----------
+    pi_full : (dof*13,) ndarray
+        Identified parameters, joint-major (same layout as ``data['pi_prior']``
+        / ``IdentificationResult.pi_identified``).
+    joint_names : list[str]
+        URDF joint names, index-aligned with the joints in ``pi_full``
+        (``data['joint_names']``).
+    prior_urdf : str or Path
+        The prior/initial URDF the identification started from.  Its
+        directory is the default output directory ("保存回先验 URDF 路径").
+    out_path : str or Path or None
+        Explicit output file.  ``None`` (default) → ``<prior_stem>_<timestamp>
+        .urdf`` inside ``out_dir``.
+    out_dir : str or Path or None
+        Output directory; ``None`` → the prior URDF's directory.
+    provenance : dict or None
+        Optional key/value pairs written as a comment block right after the
+        ``<robot>`` tag (mode, trajectory yaml, ridge lambda, …).
+    timestamp : str or None
+        Timestamp suffix (``YYMMDD_HHMMSS``); ``None`` → now.
+
+    Returns
+    -------
+    Path
+        The written file.
+    """
+    prior = Path(prior_urdf).resolve()
+    if not prior.is_file():
+        raise FileNotFoundError(f"prior URDF not found: {prior}")
+    text = prior.read_text(encoding="utf-8")
+    root = ET.fromstring(text)
+    child_of = _urdf_child_link_map(root)
+
+    pi_list = split_joint_params(np.asarray(pi_full, dtype=float))
+    if len(joint_names) != len(pi_list):
+        raise ValueError(
+            f"joint_names has {len(joint_names)} entries but pi_full encodes "
+            f"{len(pi_list)} joints"
+        )
+
+    link_updates: dict[str, dict] = {}
+    joint_updates: dict[str, dict] = {}
+    skipped: list[str] = []
+    infeasible: list[str] = []
+    for jname, pi_j in zip(joint_names, pi_list):
+        ok, eig_min, _ = check_lmi_feasibility(pi_j)
+        if not ok:
+            infeasible.append(f"{jname} (min_eig={eig_min:.3g})")
+        link = child_of.get(jname)
+        if not link:
+            skipped.append(jname)
+            continue
+        m, com, I_C = dynamic_params_to_inertial(pi_j)
+        link_updates[link] = {
+            "mass": _fmt_urdf(m),
+            "xyz": " ".join(_fmt_urdf(x) for x in com),
+            "inertia": {
+                key: _fmt_urdf(val)
+                for key, val in zip(
+                    ("ixx", "ixy", "ixz", "iyy", "iyz", "izz"),
+                    (I_C[0, 0], I_C[0, 1], I_C[0, 2], I_C[1, 1], I_C[1, 2], I_C[2, 2]),
+                )
+            },
+        }
+        joint_updates[jname] = {
+            "armature": _fmt_urdf(pi_j[10]),
+            "damping": _fmt_urdf(pi_j[11]),
+            "friction": _fmt_urdf(pi_j[12]),
+        }
+
+    new_text = _rewrite_urdf_text(text, link_updates, joint_updates)
+
+    if provenance:
+        lines = new_text.splitlines()
+        insert_at = next(
+            (k + 1 for k, ln in enumerate(lines) if re.match(r"<robot\b", ln.strip())),
+            0,
+        )
+        lines[insert_at:insert_at] = _provenance_comment(provenance)
+        new_text = "\n".join(lines) + "\n"
+
+    # ---- output path: prior URDF directory + timestamped name ----
+    if out_path is not None:
+        dest = Path(out_path)
+    else:
+        ts = timestamp or datetime.now().strftime("%y%m%d_%H%M%S")
+        directory = Path(out_dir) if out_dir is not None else prior.parent
+        directory.mkdir(parents=True, exist_ok=True)
+        dest = directory / f"{prior.stem}_{ts}{prior.suffix or '.urdf'}"
+        dest = _unique_path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(new_text, encoding="utf-8")
+
+    # ---- self-check: re-parse and compare against the identified values ----
+    max_err = 0.0
+    if not skipped:
+        chk = ET.parse(str(dest)).getroot()
+        chk_links = {elem.attrib["name"]: elem for elem in chk.findall("link")}
+        for link, upd in link_updates.items():
+            iel = chk_links[link].find("inertial")
+            max_err = max(
+                max_err,
+                abs(float(iel.find("mass").attrib["value"]) - float(upd["mass"])),
+            )
+            max_err = max(
+                max_err,
+                max(
+                    abs(float(x) - float(y))
+                    for x, y in zip(
+                        iel.find("origin").attrib["xyz"].split(), upd["xyz"].split()
+                    )
+                ),
+            )
+            ine = iel.find("inertia")
+            max_err = max(
+                max_err,
+                max(
+                    abs(float(ine.attrib[k]) - float(v))
+                    for k, v in upd["inertia"].items()
+                ),
+            )
+    if verbose:
+        print(f"  [urdf] wrote {dest}")
+        print(
+            f"  [urdf] updated {len(link_updates)} link inertials, "
+            f"{len(joint_updates)} joint dynamics "
+            f"(max format round-trip error {max_err:.2e})"
+        )
+        if skipped:
+            print(f"  [urdf] WARNING: joints not found in URDF, skipped: {skipped}")
+        if infeasible:
+            print(
+                "  [urdf] WARNING: non physically-consistent inertia (the LMI in "
+                "the solver should have prevented this; MuJoCo may reject the "
+                "file): " + ", ".join(infeasible)
+            )
+    return dest
+
+
+# ============================================================================
 # main / demo — argparse CLI
 # ============================================================================
 
@@ -1849,7 +2276,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--yaml",
         "-y",
-        default=None,
+        default=TRAJ_YAML_PATH,
         metavar="NAME",
         help="trajectory_coefficients/ 下的轨迹系数 YAML（bag/group 从该 YAML 读）；"
         "默认：meas=最新 recovered_*.yaml，sim=最新 pso_unified_*.yaml",
@@ -1897,15 +2324,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--gravity",
         type=float,
         nargs=3,
-        default=SETUP["gravity"].tolist(),
+        default=None,
         metavar=("X", "Y", "Z"),
-        help="机体系重力向量（IMU 读得）",
+        help="机体系重力向量（[meas] 默认取 bag IMU 读数的负均值；[sim] 默认按"
+        " MuJoCo 躺姿模型取 (-9.81, 0, 0)）",
     )
     ap.add_argument(
         "--waist-offset",
         type=float,
-        default=SETUP["waist_yaw_offset"],
-        help="腰关节 J12_WAIST_YAW 固定角度 (rad)",
+        default=None,
+        help="腰关节 J12_WAIST_YAW 固定角度 (rad)（[meas] 默认取 bag "
+        "joint_state position_12 的均值；[sim] 默认按躺姿模型取 0.0）",
     )
 
     # ---- 验证 / 绘图 ----
@@ -1940,6 +2369,20 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="跳过力矩对比图",
     )
+
+    # ---- 结果导出 ----
+    ap.add_argument(
+        "--no-save-urdf",
+        action="store_true",
+        help="不把辨识结果写成 URDF（默认会写）",
+    )
+    ap.add_argument(
+        "--urdf-out-dir",
+        default=None,
+        metavar="DIR",
+        help="辨识结果 URDF 的输出目录；默认为 --urdf 所在目录（即先验 URDF 路径），"
+        "文件名 = <先验文件名去后缀>_<YYMMDD_HHMMSS>.urdf（重名自动加 _1/_2…）",
+    )
     return ap
 
 
@@ -1949,6 +2392,9 @@ def main(argv: list[str] | None = None) -> None:
     from identification.fourier_trajectory import FourierTrajectory
 
     is_sim = args.sim
+
+    # 结果 URDF 的时间戳（整次运行共用一个，保证同步；重名时再追加 _1/_2…）。
+    urdf_ts = datetime.now().strftime("%y%m%d_%H%M%S")
 
     # ---- 解析默认 YAML（bag / group 跟着它走） ----
     if is_sim:
@@ -1976,7 +2422,37 @@ def main(argv: list[str] | None = None) -> None:
                 " → 全部参数用默认分档权重"
             )
 
-    gravity = np.asarray(args.gravity, dtype=float)
+    # ---- 重力 / 腰关节偏置 ----
+    #   meas：辨识 bag 由 traj_yaml 的 _meta.source_bag 决定，直接读它的读数求平均
+    #         （gravity = -mean(IMU 线加速度)，waist = mean(position_12)）。
+    #   sim ：pso_unified 轨迹是仿真激励、没有 source_bag，读不到 bag → 用躺姿
+    #         默认 SIM_GRAVITY（MuJoCo 里 LINK_BASE 被 -90° 绕 Y 旋转躺下，世界
+    #         重力 (0,0,-9.81) → 机体系 ≈ (-9.81, 0, 0)）与 SIM_WAIST_YAW_OFFSET
+    #         （躺姿模型 J12 停在零位 → 0.0）。
+    #   --gravity / --waist-offset 显式给定时覆盖（两者可单独覆盖）。
+    gravity: np.ndarray | None = None
+    waist_yaw: float | None = None
+    setup_src = (
+        f"sim 躺姿默认 (gravity={SIM_GRAVITY.tolist()}, "
+        f"waist={SIM_WAIST_YAW_OFFSET:.4f} rad)"
+    )
+    if is_sim:
+        gravity = SIM_GRAVITY.copy()
+        waist_yaw = SIM_WAIST_YAW_OFFSET
+    else:
+        gravity, waist_yaw = read_setup_from_bag(_yaml_source_bag(traj_yaml))
+        setup_src = "bag average"
+    overrides = []
+    if args.gravity is not None:
+        gravity = np.asarray(args.gravity, dtype=float)
+        overrides.append("--gravity")
+        print(f"  [setup] --gravity 覆盖: {np.round(gravity, 6).tolist()}")
+    if args.waist_offset is not None:
+        waist_yaw = float(args.waist_offset)
+        overrides.append("--waist-offset")
+        print(f"  [setup] --waist-offset 覆盖: {waist_yaw:.9f} rad")
+    if overrides:
+        setup_src += " + " + " ".join(overrides)
 
     # ---- 配置回显 ----
     print("\n" + "=" * 100)
@@ -1996,7 +2472,34 @@ def main(argv: list[str] | None = None) -> None:
     print(f"group           : (auto: 从 {traj_yaml} _meta.group)")
     print(f"sample_rate     : {args.sample_rate}")
     print(f"ridge_lambda    : {args.ridge_lambda}")
-    print(f"twin-id         : {args.twin_id or '(全程)'}")
+    print(f"twin-id         : {args.twin_id or '(Global)'}")
+    if args.no_save_urdf:
+        save_urdf_desc = "(disabled: --no-save-urdf)"
+    else:
+        out_dir = (
+            Path(args.urdf_out_dir)
+            if args.urdf_out_dir
+            else Path(args.urdf).resolve().parent
+        )
+        save_urdf_desc = f"{out_dir}/{Path(args.urdf).stem}_{urdf_ts}.urdf"
+    print(f"save urdf       : {save_urdf_desc}")
+    print(
+        f"gravity         : "
+        + (
+            f"{np.round(gravity, 6).tolist()}  |g|={np.linalg.norm(gravity):.6f} m/s²"
+            if gravity is not None
+            else "(未指定 → TargetLimbRegressor 默认 (0, 0, -9.81) 正立)"
+        )
+        + f"   [{setup_src}]"
+    )
+    print(
+        f"waist_yaw_offset: "
+        + (
+            f"{waist_yaw:.9f} rad"
+            if waist_yaw is not None
+            else "(未指定 → 用默认 0.0 rad)"
+        )
+    )
 
     # ---- 交叉验证轨迹 YAML（--val-yaml，手动指定）----
     #   meas：在另一条轨迹/bag 上做 held-out 验证（不给时默认 VAL_YAML_PATH 常量）。
@@ -2021,7 +2524,7 @@ def main(argv: list[str] | None = None) -> None:
             time_coeffs=args.time_coeffs,  # 傅立叶轨迹回放倍率
             urdf_true_path=args.urdf_true,
             gravity=gravity,
-            waist_yaw_offset=args.waist_offset,
+            waist_yaw_offset=waist_yaw,
             twin=args.twin_id,  # 辨识用时间窗（sim/meas 通用，None=全程）
         )
     else:
@@ -2032,7 +2535,7 @@ def main(argv: list[str] | None = None) -> None:
             csv_topic=args.csv_topic,  # 实测力矩
             sample_rate=args.sample_rate,  # CSV(~500Hz) 抽取到 ~sample_rate Hz
             gravity=gravity,
-            waist_yaw_offset=args.waist_offset,
+            waist_yaw_offset=waist_yaw,
             trajectory_yaml=traj_yaml,
             twin=args.twin_id,  # 辨识用时间窗（选一个质量好的周期，None=全程）
         )
@@ -2092,12 +2595,46 @@ def main(argv: list[str] | None = None) -> None:
         quality_map=quality_map,
         Y_stack=data["Y_stack"],
         tau_measured=data["tau_measured"],
+        is_sim=is_sim,
     )
 
     # 4b. 对辨识后的惯性参数做物理一致性（pseudo-inertia LMI）检查并打印。
+    print("\n" + "=" * 100)
+    print("CROSS-VALIDATION RESULTS".center(100))
+    print("=" * 100)
     print_lmi_feasibility(
         result.pi_identified, data["joint_names"], result.joint_order, "identified"
     )
+
+    # 4c. 导出辨识结果 URDF —— 把辨识出的 link 惯性（质量/质心/绕质心惯量）与关节
+    #     dynamics（armature/damping/friction）写回先验 URDF 的一份拷贝，其余部分
+    #     （mesh、限位、环境 link、注释）原样保留。文件名加时间戳保证唯一：
+    #       <先验文件名去后缀>_<YYMMDD_HHMMSS>.urdf
+    #     默认落在先验 URDF 所在目录（可用 --urdf-out-dir 覆盖，--no-save-urdf 跳过）。
+    if not args.no_save_urdf:
+        print("\n" + "=" * 100)
+        print("EXPORT IDENTIFIED URDF".center(100))
+        print("=" * 100)
+        write_identified_urdf(
+            result.pi_identified,
+            joint_names=data["joint_names"],
+            prior_urdf=args.urdf,
+            out_dir=args.urdf_out_dir,
+            timestamp=urdf_ts,
+            provenance={
+                "source": f"{Path(args.urdf).name} (prior, from SDP identification)",
+                "mode": "sim" if is_sim else "meas",
+                "trajectory_yaml": traj_yaml,
+                "quality_yaml": quality_yaml or "(none)",
+                "ridge_lambda": args.ridge_lambda,
+                "dof": f"{data['dof']} ({', '.join(data['joint_names'])})",
+                "gravity": np.round(gravity, 6).tolist()
+                if gravity is not None
+                else "(default)",
+                "waist_yaw_offset": waist_yaw,
+                "generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
 
     # 5. Cross-validation / comparison plot
     #    sim：真值 vs prior vs identified 对比（训练轨迹上）。
@@ -2115,6 +2652,17 @@ def main(argv: list[str] | None = None) -> None:
                 twin=args.twin,
             )
         else:
+            # 验证 bag 的机体系重力/腰关节角度按**它自己**的 bag 读数求平均
+            # （不同录制场次的姿态不同，不能沿用辨识 bag 的值）；
+            # --gravity / --waist-offset 显式覆盖时沿用用户给的值。
+            val_gravity, val_waist = gravity, waist_yaw
+            if args.gravity is None or args.waist_offset is None:
+                print("  [setup] validation bag (from val_yaml _meta.source_bag):")
+                g_val, w_val = read_setup_from_bag(_yaml_source_bag(val_yaml))
+                if args.gravity is None:
+                    val_gravity = g_val
+                if args.waist_offset is None:
+                    val_waist = w_val
             plot_torque_comparison_measured(
                 result,
                 urdf_path=args.urdf,  # 先验模型（regressor）
@@ -2124,8 +2672,8 @@ def main(argv: list[str] | None = None) -> None:
                 limb_group=None,
                 csv_topic=args.csv_topic,
                 sample_rate=args.sample_rate,
-                gravity=gravity,
-                waist_yaw_offset=args.waist_offset,
+                gravity=val_gravity,
+                waist_yaw_offset=val_waist,
                 twin=args.twin,  # 时间窗缩放，如 "0:13.4"
             )
 
@@ -2147,7 +2695,7 @@ def main(argv: list[str] | None = None) -> None:
             sample_rate=args.sample_rate,
             time_coeffs=args.time_coeffs,
             gravity=gravity,
-            waist_yaw_offset=args.waist_offset,
+            waist_yaw_offset=waist_yaw,
             twin=args.twin,  # 时间窗缩放，如 "0:13.4"
             plot=not args.no_plot,
         )
