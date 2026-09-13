@@ -24,9 +24,13 @@ compare_torque.py — 把恢复出的实际运动轨迹（傅里叶系数）作�
   注意：不要用 hardware_joint_command_feedback——它的 torque 是控制器 PD/指令
   力矩（左臂 stiffness=100、damping=1），数值偏大且 ~35% 丢包为 0，不是实际
   力矩；位置/速度也只是指令反馈而非实测状态。
-* 测量时机器人并非站立：机体系下的重力向量为 [x,y,z]=[-9.712746, 0.390467, -1.393897]，
-  腰关节 J12 角度 = 0.076485634 rad（固定，不参与辨识），这两个参数传给
-  TargetLimbRegressor(gravity=..., waist_yaw_offset=...)。
+* 测量时机器人并非站立：机体系重力向量与腰关节 J12 角度不再写死，默认从 bag
+  读数求平均（见 read_setup_from_bag）：
+      gravity          = -mean(IMU linear_acceleration.x/y/z)
+                         （加速度计测的是比力，静止时读数 ≈ -g，故方向相反）
+      waist_yaw_offset = mean(joint_state position_12)（测量时 J12 固定不动）
+  这两个值传给 TargetLimbRegressor(gravity=..., waist_yaw_offset=...)；
+  --gravity / --waist-offset 可手动覆盖。
 * 理论力矩 = 惯性项(pin.rnea) + armature·a + damping·v + friction·tanh(v·1e2)，
   与 regressor 内部 tau_aug 的口径一致（见 plot_unified_trajectory.py）。
 
@@ -49,6 +53,7 @@ import yaml
 from identification.fourier_trajectory import FourierTrajectory, TRAJ_PERIOD
 from identification.target_limb_regressor import (
     GROUP_JOINT_NAMES,
+    WAIST_Q_INDICES,
     TargetLimbRegressor,
     VALID_LIMB_GROUPS,
 )
@@ -58,15 +63,89 @@ BAG_DATA = PKG_DIR / "bag_data"
 COEFFS_DIR = PKG_DIR / "trajectory_coefficients"
 
 STATE_KEY = "hardware_joint_state"
-DEFAULT_BAG = "13_55_31"
-DEFAULT_YAML = "recovered_260813_131930.yaml"
+IMU_KEY = "hardware_imu_info"
+# 腰关节在 CSV/模型里的下标（J12_WAIST_YAW），与 target_limb_regressor 保持一致。
+WAIST_JOINT = WAIST_Q_INDICES[0]
+DEFAULT_BAG = "exc_arm_0.5"
+DEFAULT_YAML = "recovered_exc_arm_0.5.yaml"
 
-# 测量时机器人并非站立：机体系下的重力向量（长度≈9.82 m/s²）。
-GRAVITY = np.array([-9.712746, 0.390467, -1.393897])
-# 腰关节 J12 角度（rad），测量时固定在此值。
-WAIST_YAW_OFFSET = 0.076485634
+# 机体系重力向量与腰关节固定角度不再写死，默认从 bag 读数求平均得到
+# （见 read_setup_from_bag）；--gravity / --waist-offset 可覆盖。
+# 历史实测值（bag 13_55_31，供对照）：
+#   gravity = [-9.712746, 0.390467, -1.393897]，waist_yaw = 0.076485634 rad
 
 ZERO_TOL = 1e-9  # 兜底：低于该绝对值视为无效样本，画图时 mask
+
+
+def _resolve_bag_dir(bag_name: str) -> Path:
+    """BAG_DATA 下的 bag 目录；支持短名（如 '13_55_31'）模糊匹配。"""
+    bag_dir = BAG_DATA / bag_name
+    if (bag_dir / "csv").is_dir():
+        return bag_dir
+    matches = sorted(BAG_DATA.glob(f"*{bag_name}*"))
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise FileNotFoundError(
+            f"短名 '{bag_name}' 匹配到多个 bag: {[m.name for m in matches]}"
+        )
+    raise FileNotFoundError(f"bag 不存在: {bag_name}（{BAG_DATA} 下未找到）")
+
+
+def _load_csv(bag_name: str, key: str) -> tuple[Path, pd.DataFrame]:
+    """读取 <bag>/csv/<key>.csv，返回 (csv 路径, DataFrame)。"""
+    csv_path = _resolve_bag_dir(bag_name) / "csv" / f"{key}.csv"
+    if not csv_path.is_file():
+        raise FileNotFoundError(f"CSV not found: {csv_path}")
+    return csv_path, pd.read_csv(csv_path)
+
+
+def read_setup_from_bag(
+    bag_name: str, state_q: np.ndarray | None = None
+) -> tuple[np.ndarray, float]:
+    """从 bag 读数求平均，得到机体系重力向量与腰关节固定角度。
+
+    * 重力：机器人测量时并非站立，但整体姿态固定不动。加速度计测的是“比力”，
+      静止时读数 ≈ -g（指向支撑力方向），所以重力方向与 IMU 读数**相反**：
+          gravity = -mean(linear_acceleration.x/y/z)   （对所有样本取平均）
+    * 腰关节：测量时 J12_WAIST_YAW 固定不动，取其位置反馈的平均值：
+          waist_yaw_offset = mean(position_12)
+
+    参数:
+        state_q: 已读好的 (N, 24) 关节位置数组（load_bag 的返回值）可直接传入，
+                 避免重复读 CSV；为 None 时自己去读 hardware_joint_state.csv。
+    """
+    imu_path, imu = _load_csv(bag_name, IMU_KEY)
+    acc = imu[
+        ["linear_acceleration.x", "linear_acceleration.y", "linear_acceleration.z"]
+    ].to_numpy(dtype=float)
+    acc_mean = acc.mean(axis=0)
+    gravity = -acc_mean  # 重力方向与 IMU 读数相反
+
+    if state_q is None:
+        state_path, state = _load_csv(bag_name, STATE_KEY)
+        col = f"position_{WAIST_JOINT}"
+        if col not in state.columns:
+            raise KeyError(f"{state_path} 里没有列 {col}，无法读取腰关节角度")
+        waist_col = state[col].to_numpy(dtype=float)
+    else:
+        state_path = _resolve_bag_dir(bag_name) / "csv" / f"{STATE_KEY}.csv"
+        waist_col = np.asarray(state_q)[:, WAIST_JOINT]
+    waist_yaw = float(waist_col.mean())
+
+    print(f"  重力来源: {imu_path}  (N={len(acc)})")
+    print(
+        f"    mean(linear_acc) = [{acc_mean[0]:.6f}, {acc_mean[1]:.6f}, "
+        f"{acc_mean[2]:.6f}]  ->  取负得 gravity = "
+        f"[{gravity[0]:.6f}, {gravity[1]:.6f}, {gravity[2]:.6f}]  "
+        f"|g|={np.linalg.norm(gravity):.6f} m/s²"
+    )
+    print(f"  腰关节来源: {state_path}  (N={len(waist_col)})")
+    print(
+        f"    mean(position_{WAIST_JOINT}) = {waist_yaw:.9f} rad"
+        f"  (min={waist_col.min():.6f}, max={waist_col.max():.6f})"
+    )
+    return gravity, waist_yaw
 
 
 def load_bag(bag_name: str):
@@ -76,19 +155,7 @@ def load_bag(bag_name: str):
         t, q, v, tau : 时间轴 / 位置 / 速度 / 力矩（joint_state，t 归零，
                        形状均为 (N, 24)）
     """
-    bag_dir = BAG_DATA / bag_name
-    if not (bag_dir / "csv").is_dir():
-        matches = sorted(BAG_DATA.glob(f"*{bag_name}*"))
-        if len(matches) == 1:
-            bag_dir = matches[0]
-        elif len(matches) > 1:
-            raise FileNotFoundError(
-                f"短名 '{bag_name}' 匹配到多个 bag: {[m.name for m in matches]}"
-            )
-    csv_path = bag_dir / "csv" / f"{STATE_KEY}.csv"
-    if not csv_path.is_file():
-        raise FileNotFoundError(f"CSV not found: {csv_path}")
-    df = pd.read_csv(csv_path)
+    csv_path, df = _load_csv(bag_name, STATE_KEY)
     n_joints = sum(c.startswith("position_") for c in df.columns)
     t = df["t_s"].to_numpy(dtype=float)
     q = df[[f"position_{i}" for i in range(n_joints)]].to_numpy(dtype=float)
@@ -191,8 +258,14 @@ def plot_joint_compare(
     joint_number,
     joint_name,
     out_png=None,
+    gravity=None,
+    waist_yaw=None,
 ):
-    """单个关节一张图：3 个子图 —— 力矩(实际 vs 还原)、力矩残差、残差频谱。"""
+    """单个关节一张图：3 个子图 —— 力矩(实际 vs 还原)、力矩残差、残差频谱。
+
+    gravity / waist_yaw 只用于标题标注（为 None 时省略），由 main 传入实际
+    使用的值（默认来自 bag 读数平均，可用 CLI 覆盖）。
+    """
     import matplotlib.pyplot as plt
 
     C_ACT = "C0"  # 实际
@@ -257,9 +330,15 @@ def plot_joint_compare(
         title="Torque Residual Spectrum (FFT)",
     )
 
+    setup_txt = ""
+    if gravity is not None:
+        setup_txt = (
+            f"\ngravity={np.round(np.asarray(gravity, dtype=float), 6).tolist()}"
+        )
+        if waist_yaw is not None:
+            setup_txt += f", waist={float(waist_yaw):.6f} rad"
     fig.suptitle(
-        f"{joint_name} (joint {joint_number}) — actual vs recovered torque\n"
-        f"gravity={GRAVITY.tolist()}, waist={WAIST_YAW_OFFSET:.4f} rad",
+        f"{joint_name} (joint {joint_number}) — actual vs recovered torque" + setup_txt,
         fontsize=13,
     )
     fig.tight_layout(rect=[0, 0, 1, 0.95])
@@ -310,6 +389,7 @@ def main():
     )
     ap.add_argument(
         "--yaml",
+        "-y",
         default=None,
         help="trajectory_coefficients 下的轨迹系数 YAML（默认取最新的 recovered_*.yaml）",
     )
@@ -333,15 +413,15 @@ def main():
         "--gravity",
         type=float,
         nargs=3,
-        default=GRAVITY.tolist(),
+        default=None,
         metavar=("X", "Y", "Z"),
-        help="机体系重力向量",
+        help="机体系重力向量（默认: 从 bag 的 IMU 读数取负后求平均）",
     )
     ap.add_argument(
         "--waist-offset",
         type=float,
-        default=WAIST_YAW_OFFSET,
-        help="腰关节 J12 角度 rad",
+        default=None,
+        help="腰关节 J12 角度 rad（默认: 从 bag 的 position_12 求平均）",
     )
     ap.add_argument(
         "-w",
@@ -374,7 +454,23 @@ def main():
     bag_name = args.bag or (meta_bag or DEFAULT_BAG)
 
     # 1) 实测数据（只用时间轴与力矩；q/v 还原对比由 plot_residual.py 负责）
-    t, _, _, tau_meas = load_bag(bag_name)
+    t, q, _, tau_meas = load_bag(bag_name)
+
+    # 1b) 机体系重力 + 腰关节固定角度：默认直接从 bag 读数求平均
+    #     （重力 = -mean(IMU 线加速度)，腰 = mean(position_12)），
+    #     --gravity / --waist-offset 显式给定时覆盖。
+    print("\n[重力 / 腰关节]")
+    gravity_bag, waist_bag = read_setup_from_bag(bag_name, state_q=q)
+    gravity = (
+        np.asarray(args.gravity, dtype=float)
+        if args.gravity is not None
+        else gravity_bag
+    )
+    waist_yaw = float(args.waist_offset) if args.waist_offset is not None else waist_bag
+    if args.gravity is not None:
+        print(f"  -> 使用 --gravity 覆盖: {np.round(gravity, 6).tolist()}")
+    if args.waist_offset is not None:
+        print(f"  -> 使用 --waist-offset 覆盖: {waist_yaw:.9f} rad")
 
     # 2) time_coeffs 只从 YAML _meta 读取（fit 时写入），可 --time-coeffs 覆盖；不再读 bag summary.json
     time_coeffs = args.time_coeffs
@@ -405,11 +501,11 @@ def main():
         f"f0={f0:.2f} Hz  周期={period:.4f}s  采样点={q_th.shape[1]}"
     )
 
-    # 4) TargetLimbRegressor：非站立重力 + 固定腰关节
+    # 4) TargetLimbRegressor：bag 实测重力 + 固定腰关节
     reg = TargetLimbRegressor(
         group_to_identify=group,
-        gravity=np.asarray(args.gravity, dtype=float),
-        waist_yaw_offset=float(args.waist_offset),
+        gravity=gravity,
+        waist_yaw_offset=waist_yaw,
         print_info=False,
     )
     print(
@@ -460,6 +556,8 @@ def main():
                 joint_number=j,
                 joint_name=name,
                 out_png=out_path,
+                gravity=gravity,
+                waist_yaw=waist_yaw,
             )
         )
     if figs:
