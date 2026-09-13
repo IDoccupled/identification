@@ -10,9 +10,9 @@ plot_residual.py — 直接从已保存的轨迹系数 YAML 画出与 fourier_fi
 
 用法（需先 source install/setup.bash）：
     python -m identification.plot_residual
-    python -m identification.plot_residual --yaml recovered_260813_173014.yaml
-    python -m identification.plot_residual --yaml X.yaml --bag 13_57_28
-    python -m identification.plot_residual --yaml X.yaml --time-coeffs 0.75 -w 0:15 --save /tmp/resid.png
+    python -m identification.plot_residual -y recovered_260813_173014.yaml
+    python -m identification.plot_residual -y X.yaml --bag 13_57_28
+    python -m identification.plot_residual -y X.yaml --time-coeffs 0.75 -w 0:15 --save /tmp/resid.png
         # --save 时每关节一张 -> /tmp/resid_J13.png ... J17.png
 """
 
@@ -250,6 +250,7 @@ def main():
     )
     ap.add_argument(
         "--yaml",
+        "-y",
         default=None,
         help="trajectory_coefficients 下的 YAML（默认最新 recovered_*.yaml）",
     )

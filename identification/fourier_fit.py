@@ -340,7 +340,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="用位置最小二乘拟合傅里叶轨迹，并把恢复出的系数保存到 trajectory_coefficients/"
     )
-    ap.add_argument("--bag", default=DEFAULT_BAG, help="bag_data 下的 bag 名")
+    ap.add_argument("--bag", "-b", default=DEFAULT_BAG, help="bag_data 下的 bag 名")
     ap.add_argument(
         "--joints", nargs="+", type=int, default=DEFAULT_JOINTS, help="要分析的关节号"
     )
@@ -405,7 +405,7 @@ def main():
         return
 
     # 保存恢复出的轨迹系数（格式与 fourier_trajectory.py 一致）
-    out_name = args.out or f"recovered_{datetime.datetime.now():%y%m%d_%H%M%S}.yaml"
+    out_name = args.out or f"recovered_{args.bag}.yaml"
     out_path = save_coeffs_yaml(
         results, out_name, bag=args.bag, time_coeffs=time_coeffs
     )
