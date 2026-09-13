@@ -1,10 +1,16 @@
+#!/usr/bin/env python3
+"""读 bag_data/<bag>/csv/hardware_imu_info.csv，画 IMU 三轴线加速度并打印均值。
+
+用法：
+    python -m identification.bag_imu_plot
+    python -m identification.bag_imu_plot --bag rosbag2_1970_01_01-13_57_28
+"""
+
+import argparse
 import os
+
 import matplotlib.pyplot as plt
 import pandas as pd
-
-# DEFAULT_BAG = "rosbag2_1970_01_01-13_51_06"
-DEFAULT_BAG = "rosbag2_1970_01_01-13_55_31"
-DEFAULT_JOINTS = [13, 14, 15, 16, 17]
 
 
 def read_csvs(bag_dir: str) -> pd.DataFrame:
@@ -24,8 +30,18 @@ def columns_select(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(cols)
 
 
-def main():
-    bag_dir = os.path.join(os.path.dirname(__file__), "..", "bag_data", DEFAULT_BAG)
+def main() -> None:
+    parser = argparse.ArgumentParser(description="读 IMU CSV 并画三轴线加速度")
+    parser.add_argument(
+        "--bag",
+        "-b",
+        help="bag_data/ 下的 bag 目录名（默认: %(default)s）",
+    )
+    args = parser.parse_args()
+
+    # bag 目录：脚本位于 identification/ 下，数据在 ../bag_data/<bag>/
+    here = os.path.dirname(os.path.abspath(__file__))
+    bag_dir = os.path.join(os.path.dirname(here), "bag_data", args.bag)
     imu = read_csvs(bag_dir)
     imu_selected = columns_select(imu)
     # calculate mean for each, x,y,z
