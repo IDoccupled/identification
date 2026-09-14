@@ -78,23 +78,23 @@ _PARAM_LABELS = [
 # --- Weighted ridge (quality → L2 penalty toward the URDF prior) ---
 # 相对偏离 r_i = (pi_i − prior_i)/scale_i 上的二次惩罚权重（按质量分档）：
 #   质量越好（good/ok）→ 权重越小 → 允许参数偏离 URDF prior 更多；
-#   质量越差（bad / rank_deficient / small / null）→ 权重越大 → 越强地把参数
-#   拉回 prior。全局强度 RIDGE_LAMBDA 乘在每个分档权重上。
+#   质量越差（bad / rank_deficient）→ 权重越大 → 越强地把参数拉回 prior。
+#   全局强度 RIDGE_LAMBDA 乘在每个分档权重上。
 #
-#   null / small 的“字面冻结”：这类参数量级太小（绝对偏离 ~1e-6..1e-5），仅靠
-#   增大权重并不能做到“纹丝不动”。所以 RIDGE_FREEZE_QUALITIES 里的质量标签
-#   （null/small）会由求解器以等式约束 pi == prior 直接冻结 —— 它们的方向本来
-#   就没有被激励，理应留在 prior。冻结后其权重不再起作用（对应岭系数被清零），
-#   表里的数值仅在“未启用冻结”时作为兜底。
+#   null / small **不参与岭回归**。原因：岭惩罚是**一个组范数** ‖√c⊙δ‖₂（不是
+#   逐参数惩罚），所有参数共享同一个乘子 μ = 1/u*，所以单个巨大的 c 会把整组的
+#   有效岭强度一起抬高（连同 good 档参数一起拉回 prior）。因此这两档参数的
+#   c 直接置 0，完全退出岭范数；同时由 RIDGE_FREEZE_QUALITIES 以等式约束
+#   pi == prior 冻结（它们的方向本来就没有被激励，且量级太小 ~1e-6..1e-5，
+#   仅靠加大权重不可能“纹丝不动”）。
+#   ⚠️ 两者必须同时生效：c = 0 而不冻结 = 参数既无惩罚又可自由移动。
 RIDGE_QUALITY_WEIGHTS = {
     "good": 1.0,
     "ok": 3.0,
     "bad": 10.0,
     "rank_deficient": 20.0,
-    "small": 1e5,
-    "null": 1e5,
 }
-# 需要“字面冻结”（pi == prior，完全不动）的质量标签。
+# 不参与岭回归（c ≡ 0）、且必须“字面冻结”（pi == prior，完全不动）的质量标签。
 RIDGE_FREEZE_QUALITIES = frozenset({"null", "small"})
 DEFAULT_QUALITY = "ok"  # 无质量标签参数的兜底分档
 RIDGE_LAMBDA = 3.0  # 全局岭强度（乘在每个分档权重上，--ridge-lambda）
@@ -490,21 +490,40 @@ class SDPSolver:
         )
         c_sqrt = np.sqrt(np.maximum(ridge_weights, 0.0))  # √c per parameter
 
-        # --- Hard freeze (null/small): equality pi == prior, and zero out the
-        #     (now irrelevant) ridge coefficient for frozen parameters so the
-        #     epigraph SOC stays well-conditioned. ---
-        n_frozen = 0
+        # --- Hard freeze (null/small): equality pi == prior.  These parameters
+        #     already carry c = 0 (build_ridge_weights excludes them from the
+        #     ridge), so also dropping them from the group norm keeps
+        #     ‖√c ⊙ δ‖₂ well conditioned. ---
+        freeze_arr = np.zeros(dof * N_PER_JOINT, dtype=bool)
         if freeze_mask is not None:
-            freeze_mask = np.asarray(freeze_mask, dtype=bool).reshape(-1)
-            assert freeze_mask.size == dof * N_PER_JOINT, (
-                f"freeze_mask size {freeze_mask.size} != dof*13 = {dof * N_PER_JOINT}"
+            freeze_arr = np.asarray(freeze_mask, dtype=bool).reshape(-1)
+            assert freeze_arr.size == dof * N_PER_JOINT, (
+                f"freeze_mask size {freeze_arr.size} != dof*13 = {dof * N_PER_JOINT}"
             )
-            n_frozen = int(freeze_mask.sum())
-            c_sqrt = c_sqrt.copy()
-            c_sqrt[freeze_mask] = 0.0
+        n_frozen = int(freeze_arr.sum())
+        c_sqrt = c_sqrt.copy()
+        c_sqrt[freeze_arr] = 0.0
+
+        # --- Guardrail: c = 0 is reserved for the hard-frozen (null/small)
+        #     parameters.  A zero-weight parameter that is NOT frozen would be
+        #     a completely unregularised free variable (excluded from the ridge
+        #     norm *and* free to move) — fail loudly instead.  The all-zero case
+        #     is exempt: it is the documented `--ridge-lambda 0` pure-fit mode. ---
+        unpenalised = (ridge_weights <= 0.0) & (~freeze_arr)
+        if unpenalised.any() and (ridge_weights > 0.0).any():
+            bad = np.nonzero(unpenalised)[0]
+            raise ValueError(
+                f"{int(unpenalised.sum())} parameter(s) have zero ridge weight "
+                f"but are not hard-frozen (global idx: {bad[:10].tolist()}"
+                f"{' ...' if bad.size > 10 else ''}).  Zero ridge weight is "
+                "reserved for RIDGE_FREEZE_QUALITIES (null/small), which MUST "
+                "be frozen — pass a matching freeze_mask (build_freeze_mask) "
+                "or drop the null/small labels from the quality map."
+            )
         if self.verbose and n_frozen:
             print(
-                f"  hard-freeze (null/small): {n_frozen} params at prior (pi == prior)"
+                f"  hard-freeze (null/small): {n_frozen} params at prior "
+                f"(pi == prior, excluded from the ridge)"
             )
 
         # --- Pre-solve diagnostics (verbose): per-joint prior residual, LMI
@@ -561,8 +580,8 @@ class SDPSolver:
                 cstr.append(pi_d[i] >= 0.0)
 
         # --- Hard-freeze equality constraints (null/small): pi == prior ---
-        if freeze_mask is not None and n_frozen:
-            for g in np.nonzero(freeze_mask)[0]:
+        if n_frozen:
+            for g in np.nonzero(freeze_arr)[0]:
                 cstr.append(pi[g] == pi_prior_full[g])
 
         # --- Weighted ridge epigraph: obj += u,  u ≥ ‖√c ⊙ (pi − prior)‖₂ ---
@@ -1407,7 +1426,18 @@ def load_yaml_param_quality(yaml_path: str | Path) -> dict[int, str]:
 
 
 def _ridge_weight_for_quality(quality: str | None) -> float:
-    """Map a YAML quality label → its relative-deviation ridge weight (w_q)."""
+    """Map a YAML quality label → its relative-deviation ridge weight (w_q).
+
+    ``RIDGE_FREEZE_QUALITIES`` labels (``null``/``small``) are **excluded from
+    the ridge** — they are hard-frozen instead — so asking for their weight is
+    a programming error, not a fallback case.
+    """
+    if quality in RIDGE_FREEZE_QUALITIES:
+        raise ValueError(
+            f"quality '{quality}' does not participate in the ridge "
+            f"(it is hard-frozen via RIDGE_FREEZE_QUALITIES); no ridge weight "
+            f"exists for it"
+        )
     if quality is None or quality not in RIDGE_QUALITY_WEIGHTS:
         return RIDGE_QUALITY_WEIGHTS[DEFAULT_QUALITY]
     return RIDGE_QUALITY_WEIGHTS[quality]
@@ -1419,7 +1449,7 @@ def build_ridge_weights(
     *,
     ridge_lambda: float = RIDGE_LAMBDA,
     scale_floor: float = RIDGE_SCALE_FLOOR,
-) -> tuple[np.ndarray, list[str]]:
+) -> np.ndarray:
     """
     Build per-parameter weighted-ridge quadratic coefficients c_i.
 
@@ -1432,7 +1462,11 @@ def build_ridge_weights(
     with ``scale_i = max(|prior_i|, scale_floor)`` and ``w_q`` from
     ``RIDGE_QUALITY_WEIGHTS``.  Better quality → smaller ``w_q`` → the
     parameter may drift further from the prior; poor quality → larger ``w_q``
-    → it is pulled back hard (``null`` ≈ frozen).
+    → it is pulled back hard.
+
+    Parameters whose quality label is in ``RIDGE_FREEZE_QUALITIES``
+    (``null``/``small``) get ``c_i = 0`` — they are **excluded from the ridge
+    norm** and are instead hard-frozen at the prior by ``build_freeze_mask``.
 
     Parameters
     ----------
@@ -1449,22 +1483,23 @@ def build_ridge_weights(
 
     Returns
     -------
-    (c, labels) : the (dof*13,) quadratic-coefficient vector and the
-    per-parameter quality label used (for reporting).
+    c : (dof*13,) ndarray
+        Quadratic-coefficient vector (exactly 0 wherever the parameter is
+        excluded from the ridge).
     """
     dof = len(pi_prior) // N_PER_JOINT
     pi_list = split_joint_params(pi_prior)
     c = np.zeros(dof * N_PER_JOINT)
-    labels: list[str] = []
     for g in range(dof * N_PER_JOINT):
         q = (quality_map or {}).get(g)
+        if q in RIDGE_FREEZE_QUALITIES:
+            continue  # 冻结档：不参与岭回归（c 保持 0）
         w_q = _ridge_weight_for_quality(q)
-        labels.append(q if q in RIDGE_QUALITY_WEIGHTS else DEFAULT_QUALITY)
         j, i = g // N_PER_JOINT, g % N_PER_JOINT
         prior_val = pi_list[j][i]
         scale = max(abs(prior_val), scale_floor)
         c[g] = ridge_lambda * w_q / (scale * scale)
-    return c, labels
+    return c
 
 
 def build_freeze_mask(
@@ -1477,12 +1512,27 @@ def build_freeze_mask(
 
     Parameters whose YAML quality label is in ``freeze_qualities`` (default
     ``RIDGE_FREEZE_QUALITIES`` = null/small) are frozen at their URDF prior by
-    an equality constraint in the solver, so they cannot move at all — a plain
-    large ridge weight cannot fully pin such tiny-magnitude parameters.
+    an equality constraint in the solver, so they cannot move at all.  They are
+    **simultaneously excluded from the ridge norm** (``c = 0``, see
+    ``build_ridge_weights``); both halves are required, since a parameter with
+    ``c = 0`` that is *not* frozen would be completely unregularised.
+
+    Raises
+    ------
+    ValueError
+        If a quality entry points outside ``[0, dof*13)`` — i.e. the quality
+        YAML does not belong to this limb group, which would otherwise
+        silently freeze the wrong parameters.
     """
-    mask = np.zeros(dof * N_PER_JOINT, dtype=bool)
+    n_par = dof * N_PER_JOINT
+    mask = np.zeros(n_par, dtype=bool)
     if quality_map:
         for g, q in quality_map.items():
+            if not 0 <= g < n_par:
+                raise ValueError(
+                    f"quality YAML index {g} is outside [0, {n_par}) for "
+                    f"dof={dof} — the quality YAML does not match this limb group"
+                )
             if q in freeze_qualities:
                 mask[g] = True
     return mask
@@ -2549,7 +2599,7 @@ def main(argv: list[str] | None = None) -> None:
         quality_path = FourierTrajectory._coeffs_dir / quality_yaml
         if quality_path.is_file():
             quality_map = load_yaml_param_quality(quality_path)
-    ridge_weights, ridge_labels = build_ridge_weights(
+    ridge_weights = build_ridge_weights(
         quality_map, data["pi_prior"], ridge_lambda=args.ridge_lambda
     )
     freeze_mask = build_freeze_mask(quality_map, dof=int(data["dof"]))
@@ -2558,9 +2608,16 @@ def main(argv: list[str] | None = None) -> None:
     n_freeze = int(freeze_mask.sum())
     if quality_map:
         qc = Counter(quality_map.values())
+        n_excl = sum(v for k, v in qc.items() if k in RIDGE_FREEZE_QUALITIES)
         print(f"  YAML quality distribution: {dict(qc)}")
-        print(f"  ridge per-quality weights: {dict(RIDGE_QUALITY_WEIGHTS)}")
-        print(f"  hard-freeze (null/small): {n_freeze} params → pi == prior")
+        print(
+            f"  ridge per-quality weights (participating bands only): "
+            f"{dict(RIDGE_QUALITY_WEIGHTS)}"
+        )
+        print(
+            f"  hard-freeze (null/small): {n_freeze} params → pi == prior, "
+            f"EXCLUDED from the ridge (c = 0; {n_excl} labelled null/small)"
+        )
     else:
         print(
             f"  无 _diagnostics.per_param 质量标签 → 全部按默认分档 "
