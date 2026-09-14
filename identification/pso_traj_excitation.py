@@ -57,8 +57,8 @@ SAMPLE_RATE = 50.0  # [Hz] trajectory sample rate (coarse for PSO speed)
 # ============================================================================
 #  PSO hyper-parameters
 # ============================================================================
-POP = 200
-MAX_ITER = 100
+POP = 100
+MAX_ITER = 10
 AMP_SCALE = 2.0  # Fourier coefficient amplitude scale
 PSO_W = 0.7  # inertia weight
 PSO_C1 = 1.5  # cognitive acceleration
@@ -66,11 +66,12 @@ PSO_C2 = 1.5  # social acceleration
 RANDOM_SEED = 67
 
 # ============================================================================
-#  Constraint margins
+#  Position soft-constraint margin
 # ============================================================================
-Q_MARGIN = 0.2  # [rad]  position margin from joint limits
-V_MARGIN = 0.2  # [rad/s] velocity margin
-TAU_MARGIN = 0.2  # [Nm]   torque margin
+# 传给 TargetLimbRegressor(q_margin=...)：每个目标关节的可用限位上下各往内收
+# Q_MARGIN。轨迹一旦进入余量带（越过收缩后的有效限位）就触发 q-excess 软惩罚，
+# 让优化器在不越出 URDF 原始限位的前提下尽量贴近限位探索。
+Q_MARGIN = 0.1  # [rad]  position soft-margin applied to joint limits (each side)
 
 
 # ============================================================================
@@ -95,7 +96,7 @@ class RewardConfig:
     # --- Condition-number soft penalty ---
     # r_cond = -w_cond · max(0, κ / cond_threshold)^cond_penalty_power
     cond_threshold: float = 100.0  # κ > cond_threshold → penalty active
-    w_cond: float = 1.0  # overall weight multiplier (heavier than linear default)
+    w_cond: float = 5.0  # overall weight multiplier (heavier than linear default)
     cond_penalty_power: float = 2.0  # exponent: 1=linear, 2=quadratic
 
     # --- Per-parameter variance reward (tanh score) ---
@@ -189,6 +190,8 @@ def compute_fitness(
         if collided:
             collision_count += 1
             penalty += cfg.w_collision
+            if collision_count > 9:
+                return 1e9
             continue
         if q_excess_norm:
             penalty += cfg.w_q_limit * q_excess_norm
@@ -266,8 +269,8 @@ def compute_fitness(
     if verbose and np.random.random() < 0.05:
         if len(scores) and len(rated) == len(scores):
             n_good = int(np.sum((scores > 0.5) & rated))
-            n_ok = int(np.sum(((scores >= -0.5) & (scores <= 0.5)) & rated))
-            n_bad = int(np.sum((scores < -0.5) & rated))
+            n_ok = int(np.sum(((scores > 0.0) & (scores <= 0.5)) & rated))
+            n_bad = int(np.sum((scores <= 0.0) & rated))
         else:
             n_good = n_ok = n_bad = 0
         print(
@@ -316,8 +319,10 @@ def build_bounds(
     ub = np.zeros(total)
 
     for i in range(dim):
-        q_lo = reg.q_lower_limit[i] + Q_MARGIN
-        q_hi = reg.q_upper_limit[i] - Q_MARGIN
+        # reg.q_lower_limit / q_upper_limit 已含余量（TargetLimbRegressor(q_margin=...)），
+        # 直接使用，不再额外收缩，避免重复扣除。
+        q_lo = reg.q_lower_limit[i]
+        q_hi = reg.q_upper_limit[i]
         q_range = (q_hi - q_lo) / 2.0
 
         for k in range(harmonics):
@@ -383,7 +388,7 @@ def _build_param_names(joint_names: list[str]) -> list[str]:
         names.append(f"{jname}/armature")
     for jname in joint_names:
         names.append(f"{jname}/damping")
-        names.append(f"{jname}/frictionloss")
+        names.append(f"{jname}/friction")
     return names
 
 
@@ -398,12 +403,12 @@ def compute_regressor_diagnostics(
 
     All 65 parameters are recorded, with quality categories:
       - "null"            — structurally zero column (constant zero across all rows)
-      - "rank_deficient"  — significant nullspace component (linear dependency)
       - "small"           — |nominal| < cfg.nominal_small (negligible dynamics impact)
+      - "rank_deficient"  — significant nullspace component (linear dependency)
       - "good" / "ok" / "bad"  — tanh scoring from _score_param_std
                                  (rank_deficient/small are NOT scored, score = 0)
 
-    Priority: null > rank_deficient > small > good/ok/bad
+    Priority: null > small > rank_deficient > good/ok/bad
     """
     n_total = Y_full.shape[1]
     col_max = np.abs(Y_full).max(axis=0)
@@ -520,10 +525,13 @@ def compute_regressor_diagnostics(
         nw = float(nullspace_weight[j])
 
         # --- Determine quality (priority order) ---
-        if nw > cfg.nullspace_threshold:
-            quality = "rank_deficient"
-        elif abs(nominal) < cfg.nominal_small:
+        # small BEFORE rank_deficient: a tiny-nominal param (|nominal| <
+        # nominal_small) is labelled "small" even if it also projects strongly
+        # onto the nullspace.  Both are excluded from rating either way.
+        if abs(nominal) < cfg.nominal_small:
             quality = "small"
+        elif nw > cfg.nullspace_threshold:
+            quality = "rank_deficient"
         elif sc > 0.5:
             quality = "good"
         elif sc >= -0.5:
@@ -743,6 +751,7 @@ def main():
         group_to_identify=target_group,
         print_info=False,
         fixed_pose=FIXED_HOME_POSE if target_group == "left_leg" else None,
+        q_margin=Q_MARGIN,
     )
     ft = FourierTrajectory(dim=reg.dof, sample_rate=SAMPLE_RATE)
     ft.omega_f = 2.0 * np.pi / TRAJ_PERIOD
@@ -833,8 +842,10 @@ def main():
     Y_aug_all = []
     # Per-joint exceedance over limits (physical units), max over trajectory.
     # NOTE: acceleration has NO limit in the model (Pinocchio limits are q/v/tau only).
-    q_lo = np.asarray(reg.q_lower_limit, dtype=float)
-    q_hi = np.asarray(reg.q_upper_limit, dtype=float)
+    # max_over / limit_lo / limit_hi 基于 URDF 原始（物理）限位。
+    # 软约束余量 q_margin 只影响优化中的 q-excess 惩罚，不影响这里的物理越限量。
+    q_lo = np.asarray(reg.raw_q_lower_limit, dtype=float)
+    q_hi = np.asarray(reg.raw_q_upper_limit, dtype=float)
     v_lim = np.asarray(reg.v_limit, dtype=float)
     tau_lim = np.asarray(reg.tau_limit, dtype=float)
     q_over = np.zeros(reg.dof)
@@ -877,8 +888,11 @@ def main():
         "excess": {
             "q": {
                 **_excess_entry(q_over, q_viol_steps, "rad"),
+                # limit_lo / limit_hi 是 URDF 原始物理限位；
+                # margin 是优化时的软约束余量（有效限位 = 原始限位 ∓ margin）。
                 "limit_lo": [round(float(x), 4) for x in q_lo],
                 "limit_hi": [round(float(x), 4) for x in q_hi],
+                "margin": Q_MARGIN,
             },
             "v": {
                 **_excess_entry(v_over, v_viol_steps, "rad/s"),
