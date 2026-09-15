@@ -140,7 +140,7 @@ class TargetLimbRegressor:
         print_info=False,
         gravity: np.ndarray | None = None,
         fixed_pose: dict[int, float] | None = None,
-        waist_yaw_offset: float = 0.0,
+        waist_yaw_offset: float | None = None,
         q_margin: float = 0.0,
     ):
 
@@ -173,7 +173,10 @@ class TargetLimbRegressor:
         # 腰关节 (J12_WAIST_YAW) 偏置：数据采集时腰可能非零，会把目标肢体
         # (手臂/脖子等) 相对重力旋转。仅当腰不属于待辨识分组时生效——
         # 否则目标关节状态里自带真实的腰值，不再覆盖。
-        self.waist_yaw_offset = float(waist_yaw_offset)
+        # None = 不指定 → 用默认值 0.0（与 gravity=None → 默认重力同理）。
+        self.waist_yaw_offset = (
+            0.0 if waist_yaw_offset is None else float(waist_yaw_offset)
+        )
         if (
             self.waist_yaw_offset != 0.0
             and WAIST_Q_INDICES[0] not in self.group_to_identify
