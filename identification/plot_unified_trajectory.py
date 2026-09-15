@@ -4,7 +4,7 @@ Plot unified PSO excitation trajectory from a YAML file.
 
 Usage:
   python3 -m identification.plot_unified_trajectory
-  python3 -m identification.plot_unified_trajectory path/to/pso_unified.yaml
+  python3 -m identification.plot_unified_trajectory name.yaml
 """
 
 import sys
@@ -92,7 +92,9 @@ def main():
             )
             sys.exit(1)
 
-    name = Path(yaml_name).name
+    name = (
+        Path(__file__).resolve().parent.parent / "trajectory_coefficients" / yaml_name
+    ).resolve()
     print(f"Loading {name} …")
     q, dq, ddq, tau, joint_names = load_trajectory(name)
     dof = q.shape[1]
@@ -114,19 +116,19 @@ def main():
         for j in range(dof):
             ax.plot(t, data[row][:, j], color=joint_colors[j], lw=0.8, alpha=0.85)
 
-        ax.set_ylabel(ylabels[row], fontsize=10)
-        ax.grid(True, alpha=0.3)
+        ax.set_ylabel(ylabels[row], fontsize=13)
+        ax.grid(True, alpha=0.5)
 
         if row == 3:
-            ax.set_xlabel("Time (s)", fontsize=10)
+            ax.set_xlabel("Time (s)", fontsize=13)
             ax.axhline(61, color="gray", ls="--", lw=0.5, alpha=0.5)
             ax.axhline(-61, color="gray", ls="--", lw=0.5, alpha=0.5)
             vmin, vmax = np.percentile(data[3], [0, 100])
             margin = 0.1 * (vmax - vmin) if vmax > vmin else 1.0
             ax.set_ylim(vmin - margin, vmax + margin)
 
-    fig.legend(joint_names, loc="upper right", fontsize=8, ncol=1, framealpha=0.9)
-    fig.suptitle(f"Unified Excitation Trajectory — {name}", fontsize=13, y=0.97)
+    fig.legend(joint_names, loc="upper right", fontsize=10, ncol=1, framealpha=0.9)
+    fig.suptitle(f"Unified Excitation Trajectory — {yaml_name}", fontsize=15, y=0.95)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show()
 
