@@ -6,7 +6,10 @@ in a single solve).
 
 Regularization: quality-weighted RIDGE (L2 toward the URDF prior) instead of
 the per-quality box constraints.  Good-quality parameters get a small penalty
-for deviating from the prior; poor-quality ones get a large penalty.
+for deviating from the prior; poor-quality ones get a large penalty.  Joint
+armature/damping/friction are additionally **force-frozen** at their URDF
+values (see ``RIDGE_FREEZE_LOCAL_INDICES``), so only link inertials are
+identified unless that constant is changed.
 
 ============================================================================
 Architecture:  solver (pure)  ←  data (prepared externally)
@@ -76,29 +79,20 @@ _PARAM_LABELS = [
 ]
 
 # --- Weighted ridge (quality → L2 penalty toward the URDF prior) ---
-# 相对偏离 r_i = (pi_i − prior_i)/scale_i 上的二次惩罚权重（按质量分档）：
-#   质量越好（good/ok）→ 权重越小 → 允许参数偏离 URDF prior 更多；
-#   质量越差（bad / rank_deficient）→ 权重越大 → 越强地把参数拉回 prior。
-#   全局强度 RIDGE_LAMBDA 乘在每个分档权重上。
-#
-#   null / small **不参与岭回归**。原因：岭惩罚是**一个组范数** ‖√c⊙δ‖₂（不是
-#   逐参数惩罚），所有参数共享同一个乘子 μ = 1/u*，所以单个巨大的 c 会把整组的
-#   有效岭强度一起抬高（连同 good 档参数一起拉回 prior）。因此这两档参数的
-#   c 直接置 0，完全退出岭范数；同时由 RIDGE_FREEZE_QUALITIES 以等式约束
-#   pi == prior 冻结（它们的方向本来就没有被激励，且量级太小 ~1e-6..1e-5，
-#   仅靠加大权重不可能“纹丝不动”）。
-#   ⚠️ 两者必须同时生效：c = 0 而不冻结 = 参数既无惩罚又可自由移动。
 RIDGE_QUALITY_WEIGHTS = {
     "good": 1.0,
     "ok": 3.0,
     "bad": 10.0,
     "rank_deficient": 20.0,
+    "small": 1e-3,
 }
-# 不参与岭回归（c ≡ 0）、且必须“字面冻结”（pi == prior，完全不动）的质量标签。
-RIDGE_FREEZE_QUALITIES = frozenset({"null", "small"})
-DEFAULT_QUALITY = "ok"  # 无质量标签参数的兜底分档
-RIDGE_LAMBDA = 3.0  # 全局岭强度（乘在每个分档权重上，--ridge-lambda）
-RIDGE_SCALE_FLOOR = 1e-4  # 相对尺度下限：scale_i = max(|prior_i|, floor)
+# RIDGE_FREEZE_QUALITIES = frozenset({"null", "small"})
+RIDGE_FREEZE_QUALITIES = frozenset({"null"})
+# RIDGE_FREEZE_LOCAL_INDICES = frozenset({10, 11, 12})
+RIDGE_FREEZE_LOCAL_INDICES = frozenset({})
+DEFAULT_QUALITY = "ok"
+RIDGE_LAMBDA = 3.0
+RIDGE_SCALE_FLOOR = 1e-4
 
 DEFAULT_URDF_PATH = (
     Path(__file__).resolve().parent.parent
@@ -140,8 +134,53 @@ SIM_WAIST_YAW_OFFSET = 0.02079
 # bag CSV 的 topic 名：IMU 读数用于求重力，关节状态用于求腰关节角度。
 IMU_CSV_TOPIC = "hardware_imu_info"
 
+# [meas] 实测力矩相对状态的时延补偿（秒，--tau-delay；默认 0 = 不补偿）。
+# 见 data_from_measurement：>0 表示“力矩滞后于状态”，回归器在 t − τ 上求值。
+TAU_DELAY = 0.0
+
 # 4×4 pseudo-inertia 严格正定余量（J ≽ eps·I₄，min_eig ≥ eps > 0）。
+# 这只是**数值下限**（保证严格 PD + 给内点法留点余量），不是形状约束：连杆形状完全
+# 交给下面的软铰链（LMI_SHAPE_FRAC / LMI_SHAPE_WEIGHT）。
+# 历史（2026-09-15 前）这里还有一层 per-joint 相对硬余量
+#   eps_j = max(LMI_EPS, rel · min_eig(J_prior_j))   （rel=0.1）
+# 实测结论：它是**墙**不是**拉力** —— 目标函数在近似零空间方向上几乎是平的（原始
+# 回归器 Y 的奇异值从 1799 掉到 ~1e-15），于是内点解**总是**精确停在墙上
+# （min_eig/ε = 1.0000），只把扁平度从 1e-7 抬到 1.6e-5~3.4e-5，每个连杆的
+# pseudo-inertia 依旧被压成薄片（三角不等式取等号，导出的 URDF 是近退化的惯量）。
+# 而且它还会把真解排除在外（真值 J16/J17 的 slack 只有先验的 28%/17%，rel≥0.3 就
+# 把真值排除在可行域之外）。⇒ 整层已被软铰链取代（见下），常量随之删除。
 LMI_EPS = 1e-7
+
+# --- 软铰链形状惩罚（2026-09-15；取代原来的 per-joint 相对硬余量）---
+# 把硬余量的“墙”换成“拉力” —— 对每个关节引入标量 t_d 和仿射 LMI
+#       J_d − t_d·blkdiag(I₃,0) ≽ 0    ⟺    t_d ≤ λ_min(Σ_C,d)
+# （Σ_C = Σ_O − h·hᵀ/m 是绕质心二阶矩矩阵，λ_min(Σ_C) 就是三个三角不等式余量里最小
+# 的那个），目标函数再加一项**无量纲、有上界**的铰链
+#       W · Σ_d max(0, 1 − t_d / (LMI_SHAPE_FRAC · λ_min(Σ_C,d^prior)))
+# 即“丢掉关节 d 先验 slack 的 100% 最多付 W”。解于是会主动往锥内部挪，而不是被动
+# 停在边界上；先验 slack 偏保守（J16/J17 的真值只有先验的 28%/17%），所以用
+# LMI_SHAPE_FRAC < 1 把目标压到真值量级，避免过冲。
+# 实测（sim：exc_arm_1 训练 / verify_left_arm 验证；J15/J16/J17 的相对扁平度
+# slack/mean(eig(Σ_C))，真值 = 0.456 / 0.030 / 0.030）：
+#   frac  W     train%  val%   static  参数误差比 | J15/J16/J17 相对扁平度
+#   —     0     93.09   93.18  0.0485    0.659   | 0.042 0.010 0.009  ← 无形状约束（压扁）
+#   0.5   1     93.09   93.19  0.0481    0.664   | 0.208 0.049 0.042
+#   0.3   1     93.10   93.19  0.0483    0.662   | 0.126 0.030 0.020  ← 默认
+#   1.0  ≥0.3   92.92   93.22  0.0476    0.672   | 0.401 0.099 0.088  ← 过冲
+# 结论：目标设在先验 slack 的 30~50% 几乎不要钱（train 完全不变、held-out 与静态
+# 重力反而略好），却能把三个最扁的关节拉回接近真值的形状；frac=1.0 会把 J16/J17
+# 撑得比真值还“胖”。W≥0.3 就饱和（铰链有上界），所以真正要调的是 frac。
+# 另外：这套软铰链与原硬余量 0.1 在默认设置下**结果逐位一致**（铰链目标
+# 4.7e-5~1.0e-4 高于原硬余量 1.6e-5~3.4e-5，硬约束本来就非激活）⇒ 删掉硬余量没有
+# 任何代价。W=0 则退回“只有 LMI_EPS 下限”的旧行为（解贴在锥边界、连杆被压扁）。
+LMI_SHAPE_FRAC = 0.3
+LMI_SHAPE_WEIGHT = 1.0  # 0 = 关闭（退回只有 LMI_EPS 下限的压扁行为）
+
+# --- 静态姿势重力测试（--static-test，仅 sim） ---
+# 随机采样 N 个静态姿势（v = a = 0 ⇒ 只剩重力项），比较真值 URDF 的关节力矩
+# 与辨识参数算出的关节力矩之差。
+STATIC_TEST_POSES = 20  # 姿势数量（--static-poses）
+STATIC_TEST_SEED = 0  # 采样种子（--static-seed）
 
 
 # ============================================================================
@@ -218,47 +257,154 @@ def check_lmi_feasibility(pi: np.ndarray) -> tuple[bool, float, np.ndarray]:
     return eig_min > 0, eig_min, J
 
 
+# ============================================================================
+# Shape helpers — triangle-inequality slack and the soft shape hinge
+#
+#   Σ_C = Σ_O − h·hᵀ/m      (second moment about the CoM; Schur complement of J)
+#   eig(Σ_C) = {(b+c−a)/2, (a+c−b)/2, (a+b−c)/2}  ← the three triangle slacks
+#
+# J ≽ 0 ⟺ m>0 ∧ Σ_C ≽ 0 ⟺ {I_C ≻ 0 ∧ triangle inequality}.  So λ_min(Σ_C) ≥ 0
+# is the complete physical-consistency condition, and λ_min(Σ_C)/mean(eig(Σ_C)) ∈
+# [0,1] is a scale-free "how flat is this link" measure (0 = squashed flat, 1 =
+# spherical).  λ_min(Σ_C) is *concave* in π, so "≥ t" is an LMI and hinging on it
+# keeps the problem convex; the relative form λ_min/λ_max is NOT convex and is
+# therefore not used.
+# ============================================================================
+LMI_SHAPE_B = np.diag([1.0, 1.0, 1.0, 0.0])  # blkdiag(I₃, 0): t·B only shifts Σ_O
+
+
+def second_moment_about_com(pi_joint: np.ndarray) -> np.ndarray:
+    """Σ_C = Σ_O − h·hᵀ/m (3×3) for one 13-param joint block (Pinocchio order)."""
+    I_vals = np.asarray(pi_joint, dtype=float)[4:10]
+    m = float(pi_joint[0])
+    mc = np.asarray(pi_joint, dtype=float)[1:4]
+    I_mat = np.array(
+        [
+            [I_vals[0], I_vals[1], I_vals[3]],
+            [I_vals[1], I_vals[2], I_vals[4]],
+            [I_vals[3], I_vals[4], I_vals[5]],
+        ]
+    )
+    tr_I = I_vals[0] + I_vals[2] + I_vals[5]
+    Sigma_O = 0.5 * tr_I * np.eye(3) - I_mat
+    return Sigma_O - np.outer(mc, mc) / m
+
+
+def triangle_slack(pi_joint: np.ndarray) -> float:
+    """λ_min(Σ_C): the tightest of the three triangle-inequality slacks (0 = flat)."""
+    return float(np.linalg.eigvalsh(second_moment_about_com(pi_joint)).min())
+
+
+def relative_flatness(pi_joint: np.ndarray) -> float:
+    """λ_min(Σ_C)/mean(eig(Σ_C)) ∈ [0, 1]: 0 = squashed flat, 1 = spherical."""
+    e = np.linalg.eigvalsh(second_moment_about_com(pi_joint))
+    mean_e = float(e.mean())
+    return float(e.min() / mean_e) if mean_e > 0 else 0.0
+
+
+def build_shape_reference(
+    pi_prior: np.ndarray,
+    dof: int,
+    frac: float = LMI_SHAPE_FRAC,
+) -> np.ndarray:
+    """(dof,) hinge target: ``frac × λ_min(Σ_C)`` of each joint's URDF prior.
+
+    Used as the reference of the soft shape hinge in ``_identify_all``; see
+    ``LMI_SHAPE_FRAC`` for the measured effect of ``frac``.
+    """
+    prior_list = split_joint_params(pi_prior)
+    return np.array(
+        [float(frac) * triangle_slack(prior_list[d]) for d in range(int(dof))],
+        dtype=float,
+    )
+
+
 def print_lmi_feasibility(
     pi_full: np.ndarray,
     joint_names: list[str] | None = None,
     joint_order: list[int] | None = None,
     label: str = "identified",
-    inertia_eps: float = 1e-6,
+    inertia_eps: float = LMI_EPS,
+    shape_ref: np.ndarray | None = None,
     verbose: bool = True,
 ) -> None:
     """Run ``check_lmi_feasibility`` per joint and print the results.
 
-    The solver enforces the *strictly* positive-definite LMI
-    ``J ≽ inertia_eps·I₄`` (``min_eig ≥ inertia_eps > 0``, the same margin the
-    solver uses), so an accepted solution must satisfy ``min_eig > 0``.
-    A joint is marked ``YES`` if ``min_eig > 0``, else ``NO``.  Non-``YES``
-    joints also print their identified ``(m, mc, I)`` and the eigenvalues of
-    ``J``, so you can see which direction is off.
+    The solver enforces ``J_d ≽ eps·I₄`` with the single scalar floor ``eps``
+    (``LMI_EPS`` — strict PD, numerical only), so a joint is marked ``YES``
+    only if it clears that floor: a solution parked on a 1e-7 boundary would
+    pass a bare ``min_eig > 0`` test while being physically degenerate
+    (saturated triangle inequality).  Non-``YES`` joints also print their
+    identified ``(m, mc, I)`` and the eigenvalues of ``J``.
+
+    The *shape* is not constrained by that floor but by the soft hinge, so
+    ``shape_ref`` (optional, ``(dof,)``) adds three shape columns: the triangle
+    slack ``λ_min(Σ_C)``, its ratio to the soft-hinge reference (``1.000`` =
+    exactly on target) and the scale-free ``relative_flatness``.
     """
     pi_list = split_joint_params(pi_full)
     if joint_order is None:
         joint_order = list(range(len(pi_list)))
+    eps = float(inertia_eps)
+    shape_arr = (
+        None if shape_ref is None else np.asarray(shape_ref, dtype=float).reshape(-1)
+    )
     print(f"\nLMI physical-consistency check ({label} params):")
-    print(f"{'Joint':<24s} {'feasible':>9s} {'min_eig':>12s}")
-    print("-" * 47)
+    shape_cols = (
+        ""
+        if shape_arr is None
+        else (f" {'slack':>11s} {'slack/ref':>10s} {'rel.flat':>9s}")
+    )
+    print(
+        f"{'Joint':<24s} {'feasible':>9s} {'min_eig':>12s} {'floor':>10s} "
+        f"{'min_eig/eps':>12s}" + shape_cols
+    )
+    print("-" * (70 + (33 if shape_arr is not None else 0)))
     all_ok = True
     for d in joint_order:
         name = joint_names[d] if joint_names else f"joint_{d}"
         ok, eig_min, J = check_lmi_feasibility(pi_list[d])
-        all_ok = all_ok and ok
-        print(f"{name:<24s} {('YES' if ok else 'NO'):>9s} {eig_min:>12.6g}")
-        if verbose and not ok:
+        # Absolute slack absorbs the solver's own feasibility tolerance (~1e-10
+        # here): an *active* constraint lands ~1e-10 below its bound, while a
+        # genuinely flattened link is orders of magnitude below.
+        clears = bool(ok and eig_min >= eps - (1e-9 + 1e-6 * eps))
+        all_ok = all_ok and clears
+        line = (
+            f"{name:<24s} {('YES' if clears else 'NO'):>9s} {eig_min:>12.6g} "
+            f"{eps:>10.3g} {eig_min / eps:>12.4g}"
+        )
+        if shape_arr is not None:
+            slack = triangle_slack(pi_list[d])
+            ref_d = float(shape_arr[d]) if d < shape_arr.size else 0.0
+            ratio = f"{slack / ref_d:>10.3f}" if abs(ref_d) > 0 else f"{'-':>10s}"
+            line += f" {slack:>11.4g} {ratio} {relative_flatness(pi_list[d]):>9.3f}"
+        print(line)
+        if verbose and not clears:
             p = pi_list[d]
             print(
                 f"      m={p[0]:.6g}  mc=({p[1]:.6g},{p[2]:.6g},{p[3]:.6g})  "
                 f"I=({p[4]:.6g},{p[5]:.6g},{p[6]:.6g},{p[7]:.6g},{p[8]:.6g},{p[9]:.6g})"
             )
             print(f"      J eigenvalues = {np.linalg.eigvalsh(J)}")
-    print("-" * 47)
+    print("-" * 70)
     print(
-        f"All joints strictly feasible: {all_ok}  "
-        f"(solver LMI strict margin eps={inertia_eps:.1g})"
+        f"All joints above the LMI floor: {all_ok}  "
+        f"(uniform eps = {eps:.1g}, strict PD only)"
     )
+    if shape_arr is not None:
+        print(
+            "  slack = λ_min(Σ_C) (triangle-inequality slack); "
+            "slack/ref = identified ÷ soft-hinge target (1.000 = just on "
+            "target, ~0.1 = still squashed); "
+            "rel.flat = slack/mean(eig(Σ_C)) (0 = flat, 1 = sphere)."
+        )
+    if eps <= 1e-6:
+        print(
+            "  ⚠ eps <= 1e-6 is a numerical floor, not a shape constraint: a "
+            "solution sitting on it has saturated the triangle inequality "
+            "(flattened link). The shape is controlled by the soft hinge — "
+            "keep --lmi-shape-weight > 0."
+        )
 
 
 # ============================================================================
@@ -298,17 +444,49 @@ def _joint_rmse(
     return rmse
 
 
+def _rmse_comparison(
+    result: IdentificationResult,
+    joint_order: list[int],
+    Y_stack: np.ndarray,
+    tau_measured: np.ndarray,
+) -> dict:
+    """Per-joint and overall torque RMSE (prior vs identified); no printing.
+
+    Returns ``{"prior": (dof,), "ident": (dof,), "prior_all": float,
+    "ident_all": float}``; the two arrays are indexed by *position in
+    ``joint_order``* (same convention as ``_joint_rmse``).
+    """
+    return {
+        "prior": _joint_rmse(result.pi_prior, joint_order, Y_stack, tau_measured),
+        "ident": _joint_rmse(result.pi_identified, joint_order, Y_stack, tau_measured),
+        "prior_all": float(
+            np.sqrt(np.mean((Y_stack @ result.pi_prior - tau_measured) ** 2))
+        ),
+        "ident_all": float(
+            np.sqrt(np.mean((Y_stack @ result.pi_identified - tau_measured) ** 2))
+        ),
+    }
+
+
+def _improve_pct(a: float, b: float) -> float:
+    """1 − b/a in percent (nan when a ≈ 0)."""
+    return (1 - b / a) * 100 if a > 1e-12 else float("nan")
+
+
 def print_rmse_comparison(
     result: IdentificationResult,
     joint_names: list[str] | None,
     Y_stack: np.ndarray,
     tau_measured: np.ndarray,
-) -> None:
-    """Print torque RMSE before (prior) vs after (identified) identification."""
-    rmse_prior = _joint_rmse(result.pi_prior, result.joint_order, Y_stack, tau_measured)
-    rmse_ident = _joint_rmse(
-        result.pi_identified, result.joint_order, Y_stack, tau_measured
-    )
+) -> dict:
+    """Print torque RMSE before (prior) vs after (identified) identification.
+
+    Returns the same numbers as ``_rmse_comparison`` (the multi-yaml
+    cross-validation summary aggregates them).
+    """
+    stats = _rmse_comparison(result, result.joint_order, Y_stack, tau_measured)
+    rmse_prior = stats["prior"]
+    rmse_ident = stats["ident"]
 
     def _improve(a: float, b: float) -> float:
         return (1 - b / a) * 100 if a > 1e-12 else float("nan")
@@ -325,14 +503,79 @@ def print_rmse_comparison(
             f"{_improve(rmse_prior[idx], rmse_ident[idx]):>9.2f}%"
         )
     print("-" * 53)
-    rp_all = float(np.sqrt(np.mean((Y_stack @ result.pi_prior - tau_measured) ** 2)))
-    ri_all = float(
-        np.sqrt(np.mean((Y_stack @ result.pi_identified - tau_measured) ** 2))
-    )
+    rp_all = stats["prior_all"]
+    ri_all = stats["ident_all"]
     print(
         f"{'ALL':<20s} {rp_all:>12.6g} {ri_all:>15.6g} "
         f"{_improve(rp_all, ri_all):>9.2f}%"
     )
+    return stats
+
+
+def print_cv_summary(
+    rows: list[dict],
+    joint_names: list[str] | None = None,
+    joint_order: list[int] | None = None,
+) -> None:
+    """One-line-per-yaml summary of a multi-yaml cross-validation run.
+
+    ``rows`` entries: ``{"yaml": str, "note": str, "stats": dict|None,
+    "error": str (only when the yaml failed)}``.  Per-joint columns are the
+    improvement %% of that joint on that held-out trajectory, followed by the
+    mean over all yamls — i.e. the "does the identified URDF generalise"
+    verdict, aggregated instead of one table per trajectory.
+    """
+    if not rows:
+        return
+    order = sorted(joint_order) if joint_order is not None else []
+    shorts = [
+        (joint_names[d] if joint_names else f"joint_{d}").split("_")[0] for d in order
+    ]
+    w_yaml = max(20, max(len(f"{r['yaml']}") for r in rows) + 2)
+    w_note = max(10, max(len(f"{r.get('note', '-')}") for r in rows) + 2)
+    wj = max(9, max((len(s) for s in shorts), default=0) + 4)
+    hdr = (
+        f"{'yaml':<{w_yaml}}{'note':<{w_note}}{'prior ALL':>12}{'ident ALL':>12}"
+        f"{'ALL imp%':>9}" + "".join(f"{s:>{wj}}" for s in shorts)
+    )
+    print("\n" + "=" * len(hdr))
+    print(f"CROSS-VALIDATION SUMMARY ({len(rows)} held-out yaml)".center(len(hdr)))
+    print("=" * len(hdr))
+    print(hdr)
+    print("-" * len(hdr))
+    per_joint_imp: dict[int, list[float]] = {d: [] for d in order}
+    all_imp: list[float] = []
+    for r in rows:
+        st = r.get("stats")
+        row_note = f"{r.get('note', '-')}"
+        if not st:
+            row_err = f"{r.get('error', '')}"[:44]
+            print(
+                f"{r['yaml']:<{w_yaml}}{row_note:<{w_note}}{'FAILED':>33}   {row_err}"
+            )
+            continue
+        by_d = {d: i for i, d in enumerate(joint_order)}
+        imps = [_improve_pct(st["prior"][by_d[d]], st["ident"][by_d[d]]) for d in order]
+        imp_all = _improve_pct(st["prior_all"], st["ident_all"])
+        all_imp.append(imp_all)
+        for d, v in zip(order, imps):
+            per_joint_imp[d].append(v)
+        print(
+            f"{r['yaml']:<{w_yaml}}{row_note:<{w_note}}"
+            f"{st['prior_all']:>12.5g}{st['ident_all']:>12.5g}{imp_all:>8.2f}%"
+            + "".join(f"{v:>{wj}.1f}" for v in imps)
+        )
+    if all_imp:
+        print("-" * len(hdr))
+
+        def _mean(xs: list[float]) -> float:
+            return float(np.mean(xs)) if xs else float("nan")
+
+        print(
+            f"{'MEAN over yamls':<{w_yaml}}{'':<{w_note}}"
+            f"{'':>12}{'':>12}{_mean(all_imp):>8.2f}%"
+            + "".join(f"{_mean(per_joint_imp[d]):>{wj}.1f}" for d in order)
+        )
 
 
 # ============================================================================
@@ -371,6 +614,8 @@ class SDPSolver:
         ridge_weights: np.ndarray,  # (dof*13,) per-param ridge coefficients
         freeze_mask: np.ndarray | None = None,  # (dof*13,) bool: hard-freeze
         inertia_eps: float = LMI_EPS,
+        shape_ref: np.ndarray | None = None,
+        shape_weight: float = LMI_SHAPE_WEIGHT,
         joint_names: list[str] | None = None,
     ) -> IdentificationResult:
         """
@@ -394,11 +639,24 @@ class SDPSolver:
             quality labels by ``build_ridge_weights``.
         freeze_mask : (dof*13,) bool ndarray or None
             Where ``True``, hard-freeze the parameter at its URDF prior via an
-            equality constraint ``pi == prior`` (used for the ``null``/``small``
-            quality labels — these are too small for a large ridge weight to
-            pin exactly, so they are frozen literally).  ``None`` = no freeze.
+            equality constraint ``pi == prior``.  Used for the ``null``/``small``
+            quality labels (too small for a large ridge weight to pin exactly,
+            so they are frozen literally) **and** for every joint's
+            armature/damping/friction (``RIDGE_FREEZE_LOCAL_INDICES``).  ``None``
+            = no freeze.  Frozen parameters must also carry ``c = 0`` — see
+            ``build_freeze_mask`` / ``build_ridge_weights``.
         inertia_eps : float
-            Strict positive-definiteness margin of the LMI (J ≽ eps·I₄).
+            Strict positive-definiteness floor of the LMI (``J_d ≽ eps·I₄``),
+            ``LMI_EPS`` by default — numerical only (strict PD + solver
+            slack).  The link *shape* is **not** governed by this floor but by
+            the soft hinge below (``shape_ref`` / ``shape_weight``).
+        shape_ref : (dof,) ndarray or None
+            Soft shape-hinge reference per joint: the triangle-inequality slack
+            ``λ_min(Σ_C)`` the solution is *paid* to keep — build it with
+            ``build_shape_reference``.  Used only when ``shape_weight > 0``.
+        shape_weight : float
+            Price ``W`` of the dimensionless hinge ``W·Σ_d max(0, 1 −
+            t_d/ref_d)``; ``0`` = off.  See ``LMI_SHAPE_FRAC``.
         """
         dof = len(joint_order)
         pi_identified = np.zeros(dof * N_PER_JOINT)
@@ -428,6 +686,8 @@ class SDPSolver:
             ridge_weights=ridge_weights,
             freeze_mask=freeze_mask,
             inertia_eps=inertia_eps,
+            shape_ref=shape_ref,
+            shape_weight=shape_weight,
             joint_names=joint_names,
         )
         pi_identified = np.asarray(pi_opt).flatten()
@@ -456,6 +716,8 @@ class SDPSolver:
         ridge_weights: np.ndarray,  # (dof*13,) quadratic ridge coefficients
         freeze_mask: np.ndarray | None = None,  # (dof*13,) bool: hard-freeze
         inertia_eps: float = LMI_EPS,
+        shape_ref: np.ndarray | None = None,
+        shape_weight: float = 0.0,
         joint_names: list[str] | None = None,
     ) -> tuple[np.ndarray, float, list[float]]:
         """Single all-joints weighted-ridge SDP/SOCP.
@@ -463,24 +725,37 @@ class SDPSolver:
         Returns ``(pi_opt, solve_time, λ_list)``.
 
         Variables: one 13-param block per joint ``pi[13d:13d+13]``, one
-        non-negative scalar ``λ_d`` per joint, and the ridge epigraph scalar
-        ``u``.  Objective ``min Σ_d λ_d + u``.
+        non-negative scalar ``λ_d`` per joint, the ridge epigraph scalar ``u``,
+        and — when the shape hinge is on — one scalar ``t_d`` per joint.
+
+        Objective ``min Σ_d λ_d + u`` (``+ W·Σ_d max(0, 1 − t_d/ref_d)`` with
+        the shape hinge enabled).
 
         Constraints per joint ``d``:
           · SOC  ‖Y_d_rows @ pi − τ_d‖₂ ≤ λ_d   (rows of joint d only; the
             columns are full because the cross-coupling of a proximal joint
             with its distal subtree members is resolved inside this one
             problem)
-          · LMI  4×4 pseudo-inertia J_d ≽ inertia_eps·I₄  (strict, PD)
+          · LMI  4×4 pseudo-inertia J_d ≽ eps·I₄  (strict PD; ``eps`` is a
+            numerical floor, ``LMI_EPS`` by default)
+          · LMI  J_d − t_d·blkdiag(I₃,0) ≽ 0  ⟺  t_d ≤ λ_min(Σ_C,d)
+            (shape hinge only)
           · hard physical non-negativity of armature/damping/friction
             (mass ≥ eps is implied by the LMI)
         plus the weighted-ridge epigraph SOC ``‖√c ⊙ (pi − prior)‖₂ ≤ u`` with
         ``c = ridge_weights`` (the L2-toward-prior penalty replaces the old
         per-quality box constraints).
 
-        If ``freeze_mask`` is given, parameters flagged ``True`` (quality
-        ``null``/``small``) are additionally hard-frozen by equality
-        ``pi == prior`` and excluded from the ridge norm.
+        If ``freeze_mask`` is given, parameters flagged ``True`` (``null``/
+        ``small`` quality, plus every joint's armature/damping/friction) are
+        additionally hard-frozen by equality ``pi == prior`` and excluded from
+        the ridge norm.
+
+        ``shape_ref`` / ``shape_weight`` are the link's *shape* control: with
+        ``W > 0`` the solution is *paid* to keep ``t_d`` (the triangle slack)
+        near ``shape_ref[d]``.  The bare LMI floor above cannot do that job — a
+        flat objective parks the solution exactly on it — and a *hard* relative
+        margin (removed 2026-09-15) only moved the wall.  See ``LMI_SHAPE_FRAC``.
         """
         dof = len(joint_order)
         pi_prior_full = np.concatenate(pi_prior_list)
@@ -488,6 +763,28 @@ class SDPSolver:
         assert ridge_weights.size == dof * N_PER_JOINT, (
             f"ridge_weights size {ridge_weights.size} != dof*13 = {dof * N_PER_JOINT}"
         )
+        # --- Strict-PD floor of the pseudo-inertia LMI.  Numerical only: the
+        #     link shape is controlled by the soft hinge below. ---
+        eps = float(inertia_eps)
+        # --- Soft shape hinge: see LMI_SHAPE_FRAC.  Dimensionless and bounded,
+        #     so W reads as "objective units I am willing to pay for one joint's
+        #     full reference slack" and ≥ ~0.3 saturates. ---
+        shape_weight = float(shape_weight or 0.0)
+        shape_on = shape_weight > 0.0
+        shape_ref_vec: np.ndarray | None = None
+        if shape_on:
+            if shape_ref is None:
+                raise ValueError(
+                    "shape_weight > 0 requires shape_ref (build_shape_reference)"
+                )
+            shape_ref_vec = np.asarray(shape_ref, dtype=float).reshape(-1)
+            assert shape_ref_vec.size == dof, (
+                f"shape_ref size {shape_ref_vec.size} != dof = {dof}"
+            )
+            assert np.all(shape_ref_vec > 0.0), (
+                "shape_ref must be strictly positive (it is a dividend: "
+                f"got {shape_ref_vec.min():.3g})"
+            )
         c_sqrt = np.sqrt(np.maximum(ridge_weights, 0.0))  # √c per parameter
 
         # --- Hard freeze (null/small): equality pi == prior.  These parameters
@@ -556,6 +853,7 @@ class SDPSolver:
         # --- Variables ---
         pi = cp.Variable(dof * N_PER_JOINT)  # all joints' parameters at once
         lam = cp.Variable(dof, nonneg=True)  # per-joint SOC objective terms
+        t_shape = cp.Variable(dof) if shape_on else None  # per-joint slack bound
 
         # --- Constraints ---
         cstr: list = []
@@ -571,9 +869,17 @@ class SDPSolver:
             cstr.append(cp.SOC(lam[idx], Y_d @ pi - tau_d))
 
             # 2) physical consistency: 4×4 pseudo-inertia LMI strictly
-            #    positive definite: J ≽ eps·I₄  (min_eig ≥ inertia_eps > 0)
+            #    positive definite: J ≽ eps·I₄  (min_eig ≥ eps > 0)
             J = build_pseudo_inertia_LMI(pi_d[0], pi_d[1:4], pi_d[4:10])
-            cstr.append(J - inertia_eps * np.eye(4) >> 0)
+            cstr.append(J - eps * np.eye(4) >> 0)
+
+            # 2b) shape hinge: t_d ≤ λ_min(Σ_C,d), written as the affine
+            #     block-shift LMI J_d − t_d·blkdiag(I₃,0) ≽ 0 (Σ_C is the
+            #     Schur complement of J w.r.t. m, so subtracting t from the
+            #     Σ_O block is exactly Σ_C ≽ t·I₃).  Soft, so the solution is
+            #     pulled inside the cone instead of resting on the eps wall.
+            if shape_on:
+                cstr.append(J - t_shape[d] * LMI_SHAPE_B >> 0)
 
             # 3) hard physical non-negativity of armature/damping/friction
             for i in (10, 11, 12):
@@ -589,7 +895,19 @@ class SDPSolver:
         cstr.append(cp.SOC(u, cp.multiply(c_sqrt, pi - pi_prior_full)))
 
         # --- Solve ---
-        problem = cp.Problem(cp.Minimize(cp.sum(lam) + u), cstr)
+        objective = cp.sum(lam) + u
+        if shape_on:
+            # Bounded, dimensionless deficit: 1.0 = the joint has lost all of
+            # its reference slack.  cp.pos keeps it convex (λ_min is concave).
+            deficit = cp.pos(1.0 - cp.multiply(1.0 / shape_ref_vec, t_shape))
+            objective = objective + shape_weight * cp.sum(deficit)
+            if self.verbose:
+                print(
+                    f"  shape hinge ON: W={shape_weight:g}, ref = "
+                    f"[{shape_ref_vec.min():.4g}, {shape_ref_vec.max():.4g}] "
+                    f"(prior triangle slack × {LMI_SHAPE_FRAC:g})"
+                )
+        problem = cp.Problem(cp.Minimize(objective), cstr)
         try:
             problem.solve(solver=self.solver_name, verbose=False)
         except cp.error.SolverError:
@@ -956,6 +1274,7 @@ def prepare_data_from_urdf(
         "joint_order": joint_order,
         "joint_names": joint_names,
         "dof": dof,
+        "reg": reg,  # kept for the --static-test (needs sample_state/collision)
     }
 
 
@@ -1190,6 +1509,7 @@ def data_from_measurement(
     waist_yaw_offset: float | None = None,
     trajectory_yaml: str | None = None,
     twin: str | None = None,
+    tau_delay: float = 0.0,
 ) -> dict:
     """Prepare SDP data from **real** bag measurement (CSV).
 
@@ -1232,6 +1552,17 @@ def data_from_measurement(
         a single good-quality period already carries all the information;
         cropping to it reduces data size / noise.  Either end may be omitted;
         ``None`` = full span.
+    tau_delay : float
+        Time-delay compensation of the **torque channel** (seconds).  The
+        measured torque at time ``t`` is assumed to describe the state at
+        ``t − tau_delay``, so the regressor is evaluated there.
+        ``> 0`` = the torque lags the state (the usual transport / filter
+        delay); negative values are allowed (torque leading the state).  A pure
+        time shift rotates the regressor columns — in particular the armature
+        column becomes ``cos(ωδ)·q̈(t) + ω·sin(ωδ)·q̇(t)`` — so it moves weight
+        between **armature and damping**, which is precisely the direction in
+        which the free fit drifts away from the URDF prior.  ``0`` = no
+        compensation.
 
     Notes
     -----
@@ -1344,11 +1675,22 @@ def data_from_measurement(
     #     differentiation of the quantized velocity is too noisy, so it is
     #     NOT used — acceleration comes from the analytic Fourier trajectory
     #     together with q and v. ---
+    # --- Optional torque-channel delay compensation: the measured torque at
+    #     time t is assumed to describe the state at t − tau_delay, so the
+    #     regressor is evaluated there.  A pure shift turns the armature column
+    #     q̈(t−δ) into cos(ωδ)·q̈(t) + ω·sin(ωδ)·q̇(t), i.e. it trades weight
+    #     between armature and damping — exactly where the free fit drifted. ---
+    t_state = t_sel - float(tau_delay)
     q_arm, v_arm, a_arm = _recovered_at_times(
-        t_sel, dof, trajectory_yaml, grid_sample_rate=500.0
+        t_state, dof, trajectory_yaml, grid_sample_rate=500.0
     )
     if verbose:
         print(f"  [measurement] q/v/a from Fourier trajectory {trajectory_yaml}")
+        if tau_delay:
+            print(
+                f"  [measurement] tau delay {tau_delay * 1e3:+.2f} ms → regressor "
+                f"evaluated at t − {tau_delay:g}s (torque lags state if > 0)"
+            )
 
     # --- Stack regressor at the CSV time samples ---
     Y_stack = _stack_regressor(reg, q_arm, v_arm, a_arm)  # (N*dof, 13*dof)
@@ -1375,8 +1717,45 @@ def data_from_measurement(
 # YAML parameter-quality helpers
 # ============================================================================
 # YAML parameter-order constants (MUST match pso_excitation_unified output)
-_YAML_INERTIA_YAML2OUR = {4: 4, 5: 5, 6: 7, 7: 6, 8: 8, 9: 9}
-# YAML inertia: [Ixx, Ixy, Iyy, Ixz, Iyz, Izz] → our Pinocchio: [Ixx, Ixy, Ixz, Iyy, Iyz, Izz]
+#
+# ⚠️ FIXED 2026-09-14 (user "Iyy 和 Ixz 的质量映射反了"): this used to be
+#    {4:4, 5:5, 6:7, 7:6, 8:8, 9:9}, whose comment claimed the YAML inertia order
+#    differs from ours ([Ixx,Ixy,Iyy,Ixz,Iyz,Izz] vs [Ixx,Ixy,Ixz,Iyy,Iyz,Izz]).
+#    That claim is wrong — the two orders are THE SAME, so the map is the
+#    IDENTITY.  Evidence:
+#      · pin.Inertia(5,[0,0,0],[[1,.1,.2],[.1,2,.3],[.2,.3,3]]).toDynamicParameters()
+#        [4:10] == [1, .1, 2, .2, .3, 3] = [Ixx, Ixy, Iyy, Ixz, Iyz, Izz]
+#        (verified numerically; Iyy is idx 6, Ixz is idx 7);
+#      · pso_traj_excitation._INERTIAL_PARAM_NAMES (which WRITES the YAML) is
+#        [mass, mcx, mcy, mcz, Ixx, Ixy, Iyy, Ixz, Iyz, Izz];
+#      · our own `_PARAM_LABELS` above is idx 6 = Iyy, idx 7 = Ixz;
+#      · every YAML in trajectory_coefficients/ carries `per_param[].name`
+#        ("<JOINT>/<param>") and idx 6/7 are named Iyy/Ixz there too.
+#    Effect of the bug: ridge weight + hard-freeze mask were applied to the wrong
+#    physical parameter for every joint (which one is allowed to move).
+#    `load_yaml_param_quality` now cross-checks the `name` field against this
+#    mapping, so this class of drift fails loudly instead of silently.
+_YAML_INERTIA_YAML2OUR = {4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9}
+# YAML inertia: [Ixx, Ixy, Iyy, Ixz, Iyz, Izz] → our Pinocchio: [Ixx, Ixy, Iyy, Ixz, Iyz, Izz]
+
+# YAML `per_param[].name` suffix → our local index.  Used ONLY to validate the
+# index mapping above (the index mapping stays the source of truth); an unknown
+# suffix is skipped rather than guessed at.
+_YAML_NAME_SUFFIX_TO_LOCAL = {
+    "mass": 0,
+    "mcx": 1,
+    "mcy": 2,
+    "mcz": 3,
+    "Ixx": 4,
+    "Ixy": 5,
+    "Iyy": 6,
+    "Ixz": 7,
+    "Iyz": 8,
+    "Izz": 9,
+    "armature": 10,
+    "damping": 11,
+    "friction": 12,
+}
 
 
 def _yaml_global_to_local(global_idx: int, dof: int) -> tuple[int, int]:
@@ -1408,6 +1787,10 @@ def load_yaml_param_quality(yaml_path: str | Path) -> dict[int, str]:
     """
     Parse YAML diagnostics, return quality labels keyed by OUR global index
     (0..dof*13-1, joint-major by 13).
+
+    Every entry's ``name`` field (``"<JOINT>/<param>"``) is cross-checked against
+    the index mapping; if the name and the index disagree, a ``ValueError`` is
+    raised (that is how the 2026-09-14 Iyy/Ixz swap would have been caught).
     """
     import yaml
 
@@ -1417,11 +1800,29 @@ def load_yaml_param_quality(yaml_path: str | Path) -> dict[int, str]:
     dof = len(per_param) // N_PER_JOINT
 
     result = {}
+    mismatch: list[str] = []
     for entry in per_param:
         yaml_g = entry["idx"]
         j, i = _yaml_global_to_local(yaml_g, dof)
+        name = entry.get("name")
+        if name:
+            suffix = str(name).rsplit("/", 1)[-1]
+            expected = _YAML_NAME_SUFFIX_TO_LOCAL.get(suffix)
+            if expected is not None and expected != i:
+                mismatch.append(
+                    f"idx {yaml_g}: name '{name}' says '{suffix}' (local "
+                    f"{expected}) but the index mapping gives local {i}"
+                )
         our_g = j * N_PER_JOINT + i
         result[our_g] = entry["quality"]
+    if mismatch:
+        raise ValueError(
+            f"{yaml_path}: quality YAML parameter order does not match "
+            "_YAML_INERTIA_YAML2OUR / _yaml_global_to_local — "
+            f"{len(mismatch)} of {len(per_param)} entries disagree:\n  "
+            + "\n  ".join(mismatch[:8])
+            + (f"\n  ... and {len(mismatch) - 8} more" if len(mismatch) > 8 else "")
+        )
     return result
 
 
@@ -1449,6 +1850,7 @@ def build_ridge_weights(
     *,
     ridge_lambda: float = RIDGE_LAMBDA,
     scale_floor: float = RIDGE_SCALE_FLOOR,
+    freeze_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Build per-parameter weighted-ridge quadratic coefficients c_i.
@@ -1467,6 +1869,9 @@ def build_ridge_weights(
     Parameters whose quality label is in ``RIDGE_FREEZE_QUALITIES``
     (``null``/``small``) get ``c_i = 0`` — they are **excluded from the ridge
     norm** and are instead hard-frozen at the prior by ``build_freeze_mask``.
+    The same applies to every entry flagged in ``freeze_mask``, so the mask
+    built by ``build_freeze_mask`` is the single source of truth for "frozen ⇒
+    no ridge".
 
     Parameters
     ----------
@@ -1480,6 +1885,10 @@ def build_ridge_weights(
     scale_floor : float
         Lower bound on the relative-deviation scale, so parameters whose
         prior is ~0 do not get an astronomically large coefficient.
+    freeze_mask : (dof*13,) bool ndarray or None
+        Where ``True``, the parameter is forced to ``c_i = 0`` (excluded from
+        the ridge norm).  Pass the mask from ``build_freeze_mask`` to keep the
+        "frozen" and "zero ridge weight" sets identical.
 
     Returns
     -------
@@ -1499,6 +1908,9 @@ def build_ridge_weights(
         prior_val = pi_list[j][i]
         scale = max(abs(prior_val), scale_floor)
         c[g] = ridge_lambda * w_q / (scale * scale)
+    if freeze_mask is not None:
+        # 冻结 ⇒ 退出岭范数（与 build_freeze_mask 同源，保证二者一致）
+        c[np.asarray(freeze_mask, dtype=bool).reshape(-1)] = 0.0
     return c
 
 
@@ -1506,16 +1918,24 @@ def build_freeze_mask(
     quality_map: dict[int, str] | None,
     dof: int,
     freeze_qualities: frozenset[str] = RIDGE_FREEZE_QUALITIES,
+    freeze_local_indices: frozenset[int] = RIDGE_FREEZE_LOCAL_INDICES,
 ) -> np.ndarray:
     """
     (dof*13,) boolean mask of parameters to **hard-freeze** (pi == prior).
 
-    Parameters whose YAML quality label is in ``freeze_qualities`` (default
-    ``RIDGE_FREEZE_QUALITIES`` = null/small) are frozen at their URDF prior by
-    an equality constraint in the solver, so they cannot move at all.  They are
-    **simultaneously excluded from the ridge norm** (``c = 0``, see
-    ``build_ridge_weights``); both halves are required, since a parameter with
-    ``c = 0`` that is *not* frozen would be completely unregularised.
+    Two independent sources, unioned:
+
+    1. Quality labels in ``freeze_qualities`` (default ``null``/``small``) —
+       too tiny for a large ridge weight to pin exactly.
+    2. The local indices in ``freeze_local_indices`` (default
+       ``RIDGE_FREEZE_LOCAL_INDICES`` = armature/damping/friction) for **every**
+       joint, regardless of quality label.
+
+    Frozen parameters are frozen at their URDF prior by an equality constraint
+    in the solver, so they cannot move at all.  They are **simultaneously
+    excluded from the ridge norm** (``c = 0``, see ``build_ridge_weights``);
+    both halves are required, since a parameter with ``c = 0`` that is *not*
+    frozen would be completely unregularised.
 
     Raises
     ------
@@ -1535,6 +1955,9 @@ def build_freeze_mask(
                 )
             if q in freeze_qualities:
                 mask[g] = True
+    for j in range(dof):
+        for i in freeze_local_indices:
+            mask[j * N_PER_JOINT + i] = True
     return mask
 
 
@@ -1719,6 +2142,7 @@ def plot_torque_comparison_measured(
     gravity: np.ndarray | None = None,
     waist_yaw_offset: float | None = None,
     grid_sample_rate: float = 500.0,
+    tau_delay: float = 0.0,
     offset: float | None = None,
     show_residual: bool = True,
     verbose: bool = True,
@@ -1810,7 +2234,7 @@ def plot_torque_comparison_measured(
 
     # --- 4) State q/v/a from the validation trajectory at the bag times ---
     q_arm, v_arm, a_arm = _recovered_at_times(
-        t_sel, dof, val_yaml, grid_sample_rate=grid_sample_rate
+        t_sel - float(tau_delay), dof, val_yaml, grid_sample_rate=grid_sample_rate
     )
     if verbose:
         print(f"  [validation] q/v/a from Fourier trajectory {val_yaml}")
@@ -1826,10 +2250,10 @@ def plot_torque_comparison_measured(
         )
 
     # --- 6) RMSE table on the held-out data ---
-    print_rmse_comparison(result, joint_names, Y_val, tau_measured)
+    stats = print_rmse_comparison(result, joint_names, Y_val, tau_measured)
 
     # --- 7) Plot ---
-    return _plot_torque_comparison_panels(
+    figures = _plot_torque_comparison_panels(
         tau_measured,
         tau_prior,
         tau_ident,
@@ -1846,6 +2270,7 @@ def plot_torque_comparison_measured(
         ),
         twin=twin,
     )
+    return {"stats": stats, "figures": figures}
 
 
 def plot_torque_comparison_simulated_validation(
@@ -1936,30 +2361,373 @@ def plot_torque_comparison_simulated_validation(
         print(f"  [sim validation] Y_val: {Y_val.shape}, tau_true: {tau_true.shape}")
 
     # --- 4) RMSE table on the held-out data (prior vs identified) ---
-    print_rmse_comparison(result, joint_names, Y_val, tau_true)
+    stats = print_rmse_comparison(result, joint_names, Y_val, tau_true)
 
     # --- 5) Optional plot ---
-    if not plot:
-        return []
-    return _plot_torque_comparison_panels(
-        tau_true,
-        Y_val @ result.pi_prior,
-        Y_val @ result.pi_identified,
-        joint_names,
-        result.joint_order,
-        dof,
-        sample_rate=sample_rate,
-        offset=offset,
-        show_residual=show_residual,
-        true_label="true",
-        title=(
-            "Joint Torque Comparison (sim held-out validation, different yaml): "
-            "true vs prior vs identified\n"
-            f"held-out yaml={Path(val_yaml).name}   "
-            "(identified on a different training yaml)"
-        ),
-        twin=twin,
+    figures = []
+    if plot:
+        figures = _plot_torque_comparison_panels(
+            tau_true,
+            Y_val @ result.pi_prior,
+            Y_val @ result.pi_identified,
+            joint_names,
+            result.joint_order,
+            dof,
+            sample_rate=sample_rate,
+            offset=offset,
+            show_residual=show_residual,
+            true_label="true",
+            title=(
+                "Joint Torque Comparison (sim held-out validation, different yaml): "
+                "true vs prior vs identified\n"
+                f"held-out yaml={Path(val_yaml).name}   "
+                "(identified on a different training yaml)"
+            ),
+            twin=twin,
+        )
+    return {"stats": stats, "figures": figures}
+
+
+# ============================================================================
+# Static-pose gravity test (--static-test, sim only)
+# ============================================================================
+def sample_static_poses(
+    reg,
+    pi_true: np.ndarray,
+    n_poses: int = STATIC_TEST_POSES,
+    seed: int = STATIC_TEST_SEED,
+    max_tries: int = 50,
+    verbose: bool = True,
+) -> dict:
+    """Sample static poses that are collision-free and within the joint limits.
+
+    A *static pose* is a joint configuration with ``v = a = 0``, so the only
+    joint torque left is the gravity term.  Poses are drawn uniformly inside the
+    **effective** position limits (``q_margin`` already applied) through
+    ``TargetLimbRegressor.sample_state`` — the position limits therefore hold by
+    construction — and then kept only if, using the regressor's own machinery:
+
+    * ``collided == False`` (self-collision pairs + table pairs for this limb),
+    * ``q_excess == 0`` (belt and braces against the effective limits),
+    * ``|tau_gravity,i| <= effortLimit_i`` for every identified joint: a pose the
+      joint could not hold statically is not a usable test pose.
+
+    The global numpy RNG is reseeded with ``seed`` (mirroring
+    ``target_limb_regressor``, which also samples through the global RNG), so a
+    given seed always reproduces the same poses.
+
+    Returns
+    -------
+    dict with ``q`` (n, dof), ``Y`` (n*dof, 13*dof) — the stacked joint-major
+    regressors, so any parameter vector can be evaluated — ``tau_true``
+    (n, dof), ``dof`` and the rejection counts.
+    """
+    dof = reg.dof
+    np.random.seed(int(seed))
+    q_poses: list[np.ndarray] = []
+    Y_list: list[np.ndarray] = []
+    tau_list: list[np.ndarray] = []
+    n_try = n_rej_coll = n_rej_tau = 0
+    pi_true = np.asarray(pi_true, dtype=float).reshape(-1)
+
+    while len(q_poses) < n_poses and n_try < n_poses * max_tries:
+        n_try += 1
+        q_full, _, _ = reg.sample_state([])  # no v/a requested => static pose
+        q_g = np.asarray([q_full[i] for i in reg.group_to_identify], dtype=float)
+        res = reg.compute_regressor(q_g, np.zeros(dof), np.zeros(dof), print_info=False)
+        if bool(res[18]) or float(res[12]) > 0.0:  # collision / outside limits
+            n_rej_coll += 1
+            continue
+        Y_g = _reorder_y_aug(res[0], dof)  # (dof, 13*dof)
+        tau_g = Y_g @ pi_true
+        if any(abs(tau_g[i]) > reg.tau_limit[i] for i in range(dof)):
+            n_rej_tau += 1
+            continue
+        q_poses.append(q_g)
+        Y_list.append(Y_g)
+        tau_list.append(tau_g)
+
+    n_found = len(q_poses)
+    if n_found == 0:
+        raise RuntimeError(
+            f"no valid static pose found in {n_try} tries "
+            f"(rejected: {n_rej_coll} collision/limits, {n_rej_tau} torque limit)"
+        )
+    if verbose:
+        note = (
+            "" if n_found >= n_poses else f"  WARNING: fewer than requested ({n_poses})"
+        )
+        print(
+            f"  [static] {n_found} static poses, seed={seed}, {n_try} tries "
+            f"(rejected: {n_rej_coll} collision/limits, {n_rej_tau} torque limit)."
+            f"{note}"
+        )
+
+    return {
+        "q": np.asarray(q_poses),
+        "Y": np.vstack(Y_list),  # (n*dof, 13*dof), row = pose k, joint d
+        "tau_true": np.asarray(tau_list),
+        "dof": dof,
+        "n_tries": n_try,
+        "n_rejected_collision": n_rej_coll,
+        "n_rejected_torque": n_rej_tau,
+    }
+
+
+def plot_static_pose_errors(
+    err: np.ndarray,
+    err_prior: np.ndarray | None,
+    tau_true: np.ndarray | None,
+    joint_names: list[str],
+    joint_order: list[int],
+    title: str = "Static-pose gravity test",
+):
+    """Diverging scatter of the static-pose torque error.
+
+    x = one column per static pose (left → right), y = ``tau − tau_true`` with
+    **0 exactly in the vertical middle** (the y limits are forced symmetric about
+    zero, covering *both* series), one marker per joint —
+    **filled = identified, hollow = prior (URDF)** — plus a thin vertical whisker
+    joining the two at each pose.  The joints are **fanned out horizontally**
+    inside each pose column (identified and prior for the same joint share the
+    same x offset, so the whisker stays vertical) instead of being stacked on one
+    line, and the pose columns are separated by **alternating white / light-grey
+    background bands**.  A marker on the centre line means that model reproduces
+    the true gravity torque for that joint at that pose; above / below means
+    over- / under-estimation.  The whisker length is the change the
+    identification made, and "shorter and closer to the centre line" = better.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    n_poses = err.shape[0]
+    x = np.arange(1, n_poses + 1).astype(float)
+    # Symmetric limits around 0 (covering BOTH series) → centre is exactly y = 0.
+    spread = [float(np.max(np.abs(err)))]
+    if err_prior is not None:
+        spread.append(float(np.max(np.abs(err_prior))))
+    ymax = 1.15 * max(max(spread), 1e-9)
+    colors = plt.cm.tab10(np.linspace(0.0, 1.0, 10))
+    markers = ["o", "s", "^", "D", "v", "P", "X", "<", ">", "h"]
+    # 同一姿势的多个关节左右叉开，避免 N 个点叠在一条竖线上；同一关节的
+    # identified / prior 共用同一偏移，所以对比竖线仍然是竖直的。
+    n_j = len(joint_order)
+    half = 0.34 if n_j > 1 else 0.0
+    off_map = {
+        d: float(off)
+        for d, off in zip(sorted(joint_order), np.linspace(-half, half, n_j))
+    }
+
+    fig, ax = plt.subplots(figsize=(max(9.5, 0.55 * n_poses + 4.5), 6.2))
+    for j, d in enumerate(joint_order):
+        name = joint_names[d] if joint_names else f"joint_{d}"
+        color = colors[j % 10]
+        marker = markers[j % len(markers)]
+        xj = x + off_map[d]  # <- horizontal fan inside the pose column
+        rms = float(np.sqrt(np.mean(err[:, j] ** 2)))
+        t_rms = (
+            float(np.sqrt(np.mean(tau_true[:, j] ** 2)))
+            if tau_true is not None
+            else float("nan")
+        )
+        if err_prior is not None:
+            ax.vlines(
+                xj,
+                err_prior[:, j],
+                err[:, j],
+                color=color,
+                linewidth=0.9,
+                alpha=0.35,
+                zorder=1,
+            )
+            ax.scatter(
+                xj,
+                err_prior[:, j],
+                s=46,
+                marker=marker,
+                facecolors="none",
+                edgecolors=color,
+                linewidths=1.3,
+                alpha=0.9,
+                zorder=2,
+            )
+            rms_p = float(np.sqrt(np.mean(err_prior[:, j] ** 2)))
+            label = (
+                f"{name}: ident RMS {rms:.3g} / prior {rms_p:.3g} Nm (true {t_rms:.3g})"
+            )
+        else:
+            label = f"{name}: err RMS {rms:.3g} Nm  (true RMS {t_rms:.3g})"
+        ax.scatter(
+            xj,
+            err[:, j],
+            s=68,
+            marker=marker,
+            color=color,
+            edgecolors="white",
+            linewidths=0.8,
+            zorder=3,
+            label=label,
+        )
+    ax.axhline(0.0, color="black", linewidth=1.4, zorder=2)
+    ax.set_ylim(-ymax, ymax)
+    ax.set_xlim(0.35, n_poses + 0.65)
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(int(v)) for v in x])
+    ax.set_xlabel("Static pose #   (each pose's joints are fanned out horizontally)")
+    ax.set_ylabel(
+        "identified / prior − true   [Nm]"
+        if err_prior is not None
+        else "identified − true   [Nm]"
     )
+    ax.set_title(title)
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.set_axisbelow(True)
+    # 交替白 / 浅灰背景带，把每个姿势的列分隔开（带边界正好落在姿势之间）。
+    for i in range(1, n_poses + 1):
+        if i % 2 == 0:
+            ax.axvspan(i - 0.5, i + 0.5, color="0.93", zorder=0, linewidth=0)
+
+    handles, labels = ax.get_legend_handles_labels()
+    if err_prior is not None:
+        gray = "0.35"
+        handles += [
+            Line2D(
+                [],
+                [],
+                linestyle="none",
+                marker="o",
+                markersize=9,
+                color=gray,
+                label="filled = identified",
+            ),
+            Line2D(
+                [],
+                [],
+                linestyle="none",
+                marker="o",
+                markersize=9,
+                markerfacecolor="none",
+                markeredgecolor=gray,
+                markeredgewidth=1.3,
+                label="hollow = prior (URDF)",
+            ),
+        ]
+    ax.legend(handles=handles, loc="best", fontsize=8)
+    fig.tight_layout()
+    plt.show()
+    return fig
+
+
+def run_static_pose_test(
+    reg,
+    pi_true: np.ndarray,
+    pi_identified: np.ndarray,
+    joint_names: list[str],
+    joint_order: list[int],
+    pi_prior: np.ndarray | None = None,
+    n_poses: int = STATIC_TEST_POSES,
+    seed: int = STATIC_TEST_SEED,
+    plot: bool = True,
+    verbose: bool = True,
+):
+    """Static-pose gravity test: identified / prior vs true joint torques.
+
+    All torques use the **same** regressor (the prior URDF kinematics — exactly
+    how the training torque was synthesised), so the differences isolate the
+    *parameter* error:
+
+        tau_true  = Y_static @ pi_true
+        tau_ident = Y_static @ pi_identified
+        tau_prior = Y_static @ pi_prior          (if pi_prior is given)
+        err       = tau − tau_true   [Nm]
+
+    Every pose has ``v = a = 0``, so only the gravity term is exercised: this
+    checks the mass / CoM / inertia part of the model, which armature / damping
+    / friction cannot mask.  With ``pi_prior`` the plot/table also show how much
+    the identification improved the static gravity prediction over the raw URDF.
+    Returns ``(err, err_prior_or_None, fig_or_None)``.
+    """
+    dof = reg.dof
+    sampled = sample_static_poses(
+        reg, pi_true, n_poses=n_poses, seed=seed, verbose=verbose
+    )
+    Y_static = sampled["Y"]  # (n*dof, 13*dof)
+    tau_true = sampled["tau_true"]  # (n, dof)
+    n = int(tau_true.shape[0])
+    tau_ident = (Y_static @ np.asarray(pi_identified, dtype=float).reshape(-1)).reshape(
+        n, dof
+    )
+    err = tau_ident - tau_true
+    err_prior = None
+    if pi_prior is not None:
+        tau_prior = (Y_static @ np.asarray(pi_prior, dtype=float).reshape(-1)).reshape(
+            n, dof
+        )
+        err_prior = tau_prior - tau_true
+
+    print(
+        f"\nStatic-pose gravity test — {n} poses, seed={seed}  "
+        f"(err = model − tau_true;  improve = 1 − ident RMS / prior RMS):"
+    )
+    if err_prior is None:
+        hdr = (
+            f"{'Joint':<22s} {'errRMS':>9s} {'errMax':>9s} {'errMean':>9s} "
+            f"{'trueRMS':>9s} {'err/true':>8s}"
+        )
+    else:
+        hdr = (
+            f"{'Joint':<22s} {'identRMS':>9s} {'identMax':>9s} {'priorRMS':>9s} "
+            f"{'priorMax':>9s} {'impr':>8s} {'trueRMS':>8s}"
+        )
+    print(hdr)
+    print("-" * len(hdr))
+    for j, d in enumerate(joint_order):
+        name = joint_names[d] if joint_names else f"joint_{d}"
+        rms = float(np.sqrt(np.mean(err[:, j] ** 2)))
+        rms_max = float(np.abs(err[:, j]).max())
+        t_rms = float(np.sqrt(np.mean(tau_true[:, j] ** 2)))
+        if err_prior is None:
+            rel = rms / t_rms * 100 if t_rms > 1e-12 else float("nan")
+            print(
+                f"{name:<22s} {rms:>9.4f} {rms_max:>9.4f} "
+                f"{float(err[:, j].mean()):>9.4f} {t_rms:>9.4f} {rel:>7.1f}%"
+            )
+        else:
+            rms_p = float(np.sqrt(np.mean(err_prior[:, j] ** 2)))
+            imp = (1 - rms / rms_p) * 100 if rms_p > 1e-12 else float("nan")
+            print(
+                f"{name:<22s} {rms:>9.4f} {rms_max:>9.4f} {rms_p:>9.4f} "
+                f"{float(np.abs(err_prior[:, j]).max()):>9.4f} {imp:>7.1f}% "
+                f"{t_rms:>8.4f}"
+            )
+    print("-" * len(hdr))
+    rms_all = float(np.sqrt(np.mean(err**2)))
+    rms_all_p = float(np.sqrt(np.mean(err_prior**2))) if err_prior is not None else None
+    if rms_all_p is None:
+        print(f"{'ALL':<22s} {rms_all:>9.4f}")
+    else:
+        imp = (1 - rms_all / rms_all_p) * 100 if rms_all_p > 1e-12 else float("nan")
+        print(
+            f"{'ALL':<22s} {rms_all:>9.4f} {'':>9s} {rms_all_p:>9.4f} "
+            f"{'':>9s} {imp:>7.1f}%"
+        )
+
+    if not plot:
+        return err, err_prior, None
+    fig = plot_static_pose_errors(
+        err,
+        err_prior,
+        tau_true,
+        joint_names,
+        joint_order,
+        title=(
+            "Static-pose gravity test — model − true joint torque\n"
+            f"{n} random collision-free static poses (seed={seed})  |  "
+            f"RMS: identified {rms_all:.4f} Nm"
+            + (f" vs prior {rms_all_p:.4f} Nm" if rms_all_p is not None else "")
+        ),
+    )
+    return err, err_prior, fig
 
 
 # ============================================================================
@@ -2350,6 +3118,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "prior；越大越把参数拉回 URDF prior）",
     )
     ap.add_argument(
+        "--lmi-shape-weight",
+        type=float,
+        default=LMI_SHAPE_WEIGHT,
+        metavar="W",
+        help="软铰链形状惩罚权重：目标函数加 "
+        "W·Σ_d max(0, 1 − λ_min(Σ_C,d)/(FRAC·λ_min(Σ_C,d^prior)))。"
+        "物理一致性只剩数值下限 LMI_EPS（严格 PD），连杆形状完全靠这一项拉出来："
+        "解会主动往锥内部挪，而不是贴在边界上被压扁。"
+        "0 = 关闭（退回“贴在锥边界”的压扁行为）；≥0.3 就饱和，默认 1.0",
+    )
+    ap.add_argument(
+        "--lmi-shape-frac",
+        type=float,
+        default=LMI_SHAPE_FRAC,
+        metavar="FRAC",
+        help="软铰链目标 = FRAC × 先验自身的三角不等式余量 λ_min(Σ_C^prior)。"
+        "实测：0.3 几乎零代价（train 不变、val/静态略好）就能把最扁的 J15/J16/J17 "
+        "拉回接近真值；0.5 也免费；1.0 会过冲（把 J16/J17 撑得比真值还胖）",
+    )
+    ap.add_argument(
         "--csv-topic",
         default="hardware_joint_state",
         help="[meas] <bag>/csv/ 下的 CSV 主题（实测力矩列）",
@@ -2367,6 +3155,17 @@ def _build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="[sim] 傅立叶轨迹回放时间倍率（>1 加速，<1 减速；默认 1.0 = "
         "正常速度，物理周期 = TRAJ_PERIOD/time_coeffs）",
+    )
+    ap.add_argument(
+        "--tau-delay",
+        type=float,
+        default=TAU_DELAY,
+        metavar="SECONDS",
+        help="[meas] 实测力矩通道的时延补偿：认为 torque(t) 对应 t−τ 时刻的状态，"
+        "把回归器在 (t−τ) 上求值。>0 = 力矩滞后于状态（传输/滤波延迟的典型情形），"
+        "负值 = 力矩超前。时移会把 armature 列变成 "
+        "cos(ωτ)·q̈ + ω·sin(ωτ)·q̇，即在 armature 与 damping 之间转移权重。"
+        "默认 0 = 不补偿",
     )
 
     # ---- 模型 / 环境 ----
@@ -2392,13 +3191,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--val-yaml",
         "-v-y",
         default=None,
+        nargs="+",
         metavar="NAME",
-        help="交叉验证用轨迹 YAML（手动指定，与 --yaml 不同的一条）：\n"
-        "  [sim]  辨识后把它当作 held-out 轨迹：在它上面用同一 pi_true 重算真值"
-        "tau，打印 prior vs identified 的 RMSE 改善，判断辨识是否泛化。不给 → "
-        "默认不做交叉对比\n"
-        "  [meas] 在其 _meta.source_bag 对应 bag 的实测数据上验证；不给则默认用"
-        "文件顶部 VAL_YAML_PATH 常量",
+        help="交叉验证用轨迹 YAML（可以给**多个**，空格分隔；每一个都必须是不同于 "
+        "--yaml 的轨迹）：\n"
+        "  [sim]  辨识后逐条当作 held-out 轨迹：在每条上用同一 pi_true 重算真值"
+        "tau，打印 prior vs identified 的 RMSE 改善，判断辨识是否泛化；多条时最后"
+        "再汇总一张跨 yaml 总表。不给 → 默认不做交叉对比\n"
+        "  [meas] 在每个 yaml 的 _meta.source_bag 对应 bag 的实测数据上分别验证"
+        "（各自用**自己那个 bag** 的 IMU 重力/腰角）；不给则默认用文件顶部"
+        " VAL_YAML_PATH 常量",
     )
     ap.add_argument(
         "-w",
@@ -2419,10 +3221,33 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="跳过力矩对比图",
     )
+    ap.add_argument(
+        "--static-test",
+        "-static",
+        action="store_true",
+        help="[仅 --sim] 额外的静态姿势重力测试：用给定种子随机采样 N 个不碰撞、"
+        "不超限的静态姿势（v=a=0 ⇒ 只剩重力项），比较真值 URDF 与辨识参数算出的"
+        "关节力矩之差，并画成以 0 为纵轴中心的散点图（每列一个姿势、每个关节一个点）",
+    )
+    ap.add_argument(
+        "--static-poses",
+        type=int,
+        default=STATIC_TEST_POSES,
+        metavar="N",
+        help="[--static-test] 随机静态姿势数量",
+    )
+    ap.add_argument(
+        "--static-seed",
+        type=int,
+        default=STATIC_TEST_SEED,
+        metavar="SEED",
+        help="[--static-test] 姿势采样随机种子（固定则每次姿态相同）",
+    )
 
     # ---- 结果导出 ----
     ap.add_argument(
         "--no-save-urdf",
+        "-no",
         action="store_true",
         help="不把辨识结果写成 URDF（默认会写）",
     )
@@ -2442,6 +3267,11 @@ def main(argv: list[str] | None = None) -> None:
     from identification.fourier_trajectory import FourierTrajectory
 
     is_sim = args.sim
+    if args.static_test and not is_sim:
+        raise SystemExit(
+            "--static-test 只在 --sim 模式下可用（meas 模式没有 pi_true，"
+            "无法算“实际 URDF 的关节力矩”）"
+        )
 
     # 结果 URDF 的时间戳（整次运行共用一个，保证同步；重名时再追加 _1/_2…）。
     urdf_ts = datetime.now().strftime("%y%m%d_%H%M%S")
@@ -2522,7 +3352,13 @@ def main(argv: list[str] | None = None) -> None:
     print(f"group           : (auto: 从 {traj_yaml} _meta.group)")
     print(f"sample_rate     : {args.sample_rate}")
     print(f"ridge_lambda    : {args.ridge_lambda}")
+    print(f"tau_delay       : {args.tau_delay * 1e3:+.2f} ms")
     print(f"twin-id         : {args.twin_id or '(Global)'}")
+    if args.static_test:
+        print(
+            f"static test     : {args.static_poses} poses, seed={args.static_seed} "
+            f"(sim only)"
+        )
     if args.no_save_urdf:
         save_urdf_desc = "(disabled: --no-save-urdf)"
     else:
@@ -2534,7 +3370,7 @@ def main(argv: list[str] | None = None) -> None:
         save_urdf_desc = f"{out_dir}/{Path(args.urdf).stem}_{urdf_ts}.urdf"
     print(f"save urdf       : {save_urdf_desc}")
     print(
-        f"gravity         : "
+        "gravity         : "
         + (
             f"{np.round(gravity, 6).tolist()}  |g|={np.linalg.norm(gravity):.6f} m/s²"
             if gravity is not None
@@ -2543,7 +3379,7 @@ def main(argv: list[str] | None = None) -> None:
         + f"   [{setup_src}]"
     )
     print(
-        f"waist_yaw_offset: "
+        "waist_yaw_offset: "
         + (
             f"{waist_yaw:.9f} rad"
             if waist_yaw is not None
@@ -2551,13 +3387,13 @@ def main(argv: list[str] | None = None) -> None:
         )
     )
 
-    # ---- 交叉验证轨迹 YAML（--val-yaml，手动指定）----
+    # ---- 交叉验证轨迹 YAML（--val-yaml，可多条）----
     #   meas：在另一条轨迹/bag 上做 held-out 验证（不给时默认 VAL_YAML_PATH 常量）。
     #   sim：只有显式给了 --val-yaml 才在辨识后做 held-out 交叉对比；不给 = 不做。
     if is_sim:
-        val_yaml = args.val_yaml  # None → 默认不交叉对比
+        val_yamls: list[str] = list(args.val_yaml or [])  # 空 → 默认不交叉对比
     else:
-        val_yaml = args.val_yaml or str(VAL_YAML_PATH)
+        val_yamls = list(args.val_yaml or [str(VAL_YAML_PATH)])
 
     # 1. Prepare data
     # ------------------------------------------------------------------
@@ -2588,40 +3424,53 @@ def main(argv: list[str] | None = None) -> None:
             waist_yaw_offset=waist_yaw,
             trajectory_yaml=traj_yaml,
             twin=args.twin_id,  # 辨识用时间窗（选一个质量好的周期，None=全程）
+            tau_delay=args.tau_delay,  # 力矩通道时延补偿（秒，--tau-delay）
         )
 
     # 2. Configure weighted-ridge regularization.
     #    每个参数按质量分档获得 L2 惩罚系数（质量好 → 系数小 → 允许偏离 URDF
     #    prior 更多；质量差 → 系数大 → 更强地拉回 prior），由 build_ridge_weights
-    #    从质量标签生成；LMI 严格正定余量直接用模块常量 LMI_EPS。
+    #    从质量标签生成。连杆形状另由 2c 的软铰链约束（见 LMI_SHAPE_FRAC），
+    #    LMI 自身只留数值下限 LMI_EPS。
     quality_map = None
     if quality_yaml is not None:
         quality_path = FourierTrajectory._coeffs_dir / quality_yaml
         if quality_path.is_file():
             quality_map = load_yaml_param_quality(quality_path)
-    ridge_weights = build_ridge_weights(
-        quality_map, data["pi_prior"], ridge_lambda=args.ridge_lambda
-    )
     freeze_mask = build_freeze_mask(quality_map, dof=int(data["dof"]))
+    # freeze_mask 是**唯一来源**：被冻结的参数同时退出岭范数（c = 0）。
+    # 反之 c = 0 而未冻结 = 参数既无惩罚又可自由移动，求解器会直接报错拦下。
+    ridge_weights = build_ridge_weights(
+        quality_map,
+        data["pi_prior"],
+        ridge_lambda=args.ridge_lambda,
+        freeze_mask=freeze_mask,
+    )
     from collections import Counter
 
+    dof_ = int(data["dof"])
     n_freeze = int(freeze_mask.sum())
+    n_dyn = dof_ * len(RIDGE_FREEZE_LOCAL_INDICES)
+    n_qual = int(
+        build_freeze_mask(quality_map, dof=dof_, freeze_local_indices=frozenset()).sum()
+    )
+    print(
+        f"  hard-freeze: {n_freeze}/{dof_ * N_PER_JOINT} params → pi == prior, "
+        f"EXCLUDED from the ridge (c = 0)  [quality null/small: {n_qual}; "
+        f"armature/damping/friction: {n_dyn}; overlap "
+        f"{n_qual + n_dyn - n_freeze}]"
+    )
     if quality_map:
         qc = Counter(quality_map.values())
-        n_excl = sum(v for k, v in qc.items() if k in RIDGE_FREEZE_QUALITIES)
         print(f"  YAML quality distribution: {dict(qc)}")
         print(
-            f"  ridge per-quality weights (participating bands only): "
+            "  ridge per-quality weights (participating bands only): "
             f"{dict(RIDGE_QUALITY_WEIGHTS)}"
-        )
-        print(
-            f"  hard-freeze (null/small): {n_freeze} params → pi == prior, "
-            f"EXCLUDED from the ridge (c = 0; {n_excl} labelled null/small)"
         )
     else:
         print(
-            f"  无 _diagnostics.per_param 质量标签 → 全部按默认分档 "
-            f"'{DEFAULT_QUALITY}' 加岭惩罚，无冻结"
+            "  无 _diagnostics.per_param 质量标签 → 剩余参数全部按默认分档 "
+            f"'{DEFAULT_QUALITY}' 加岭惩罚"
         )
     c_eff = ridge_weights.copy()
     c_eff[freeze_mask] = np.nan
@@ -2630,6 +3479,36 @@ def main(argv: list[str] | None = None) -> None:
         f"[{np.nanmin(c_eff):.4g}, {np.nanmax(c_eff):.4g}] "
         f"(hard-frozen: {n_freeze})"
     )
+
+    # 2b. 物理一致性 LMI 只剩数值下限 LMI_EPS（严格 PD）：形状不再用硬余量约束，
+    #     而是全部交给 2c 的软铰链（见 LMI_SHAPE_FRAC 的实测表）。
+    print(
+        f"  LMI floor: uniform eps = {LMI_EPS:.1g} (strict PD only; "
+        f"link shape comes from the soft hinge below)"
+    )
+
+    # 2c. 软铰链形状惩罚：把硬余量的“墙”换成“拉力”。参考值 = FRAC × 先验自身的
+    #     三角不等式余量 λ_min(Σ_C^prior)；W=0 时完全不进入问题（退回“只有 LMI_EPS
+    #     下限”的旧行为：解贴在锥边界、连杆被压扁）。
+    if args.lmi_shape_frac is not None and args.lmi_shape_frac <= 0:
+        raise SystemExit("--lmi-shape-frac must be > 0 (it is a dividend)")
+    if args.lmi_shape_weight is None or args.lmi_shape_weight < 0:
+        raise SystemExit("--lmi-shape-weight must be >= 0")
+    shape_weight = float(args.lmi_shape_weight or 0.0)
+    shape_ref = build_shape_reference(data["pi_prior"], dof_, frac=args.lmi_shape_frac)
+    if shape_weight > 0:
+        pri_slack = shape_ref / float(args.lmi_shape_frac)
+        print(
+            f"  shape hinge ON: W={shape_weight:g}, target = {args.lmi_shape_frac:g}"
+            f"×prior slack → [{shape_ref.min():.4g}, {shape_ref.max():.4g}] "
+            f"(prior slack [{pri_slack.min():.4g}, {pri_slack.max():.4g}])"
+        )
+    else:
+        print(
+            f"  shape hinge OFF (W=0) → 解会贴在 LMI 锥边界、连杆被压扁；"
+            f"target would be {args.lmi_shape_frac:g}×prior slack = "
+            f"[{shape_ref.min():.4g}, {shape_ref.max():.4g}] (--lmi-shape-weight 1)"
+        )
 
     # 3. Solve (weighted ridge + null/small hard-freeze)
     solver = SDPSolver(solver_name="MOSEK", verbose=True)
@@ -2640,7 +3519,8 @@ def main(argv: list[str] | None = None) -> None:
         joint_order=data["joint_order"],
         ridge_weights=ridge_weights,
         freeze_mask=freeze_mask,
-        inertia_eps=LMI_EPS,
+        shape_ref=shape_ref,
+        shape_weight=shape_weight,
         joint_names=data["joint_names"],
     )
 
@@ -2660,7 +3540,11 @@ def main(argv: list[str] | None = None) -> None:
     print("CROSS-VALIDATION RESULTS".center(100))
     print("=" * 100)
     print_lmi_feasibility(
-        result.pi_identified, data["joint_names"], result.joint_order, "identified"
+        result.pi_identified,
+        data["joint_names"],
+        result.joint_order,
+        "identified",
+        shape_ref=shape_ref,
     )
 
     # 4c. 导出辨识结果 URDF —— 把辨识出的 link 惯性（质量/质心/绕质心惯量）与关节
@@ -2684,6 +3568,14 @@ def main(argv: list[str] | None = None) -> None:
                 "trajectory_yaml": traj_yaml,
                 "quality_yaml": quality_yaml or "(none)",
                 "ridge_lambda": args.ridge_lambda,
+                "lmi_floor": f"uniform LMI_EPS={LMI_EPS:.1g} (strict PD only)",
+                "lmi_shape_hinge": (
+                    f"W={shape_weight:g}, target = {args.lmi_shape_frac:g}×prior "
+                    f"lambda_min(Sigma_C) = [{shape_ref.min():.4g}, "
+                    f"{shape_ref.max():.4g}]"
+                    if shape_weight > 0
+                    else "off (W=0)"
+                ),
                 "dof": f"{data['dof']} ({', '.join(data['joint_names'])})",
                 "gravity": np.round(gravity, 6).tolist()
                 if gravity is not None
@@ -2691,6 +3583,27 @@ def main(argv: list[str] | None = None) -> None:
                 "waist_yaw_offset": waist_yaw,
                 "generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             },
+        )
+
+    # 4d. 静态姿势重力测试（--static-test，仅 sim）—— 随机采样不碰撞、不超限的静态
+    #     姿势（v = a = 0 ⇒ 只剩重力项），比较“真值 URDF 的关节力矩”与“辨识参数算
+    #     出的关节力矩”之差，画成以 0 为中心纵轴的散点图（每列一个姿势，每个关节
+    #     在纵向上一个点；误差为 0 则停在最中间）。两者用**同一个回归器**（prior URDF
+    #     的几何），与训练数据的合成方式一致 ⇒ 差异纯粹来自参数误差。
+    if args.static_test:
+        print("\n" + "=" * 100)
+        print("STATIC-POSE GRAVITY TEST (--static-test)".center(100))
+        print("=" * 100)
+        run_static_pose_test(
+            reg=data["reg"],
+            pi_true=data["pi_true"],
+            pi_identified=result.pi_identified,
+            pi_prior=data["pi_prior"],  # 同期叠加 URDF 先验的误差作对比
+            joint_names=data["joint_names"],
+            joint_order=result.joint_order,
+            n_poses=args.static_poses,
+            seed=args.static_seed,
+            plot=not args.no_plot,
         )
 
     # 5. Cross-validation / comparison plot
@@ -2709,53 +3622,116 @@ def main(argv: list[str] | None = None) -> None:
                 twin=args.twin,
             )
         else:
-            # 验证 bag 的机体系重力/腰关节角度按**它自己**的 bag 读数求平均
-            # （不同录制场次的姿态不同，不能沿用辨识 bag 的值）；
+            # 逐条验证轨迹：每条 yaml 的验证 bag 用它**自己** bag 读到的机体系重力/
+            # 腰关节角度（不同录制场次的姿态不同，不能沿用辨识 bag 的值）；
             # --gravity / --waist-offset 显式覆盖时沿用用户给的值。
-            val_gravity, val_waist = gravity, waist_yaw
-            if args.gravity is None or args.waist_offset is None:
-                print("  [setup] validation bag (from val_yaml _meta.source_bag):")
-                g_val, w_val = read_setup_from_bag(_yaml_source_bag(val_yaml))
-                if args.gravity is None:
-                    val_gravity = g_val
-                if args.waist_offset is None:
-                    val_waist = w_val
-            plot_torque_comparison_measured(
-                result,
-                urdf_path=args.urdf,  # 先验模型（regressor）
-                val_yaml=val_yaml,
-                val_bag_name=None,  # 从 val YAML _meta.source_bag 读取
-                joint_names=data["joint_names"],
-                limb_group=None,
-                csv_topic=args.csv_topic,
-                sample_rate=args.sample_rate,
-                gravity=val_gravity,
-                waist_yaw_offset=val_waist,
-                twin=args.twin,  # 时间窗缩放，如 "0:13.4"
-            )
+            cv_rows = []
+            for i_cv, val_yaml in enumerate(val_yamls, 1):
+                if len(val_yamls) > 1:
+                    print("\n" + "-" * 100)
+                    print(
+                        f"[{i_cv}/{len(val_yamls)}] validation yaml: {val_yaml}".center(
+                            100
+                        )
+                    )
+                    print("-" * 100)
+                note = "?"
+                try:
+                    note = _yaml_source_bag(val_yaml)
+                    val_gravity, val_waist = gravity, waist_yaw
+                    if args.gravity is None or args.waist_offset is None:
+                        print(
+                            "  [setup] validation bag (from val_yaml _meta.source_bag):"
+                        )
+                        g_val, w_val = read_setup_from_bag(note)
+                        if args.gravity is None:
+                            val_gravity = g_val
+                        if args.waist_offset is None:
+                            val_waist = w_val
+                    out = plot_torque_comparison_measured(
+                        result,
+                        urdf_path=args.urdf,  # 先验模型（regressor）
+                        val_yaml=val_yaml,
+                        val_bag_name=None,  # 从 val YAML _meta.source_bag 读取
+                        joint_names=data["joint_names"],
+                        limb_group=None,
+                        csv_topic=args.csv_topic,
+                        sample_rate=args.sample_rate,
+                        gravity=val_gravity,
+                        waist_yaw_offset=val_waist,
+                        tau_delay=args.tau_delay,  # 与辨识一致的时延补偿
+                        twin=args.twin,  # 时间窗缩放，如 "0:13.4"
+                    )
+                    cv_rows.append(
+                        {
+                            "yaml": Path(val_yaml).name,
+                            "note": note,
+                            "stats": out["stats"],
+                        }
+                    )
+                except Exception as exc:
+                    # 一条坏 yaml（没有 source_bag / 不同 limb group / 缺 bag）不应把
+                    # 整次多轨迹验证干掉 —— 报告并继续下一条。
+                    print(f"  [CV] FAILED for {val_yaml}: {type(exc).__name__}: {exc}")
+                    cv_rows.append(
+                        {
+                            "yaml": Path(val_yaml).name,
+                            "note": note,
+                            "stats": None,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
+            print_cv_summary(cv_rows, data["joint_names"], result.joint_order)
 
-    # 5b. sim held-out cross-validation（可选）—— 只有显式给了 --val-yaml（一条
-    #     *不同的* 轨迹）才做：用同一 pi_true 在它上面重算真值 tau，看 identified
-    #     相对 prior 在新轨迹上是否仍有改善（Improve %）——即辨识是泛化还是只背
-    #     下了训练数据。不给 --val-yaml = 默认不做。即使 --no-plot 也打印 RMSE 表。
-    if is_sim and val_yaml is not None:
+    # 5b. sim held-out cross-validation（可选）—— 只有显式给了 --val-yaml（一条或
+    #     多条 *不同的* 轨迹）才做：用同一 pi_true 在每条上重算真值 tau，看
+    #     identified 相对 prior 在新轨迹上是否仍有改善（Improve %）——即辨识是
+    #     泛化还是只背下了训练数据。不给 --val-yaml = 默认不做。即使 --no-plot
+    #     也打印 RMSE 表，最后汇总成一张跨 yaml 总表。
+    if is_sim and val_yamls:
         print("\n" + "=" * 100)
         print("SIM HELD-OUT CROSS-VALIDATION (different trajectory yaml)".center(100))
         print("=" * 100)
-        plot_torque_comparison_simulated_validation(
-            result,
-            urdf_path=args.urdf,
-            val_yaml=val_yaml,
-            pi_true=data["pi_true"],
-            joint_names=data["joint_names"],
-            limb_group=None,  # 从 val YAML 的 _meta.group 读取（须与辨识同 dof）
-            sample_rate=args.sample_rate,
-            time_coeffs=args.time_coeffs,
-            gravity=gravity,
-            waist_yaw_offset=waist_yaw,
-            twin=args.twin,  # 时间窗缩放，如 "0:13.4"
-            plot=not args.no_plot,
-        )
+        cv_rows = []
+        for i_cv, val_yaml in enumerate(val_yamls, 1):
+            if len(val_yamls) > 1:
+                print("\n" + "-" * 100)
+                print(
+                    f"[{i_cv}/{len(val_yamls)}] held-out yaml: {val_yaml}".center(100)
+                )
+                print("-" * 100)
+            note = "?"
+            try:
+                note = FourierTrajectory.load_group(val_yaml, default="?")
+                out = plot_torque_comparison_simulated_validation(
+                    result,
+                    urdf_path=args.urdf,
+                    val_yaml=val_yaml,
+                    pi_true=data["pi_true"],
+                    joint_names=data["joint_names"],
+                    limb_group=None,  # 从 val YAML 的 _meta.group 读取（须与辨识同 dof）
+                    sample_rate=args.sample_rate,
+                    time_coeffs=args.time_coeffs,
+                    gravity=gravity,
+                    waist_yaw_offset=waist_yaw,
+                    twin=args.twin,  # 时间窗缩放，如 "0:13.4"
+                    plot=not args.no_plot,
+                )
+                cv_rows.append(
+                    {"yaml": Path(val_yaml).name, "note": note, "stats": out["stats"]}
+                )
+            except Exception as exc:
+                # 一条坏 yaml（不同 limb group / dof 不匹配）不应把整批验证干掉。
+                print(f"  [CV] FAILED for {val_yaml}: {type(exc).__name__}: {exc}")
+                cv_rows.append(
+                    {
+                        "yaml": Path(val_yaml).name,
+                        "note": note,
+                        "stats": None,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+        print_cv_summary(cv_rows, data["joint_names"], result.joint_order)
 
     print("\n" + "=" * 100)
     print("SDP identification finished.".center(100))
