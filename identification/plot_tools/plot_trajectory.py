@@ -2,9 +2,9 @@
 """
 Plot unified PSO excitation trajectory from a YAML file.
 
-Usage:
-  python3 -m identification.plot_unified_trajectory
-  python3 -m identification.plot_unified_trajectory name.yaml
+Usage (from the package root, with the workspace overlay sourced):
+  python3 -m identification.thesis_tools.plot_trajectory              # latest yaml
+  python3 -m identification.thesis_tools.plot_trajectory excite_left_leg.yaml
 """
 
 import sys
@@ -17,6 +17,28 @@ from pathlib import Path
 from identification.fourier_trajectory import FourierTrajectory
 
 SAMPLE_RATE = 500
+
+# Per-joint line colours, assigned by joint index.
+#
+# Picked explicitly instead of sampling a colormap: ``plt.cm.tab10(np.linspace(
+# 0, 1, dof))`` interpolates *between* colormap entries, which yields washed-out
+# in-between hues (olive #bcbd22, cyan #17becf, pink #e377c2) whose contrast
+# against white drops to 1.8-2.3 -- the thin lines then disappear into the page.
+# These eight are dark/saturated (contrast vs. white >= 3.4 for the first six,
+# i.e. above the WCAG large-text threshold) and stay separated for normal vision
+# as well as for red-green deficiency (min dE_Lab 40 / 20 / 12 for normal /
+# deuteranopia / protanopia).  The two limbs need 5 and 6 colours, the rest are
+# extras for longer chains.
+JOINT_COLORS = [
+    "#1f77b4",  # blue
+    "#e66101",  # orange
+    "#2ca02c",  # green
+    "#880000",  # dark red
+    "#332288",  # indigo
+    "#333333",  # dark grey
+    "#cc79a7",  # pink
+    "#000000",  # black
+]
 
 
 def load_trajectory(yaml_path):
@@ -93,7 +115,9 @@ def main():
             sys.exit(1)
 
     name = (
-        Path(__file__).resolve().parent.parent / "trajectory_coefficients" / yaml_name
+        Path(__file__).resolve().parent.parent.parent
+        / "trajectory_coefficients"
+        / yaml_name
     ).resolve()
     print(f"Loading {name} …")
     q, dq, ddq, tau, joint_names = load_trajectory(name)
@@ -105,7 +129,7 @@ def main():
         "Acceleration ddq (rad/s²)",
         "Torque τ (Nm)",
     ]
-    joint_colors = plt.cm.tab10(np.linspace(0, 1, dof))
+    joint_colors = [JOINT_COLORS[j % len(JOINT_COLORS)] for j in range(dof)]
 
     fig, axes = plt.subplots(4, 1, figsize=(10, 10), sharex=True)
     data = [q, dq, ddq, tau]
@@ -114,7 +138,7 @@ def main():
     for row in range(4):
         ax = axes[row]
         for j in range(dof):
-            ax.plot(t, data[row][:, j], color=joint_colors[j], lw=0.8, alpha=0.85)
+            ax.plot(t, data[row][:, j], color=joint_colors[j], lw=1.0)
 
         ax.set_ylabel(ylabels[row], fontsize=13)
         ax.grid(True, alpha=0.5)
@@ -128,7 +152,7 @@ def main():
             ax.set_ylim(vmin - margin, vmax + margin)
 
     fig.legend(joint_names, loc="upper right", fontsize=10, ncol=1, framealpha=0.9)
-    fig.suptitle(f"Unified Excitation Trajectory — {yaml_name}", fontsize=15, y=0.95)
+    fig.suptitle(f"Excitation Trajectory — {yaml_name}", fontsize=15, y=0.95)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show()
 

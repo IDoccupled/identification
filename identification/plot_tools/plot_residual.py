@@ -29,7 +29,7 @@ from identification.target_limb_regressor import (
     VALID_LIMB_GROUPS,
 )
 
-PKG_DIR = Path(__file__).resolve().parent.parent
+PKG_DIR = Path(__file__).resolve().parent.parent.parent
 BAG_DATA = PKG_DIR / "bag_data"
 COEFFS_DIR = PKG_DIR / "trajectory_coefficients"
 
