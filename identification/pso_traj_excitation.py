@@ -43,7 +43,7 @@ URDF_PATH = (
 ).resolve()
 
 YAML_DIR = Path(__file__).resolve().parent.parent / "trajectory_coefficients"
-DEFAULT_TARGET_GROUP = "left_leg"  # overridable with --group
+DEFAULT_TARGET_GROUP = "left_arm"  # overridable with --group
 
 FIXED_HOME_POSE: dict[int, float] = {13: -2.5}
 
@@ -59,7 +59,7 @@ SAMPLE_RATE = 50.0  # [Hz] trajectory sample rate (coarse for PSO speed)
 # ============================================================================
 POP = 100
 MAX_ITER = 10
-AMP_SCALE = 2.0  # Fourier coefficient amplitude scale
+AMP_SCALE = 0.9  # Fourier coefficient amplitude scale
 PSO_W = 0.7  # inertia weight
 PSO_C1 = 1.5  # cognitive acceleration
 PSO_C2 = 1.5  # social acceleration
@@ -95,7 +95,7 @@ class RewardConfig:
 
     # --- Condition-number soft penalty ---
     # r_cond = -w_cond · max(0, κ / cond_threshold)^cond_penalty_power
-    cond_threshold: float = 100.0  # κ > cond_threshold → penalty active
+    cond_threshold: float = 10.0  # κ > cond_threshold → penalty active
     w_cond: float = 5.0  # overall weight multiplier (heavier than linear default)
     cond_penalty_power: float = 2.0  # exponent: 1=linear, 2=quadratic
 
@@ -306,6 +306,35 @@ def _score_param_std(
     return np.where(abs_good_mask, np.maximum(score, 0.0), score)
 
 
+def classify_quality(
+    nominal: float, nullspace_weight: float, score: float, cfg: RewardConfig
+) -> str:
+    """Label one parameter: ``small`` > ``rank_deficient`` > ``good``/``ok``/``bad``.
+
+    (``null`` is decided by the caller: a structurally zero column.)  The rated
+    bands are the score's own landmarks:
+
+        score > +0.5          good   (well identified, rho < 0.45 rho_0)
+        0 <= score <= +0.5    ok     (not penalised: rho <= rho_0, i.e. <= 100 %)
+        score < 0             bad    (penalised)
+
+    ``score = 0`` is the tanh's zero crossing, i.e. exactly where rho = rho_0 --
+    the point below which the parameter is rewarded and above which it is penalised
+    (see ``RewardConfig.tanh_rel_zero``).  Putting the ok/bad edge there is what
+    makes "ok" mean "no penalty"; ``rho_0 = 1`` therefore reads as "relative
+    uncertainty exceeds 100 %".
+    """
+    if abs(nominal) < cfg.nominal_small:
+        return "small"
+    if nullspace_weight > cfg.nullspace_threshold:
+        return "rank_deficient"
+    if score > 0.5:
+        return "good"
+    if score >= 0.0:
+        return "ok"
+    return "bad"
+
+
 # ---------------------------------------------------------------------------
 def build_bounds(
     ft: FourierTrajectory, reg: TargetLimbRegressor, amp_scale: float = 1.0
@@ -406,7 +435,9 @@ def compute_regressor_diagnostics(
       - "small"           — |nominal| < cfg.nominal_small (negligible dynamics impact)
       - "rank_deficient"  — significant nullspace component (linear dependency)
       - "good" / "ok" / "bad"  — tanh scoring from _score_param_std
-                                 (rank_deficient/small are NOT scored, score = 0)
+                                 (rank_deficient/small are NOT scored, score = 0),
+                                 binned at score > 0.5 / 0 <= score <= 0.5 / score < 0,
+                                 i.e. rho < 0.45 rho_0 / rho <= rho_0 / rho > rho_0
 
     Priority: null > small > rank_deficient > good/ok/bad
     """
@@ -528,16 +559,7 @@ def compute_regressor_diagnostics(
         # small BEFORE rank_deficient: a tiny-nominal param (|nominal| <
         # nominal_small) is labelled "small" even if it also projects strongly
         # onto the nullspace.  Both are excluded from rating either way.
-        if abs(nominal) < cfg.nominal_small:
-            quality = "small"
-        elif nw > cfg.nullspace_threshold:
-            quality = "rank_deficient"
-        elif sc > 0.5:
-            quality = "good"
-        elif sc >= -0.5:
-            quality = "ok"
-        else:
-            quality = "bad"
+        quality = classify_quality(nominal, nw, sc, cfg)
 
         quality_summary[quality].append(int(full_idx))
 
@@ -572,8 +594,9 @@ def compute_regressor_diagnostics(
     n_rated = int(rated_nz.sum())
     if n_rated:
         good_m = rated_nz & (scores_nz > 0.5)
-        ok_m = rated_nz & (scores_nz >= -0.5) & (scores_nz <= 0.5)
-        bad_m = rated_nz & (scores_nz < -0.5)
+        # same bands as classify_quality()
+        ok_m = rated_nz & (scores_nz >= 0.0) & (scores_nz <= 0.5)
+        bad_m = rated_nz & (scores_nz < 0.0)
         rated_scores = scores_nz[rated_nz]
         param_detail = {
             "value": float(round(r_param, 2)),
