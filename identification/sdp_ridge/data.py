@@ -695,6 +695,11 @@ def data_from_measurement(
         "joint_names": joint_names,
         "dof": dof,
         "t": t_sel,
+        # Provenance of the identification bag (used as the figure title of the
+        # training-bag torque comparison, see
+        # plotting.plot_torque_comparison_measured_train).
+        "bag_name": bag_name,
+        "trajectory_yaml": trajectory_yaml,
     }
 
 

@@ -18,7 +18,7 @@ from .data import (
     stack_regressor,
     yaml_source_bag,
 )
-from .metrics import print_rmse_comparison
+from .metrics import _rmse_comparison, print_rmse_comparison
 from .params import IdentificationResult
 
 
@@ -318,6 +318,74 @@ def plot_torque_comparison_measured(
         title=(
             f"Joint Torque Comparison (validation): measured vs prior vs identified\n"
             f"bag={val_bag_name}  yaml={val_yaml}"
+        ),
+        twin=twin,
+    )
+    return {"stats": stats, "figures": figures}
+
+
+def plot_torque_comparison_measured_train(
+    result: IdentificationResult,
+    Y_stack: np.ndarray,
+    tau_measured: np.ndarray,
+    joint_names: list[str] | None = None,
+    bag_name: str | None = None,
+    trajectory_yaml: str | None = None,
+    sample_rate: float = 100.0,
+    offset: float | None = None,
+    show_residual: bool = True,
+    twin: str | None = None,
+):
+    """Training-bag torque comparison — the **identification** bag (meas mode).
+
+    Same figure as ``plot_torque_comparison_measured`` (the held-out
+    validation), but drawn on the very samples the solver was fitted on:
+    ``Y_stack`` / ``tau_measured`` come straight from
+    ``data_from_measurement`` (identification bag, after the ``--twin-id``
+    window and the ~``sample_rate`` decimation), so
+
+        ``tau_prior = Y_stack @ pi_prior`` and
+        ``tau_ident = Y_stack @ pi_identified``
+
+    are compared against that bag's measured torque.  This shows the
+    **achieved training fit** — the prior error the identification removed on
+    the data it saw — and is therefore *not* evidence of generalisation
+    (that is what the held-out validation plot is for).  Because the ridge is
+    pulled toward the prior, the training fit is normally the best case; the
+    gap to the held-out numbers is the fit / generalisation split.
+
+    No RMSE table is printed here (the identification report already prints
+    the prior-vs-identified comparison on the identification data); the same
+    numbers are returned as ``stats``.
+    """
+    dof = len(result.joint_order)
+    if joint_names is None:
+        joint_names = [f"joint_{d}" for d in range(dof)]
+    if bag_name is None and trajectory_yaml is not None:
+        try:
+            bag_name = yaml_source_bag(trajectory_yaml)
+        except (FileNotFoundError, ValueError):
+            bag_name = None
+
+    tau_prior = Y_stack @ result.pi_prior
+    tau_ident = Y_stack @ result.pi_identified
+    stats = _rmse_comparison(result, result.joint_order, Y_stack, tau_measured)
+
+    figures = _plot_torque_comparison_panels(
+        tau_measured,
+        tau_prior,
+        tau_ident,
+        joint_names,
+        result.joint_order,
+        dof,
+        sample_rate=sample_rate,
+        offset=offset,
+        show_residual=show_residual,
+        true_label="measured",
+        title=(
+            f"Joint Torque Comparison (identification bag): "
+            f"measured vs prior vs identified\n"
+            f"bag={bag_name or '?'}  yaml={trajectory_yaml or '?'}"
         ),
         twin=twin,
     )

@@ -93,6 +93,7 @@ from .params import (
 )
 from .plotting import (
     plot_torque_comparison_measured,
+    plot_torque_comparison_measured_train,
     plot_torque_comparison_simulated,
     plot_torque_comparison_simulated_validation,
 )
@@ -175,6 +176,7 @@ __all__ = [
     "yaml_source_bag",
     # plotting
     "plot_torque_comparison_measured",
+    "plot_torque_comparison_measured_train",
     "plot_torque_comparison_simulated",
     "plot_torque_comparison_simulated_validation",
     # static test

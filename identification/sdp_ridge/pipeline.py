@@ -29,6 +29,7 @@ from .metrics import print_cv_summary
 from .params import N_PER_JOINT
 from .plotting import (
     plot_torque_comparison_measured,
+    plot_torque_comparison_measured_train,
     plot_torque_comparison_simulated,
     plot_torque_comparison_simulated_validation,
 )
@@ -504,6 +505,21 @@ def run_validation_plots(
                 twin=args.twin,
             )
         else:
+            # Training fit on the **identification** bag itself: the samples the
+            # solver was fitted on (same Y / tau as the solve), plotted in the
+            # same layout as the held-out validation below so the two figures
+            # can be read side by side.
+            plot_torque_comparison_measured_train(
+                result,
+                Y_stack=data["Y_stack"],
+                tau_measured=data["tau_measured"],
+                joint_names=data["joint_names"],
+                bag_name=data.get("bag_name"),
+                trajectory_yaml=data.get("trajectory_yaml"),
+                sample_rate=args.sample_rate,
+                twin=args.twin,
+            )
+
             # Per validation trajectory: each yaml's bag contributes its **own**
             # base-frame gravity / waist angle (different recording sessions
             # have different poses, so the identification bag's values are not
