@@ -156,22 +156,27 @@ def plot_static_pose_errors(
     }
 
     fig, ax = plt.subplots(figsize=(max(9.5, 0.55 * n_poses + 4.5), 6.2))
+    # ``err`` / ``err_prior`` / ``tau_true`` columns follow the
+    # ``group_to_identify`` order (group-local joint index ``d``), whereas
+    # ``joint_order`` is a permutation of it (subtree-size sort, distal to
+    # proximal).  So the per-joint data must be indexed by ``d`` — ``j`` is
+    # only the palette index.  Indexing by ``j`` mirrored every label.
     for j, d in enumerate(joint_order):
         name = joint_names[d] if joint_names else f"joint_{d}"
         color = colors[j % 10]
         marker = markers[j % len(markers)]
         xj = x + off_map[d]  # <- horizontal fan inside the pose column
-        rms = float(np.sqrt(np.mean(err[:, j] ** 2)))
+        rms = float(np.sqrt(np.mean(err[:, d] ** 2)))
         t_rms = (
-            float(np.sqrt(np.mean(tau_true[:, j] ** 2)))
+            float(np.sqrt(np.mean(tau_true[:, d] ** 2)))
             if tau_true is not None
             else float("nan")
         )
         if err_prior is not None:
             ax.vlines(
                 xj,
-                err_prior[:, j],
-                err[:, j],
+                err_prior[:, d],
+                err[:, d],
                 color=color,
                 linewidth=0.9,
                 alpha=0.35,
@@ -179,7 +184,7 @@ def plot_static_pose_errors(
             )
             ax.scatter(
                 xj,
-                err_prior[:, j],
+                err_prior[:, d],
                 s=46,
                 marker=marker,
                 facecolors="none",
@@ -188,7 +193,7 @@ def plot_static_pose_errors(
                 alpha=0.9,
                 zorder=2,
             )
-            rms_p = float(np.sqrt(np.mean(err_prior[:, j] ** 2)))
+            rms_p = float(np.sqrt(np.mean(err_prior[:, d] ** 2)))
             label = (
                 f"{name}: ident RMS {rms:.3g} / prior {rms_p:.3g} Nm (true {t_rms:.3g})"
             )
@@ -196,7 +201,7 @@ def plot_static_pose_errors(
             label = f"{name}: err RMS {rms:.3g} Nm  (true RMS {t_rms:.3g})"
         ax.scatter(
             xj,
-            err[:, j],
+            err[:, d],
             s=68,
             marker=marker,
             color=color,
@@ -319,23 +324,26 @@ def run_static_pose_test(
         )
     print(hdr)
     print("-" * len(hdr))
-    for j, d in enumerate(joint_order):
+    # Index the per-joint columns by ``d`` (group-local joint index = column
+    # order of ``err``/``tau_true``), NOT by the loop position in
+    # ``joint_order`` — the latter mirrored every joint label (2026-09-23).
+    for d in joint_order:
         name = joint_names[d] if joint_names else f"joint_{d}"
-        rms = float(np.sqrt(np.mean(err[:, j] ** 2)))
-        rms_max = float(np.abs(err[:, j]).max())
-        t_rms = float(np.sqrt(np.mean(tau_true[:, j] ** 2)))
+        rms = float(np.sqrt(np.mean(err[:, d] ** 2)))
+        rms_max = float(np.abs(err[:, d]).max())
+        t_rms = float(np.sqrt(np.mean(tau_true[:, d] ** 2)))
         if err_prior is None:
             rel = rms / t_rms * 100 if t_rms > 1e-12 else float("nan")
             print(
                 f"{name:<22s} {rms:>9.4f} {rms_max:>9.4f} "
-                f"{float(err[:, j].mean()):>9.4f} {t_rms:>9.4f} {rel:>7.1f}%"
+                f"{float(err[:, d].mean()):>9.4f} {t_rms:>9.4f} {rel:>7.1f}%"
             )
         else:
-            rms_p = float(np.sqrt(np.mean(err_prior[:, j] ** 2)))
+            rms_p = float(np.sqrt(np.mean(err_prior[:, d] ** 2)))
             imp = (1 - rms / rms_p) * 100 if rms_p > 1e-12 else float("nan")
             print(
                 f"{name:<22s} {rms:>9.4f} {rms_max:>9.4f} {rms_p:>9.4f} "
-                f"{float(np.abs(err_prior[:, j]).max()):>9.4f} {imp:>7.1f}% "
+                f"{float(np.abs(err_prior[:, d]).max()):>9.4f} {imp:>7.1f}% "
                 f"{t_rms:>8.4f}"
             )
     print("-" * len(hdr))
