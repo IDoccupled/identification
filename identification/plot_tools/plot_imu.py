@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-"""读 bag_data/<bag>/csv/hardware_imu_info.csv，画 IMU 三轴线加速度并打印均值。
-
-用法：
-    python -m identification.bag_imu_plot
-    python -m identification.bag_imu_plot --bag rosbag2_1970_01_01-13_57_28
+"""
+python -m identification.plot_tools.plot_imu
+python -m identification.plot_tools.plot_imu --bag rosbag2_1970_01_01-13_57_28
 """
 
 import argparse
@@ -39,9 +37,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # bag 目录：脚本位于 identification/ 下，数据在 ../bag_data/<bag>/
+    # bag 目录：脚本位于 identification/plot_tools/ 下，数据在 <pkg>/bag_data/<bag>/
     here = os.path.dirname(os.path.abspath(__file__))
-    bag_dir = os.path.join(os.path.dirname(here), "bag_data", args.bag)
+    pkg_dir = os.path.dirname(os.path.dirname(here))
+    bag_dir = os.path.join(pkg_dir, "bag_data", args.bag)
     imu = read_csvs(bag_dir)
     imu_selected = columns_select(imu)
     # calculate mean for each, x,y,z
@@ -56,6 +55,7 @@ def main() -> None:
         axes[i].legend(loc="upper right")
         axes[i].grid(alpha=0.3)
     axes[2].set_xlabel("time [s]")
+    fig.suptitle(f"IMU linear acceleration from bag measurements")
     fig.tight_layout()
     plt.show()
 
