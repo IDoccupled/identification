@@ -1,0 +1,905 @@
+joint_0:
+  a:
+  - 0.69863994
+  - -1.39727988
+  - -0.13178252
+  - -1.71261832
+  - 2.92731513
+  b:
+  - 0.69863994
+  - 0.79700402
+  - -1.76710196
+  - 0.23853769
+  - 0.61851364
+  q0: -0.54976496
+joint_1:
+  a:
+  - -0.11633175
+  - 0.09894344
+  - -1.04313442
+  - 0.43736294
+  - 1.69373392
+  b:
+  - 0.34771147
+  - -0.56045968
+  - -0.74747708
+  - -1.18668462
+  - 0.79941599
+  q0: 1.56445
+joint_2:
+  a:
+  - -0.0861322
+  - -1.26568485
+  - 0.10238957
+  - -2.5313697
+  - 2.01425876
+  b:
+  - -0.43009514
+  - 0.19018831
+  - -1.89852727
+  - 1.61142281
+  - -0.38738035
+  q0: 0.12662056
+joint_3:
+  a:
+  - -0.05036383
+  - 0.45507279
+  - -1.03001513
+  - 0.82456316
+  - 1.71669189
+  b:
+  - -0.03227647
+  - 0.35009289
+  - 1.03001513
+  - 1.37335351
+  - -0.75793175
+  q0: -0.94193973
+joint_4:
+  a:
+  - -0.63284242
+  - -0.66677189
+  - -0.70431419
+  - 1.99401101
+  - 1.79703048
+  b:
+  - -0.00527511
+  - -1.26568485
+  - 1.89852727
+  - -1.19840169
+  - 3.00474453
+  q0: 0.81269318
+_meta:
+  stage: unified
+  group: left_arm
+  started: '2026-09-14 11:12:42'
+  finished: '2026-09-14 11:13:38'
+  elapsed_s: 56.1
+  pop: 100
+  iter: 10
+  amp_scale: 2.0
+  seed: 67
+  reward_config:
+    w_q_limit: 2000.0
+    w_v_limit: 500.0
+    w_tau_limit: 1000.0
+    w_collision: 100000.0
+    sigma_floor_rel: 1.0e-06
+    cond_threshold: 10.0
+    w_cond: 5.0
+    cond_penalty_power: 2.0
+    w_param_per: 50.0
+    tanh_rel_zero: 1.0
+    tanh_k: 1.0
+    abs_std_good: 0.01
+    nominal_small: 0.0001
+    nullspace_threshold: 0.3
+  best_fitness: -401.6244080489992
+  status: completed
+_diagnostics:
+  reward_breakdown:
+    d_opt: 533.78
+    cond_penalty:
+      penalty: -297.31
+      cond: 77.1
+      cond_threshold: 10.0
+      w_cond: 5.0
+      cond_penalty_power: 2.0
+      cond_ratio: 7.7112
+      sigma_max: 604.308
+      sigma_min_eff: 7.837
+    param_reward:
+      value: 165.66
+      w_param_per: 50.0
+      sum_scores: 3.3133
+      n_nonzero: 61
+      n_rated: 29
+      score_min: -1.0
+      score_max: 0.7103
+      score_mean: 0.1143
+      by_quality:
+        good:
+          count: 10
+          score_sum: 5.8852
+        ok:
+          count: 14
+          score_sum: 2.3796
+        bad:
+          count: 5
+          score_sum: -4.9515
+    total_reward: 402.13
+    excess:
+      q:
+        max_over:
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        violating_steps: 0
+        unit: rad
+        limit_lo:
+        - -2.9671
+        - -0.6108
+        - -2.618
+        - -2.1948
+        - -2.618
+        limit_hi:
+        - 2.7925
+        - 2.3562
+        - 2.618
+        - 0.7374
+        - 2.618
+        margin: 0.1
+      v:
+        max_over:
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        violating_steps: 0
+        unit: rad/s
+        limit:
+        - 35.2
+        - 35.2
+        - 35.2
+        - 35.2
+        - 35.2
+      tau:
+        max_over:
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        violating_steps: 0
+        unit: Nm
+        limit:
+        - 61.0
+        - 61.0
+        - 61.0
+        - 61.0
+        - 61.0
+  trajectory_stats:
+    collisions: 0/250
+    v_max: 7.72
+    a_max: 35.8
+    zero_crossings:
+    - 10
+    - 10
+    - 8
+    - 8
+    - 8
+  regression:
+    total_cols: 65
+    nonzero_cols: 61
+    eff_rank: 44
+    nullspace_dim: 17
+    cond: 77.1
+    sigma_floor: 0.0006043082211798572
+    singular_values:
+    - 604.308
+    - 577.848
+    - 556.363
+    - 497.117
+    - 484.834
+    - 466.866
+    - 413.757
+    - 384.249
+    - 363.914
+    - 332.885
+    - 319.62
+    - 282.523
+    - 266.824
+    - 259.246
+    - 250.827
+    - 233.793
+    - 222.192
+    - 206.353
+    - 196.546
+    - 183.08
+    - 171.643
+    - 166.131
+    - 147.805
+    - 126.829
+    - 117.552
+    - 114.79
+    - 108.755
+    - 99.164
+    - 89.932
+    - 85.654
+    - 73.241
+    - 61.966
+    - 54.603
+    - 48.105
+    - 43.39
+    - 36.889
+    - 33.291
+    - 27.07
+    - 15.587
+    - 8.836
+    - 8.457
+    - 8.114
+    - 8.008
+    - 7.837
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+  quality_summary:
+    'null':
+      count: 4
+      indices:
+      - 0
+      - 4
+      - 5
+      - 7
+      names:
+      - J13_SHOULDER_PITCH_L/mass
+      - J13_SHOULDER_PITCH_L/Ixx
+      - J13_SHOULDER_PITCH_L/Ixy
+      - J13_SHOULDER_PITCH_L/Ixz
+    rank_deficient:
+      count: 24
+      indices:
+      - 1
+      - 2
+      - 6
+      - 8
+      - 9
+      - 10
+      - 11
+      - 13
+      - 14
+      - 16
+      - 19
+      - 20
+      - 22
+      - 23
+      - 24
+      - 26
+      - 30
+      - 32
+      - 33
+      - 34
+      - 40
+      - 43
+      - 50
+      - 51
+      names:
+      - J13_SHOULDER_PITCH_L/mcx
+      - J13_SHOULDER_PITCH_L/mcy
+      - J13_SHOULDER_PITCH_L/Iyy
+      - J13_SHOULDER_PITCH_L/Iyz
+      - J13_SHOULDER_PITCH_L/Izz
+      - J14_SHOULDER_ROLL_L/mass
+      - J14_SHOULDER_ROLL_L/mcx
+      - J14_SHOULDER_ROLL_L/mcz
+      - J14_SHOULDER_ROLL_L/Ixx
+      - J14_SHOULDER_ROLL_L/Iyy
+      - J14_SHOULDER_ROLL_L/Izz
+      - J15_SHOULDER_YAW_L/mass
+      - J15_SHOULDER_YAW_L/mcy
+      - J15_SHOULDER_YAW_L/mcz
+      - J15_SHOULDER_YAW_L/Ixx
+      - J15_SHOULDER_YAW_L/Iyy
+      - J16_ELBOW_PITCH_L/mass
+      - J16_ELBOW_PITCH_L/mcy
+      - J16_ELBOW_PITCH_L/mcz
+      - J16_ELBOW_PITCH_L/Ixx
+      - J17_ELBOW_YAW_L/mass
+      - J17_ELBOW_YAW_L/mcz
+      - J13_SHOULDER_PITCH_L/armature
+      - J14_SHOULDER_ROLL_L/armature
+    small:
+      count: 8
+      indices:
+      - 18
+      - 25
+      - 27
+      - 28
+      - 35
+      - 37
+      - 45
+      - 48
+      names:
+      - J14_SHOULDER_ROLL_L/Iyz
+      - J15_SHOULDER_YAW_L/Ixy
+      - J15_SHOULDER_YAW_L/Ixz
+      - J15_SHOULDER_YAW_L/Iyz
+      - J16_ELBOW_PITCH_L/Ixy
+      - J16_ELBOW_PITCH_L/Ixz
+      - J17_ELBOW_YAW_L/Ixy
+      - J17_ELBOW_YAW_L/Iyz
+    good:
+      count: 10
+      indices:
+      - 36
+      - 52
+      - 53
+      - 54
+      - 56
+      - 58
+      - 60
+      - 62
+      - 63
+      - 64
+      names:
+      - J16_ELBOW_PITCH_L/Iyy
+      - J15_SHOULDER_YAW_L/armature
+      - J16_ELBOW_PITCH_L/armature
+      - J17_ELBOW_YAW_L/armature
+      - J13_SHOULDER_PITCH_L/friction
+      - J14_SHOULDER_ROLL_L/friction
+      - J15_SHOULDER_YAW_L/friction
+      - J16_ELBOW_PITCH_L/friction
+      - J17_ELBOW_YAW_L/damping
+      - J17_ELBOW_YAW_L/friction
+    ok:
+      count: 14
+      indices:
+      - 17
+      - 29
+      - 38
+      - 39
+      - 41
+      - 42
+      - 44
+      - 46
+      - 47
+      - 49
+      - 55
+      - 57
+      - 59
+      - 61
+      names:
+      - J14_SHOULDER_ROLL_L/Ixz
+      - J15_SHOULDER_YAW_L/Izz
+      - J16_ELBOW_PITCH_L/Iyz
+      - J16_ELBOW_PITCH_L/Izz
+      - J17_ELBOW_YAW_L/mcx
+      - J17_ELBOW_YAW_L/mcy
+      - J17_ELBOW_YAW_L/Ixx
+      - J17_ELBOW_YAW_L/Iyy
+      - J17_ELBOW_YAW_L/Ixz
+      - J17_ELBOW_YAW_L/Izz
+      - J13_SHOULDER_PITCH_L/damping
+      - J14_SHOULDER_ROLL_L/damping
+      - J15_SHOULDER_YAW_L/damping
+      - J16_ELBOW_PITCH_L/damping
+    bad:
+      count: 5
+      indices:
+      - 3
+      - 12
+      - 15
+      - 21
+      - 31
+      names:
+      - J13_SHOULDER_PITCH_L/mcz
+      - J14_SHOULDER_ROLL_L/mcy
+      - J14_SHOULDER_ROLL_L/Ixy
+      - J15_SHOULDER_YAW_L/mcx
+      - J16_ELBOW_PITCH_L/mcx
+  per_param:
+  - idx: 0
+    name: J13_SHOULDER_PITCH_L/mass
+    quality: 'null'
+  - idx: 1
+    name: J13_SHOULDER_PITCH_L/mcx
+    nominal: -0.006407537367461998
+    abs_std: 0.00816266932431676
+    rel_std: 1.2739147845816017
+    nullspace_weight: 0.49981466367881006
+    score: 0.0
+    quality: rank_deficient
+  - idx: 2
+    name: J13_SHOULDER_PITCH_L/mcy
+    nominal: 0.05243068426570659
+    abs_std: 0.0027892930975572864
+    rel_std: 0.053199621645706165
+    nullspace_weight: 0.9960669005919612
+    score: 0.0
+    quality: rank_deficient
+  - idx: 3
+    name: J13_SHOULDER_PITCH_L/mcz
+    nominal: -0.014580323827707393
+    abs_std: 0.04433434746953309
+    rel_std: 3.0406949520787623
+    nullspace_weight: 0.006364004122377028
+    score: -0.9667927069070553
+    quality: bad
+  - idx: 4
+    name: J13_SHOULDER_PITCH_L/Ixx
+    quality: 'null'
+  - idx: 5
+    name: J13_SHOULDER_PITCH_L/Ixy
+    quality: 'null'
+  - idx: 6
+    name: J13_SHOULDER_PITCH_L/Iyy
+    nominal: 0.000992443343670997
+    abs_std: 0.003236126993419044
+    rel_std: 3.2607346371053545
+    nullspace_weight: 0.6189349269669716
+    score: 0.0
+    quality: rank_deficient
+  - idx: 7
+    name: J13_SHOULDER_PITCH_L/Ixz
+    quality: 'null'
+  - idx: 8
+    name: J13_SHOULDER_PITCH_L/Iyz
+    nominal: 0.0006301561208625772
+    abs_std: 0.00040720269546711837
+    rel_std: 0.6461830967836474
+    nullspace_weight: 0.9939665357559969
+    score: 0.0
+    quality: rank_deficient
+  - idx: 9
+    name: J13_SHOULDER_PITCH_L/Izz
+    nominal: 0.003996961409946014
+    abs_std: 1.2848502598248332e-05
+    rel_std: 0.003214559545328815
+    nullspace_weight: 0.9999940294497313
+    score: 0.0
+    quality: rank_deficient
+  - idx: 10
+    name: J14_SHOULDER_ROLL_L/mass
+    nominal: 0.5108128
+    abs_std: 0.0011879303819592412
+    rel_std: 0.0023255688947175016
+    nullspace_weight: 0.998689491291262
+    score: 0.0
+    quality: rank_deficient
+  - idx: 11
+    name: J14_SHOULDER_ROLL_L/mcx
+    nominal: 0.019110518257343997
+    abs_std: 0.008282471318866272
+    rel_std: 0.4333983450030166
+    nullspace_weight: 0.49981531491182807
+    score: 0.0
+    quality: rank_deficient
+  - idx: 12
+    name: J14_SHOULDER_ROLL_L/mcy
+    nominal: 0.0034590965784
+    abs_std: 0.04773190390000983
+    rel_std: 13.798911024617256
+    nullspace_weight: 0.0028560019069501365
+    score: -0.999999999984723
+    quality: bad
+  - idx: 13
+    name: J14_SHOULDER_ROLL_L/mcz
+    nominal: -0.013679602540895999
+    abs_std: 0.007639802262143825
+    rel_std: 0.5584808955154389
+    nullspace_weight: 0.5097268582207648
+    score: 0.0
+    quality: rank_deficient
+  - idx: 14
+    name: J14_SHOULDER_ROLL_L/Ixx
+    nominal: 0.001382524850872153
+    abs_std: 0.005479369638722291
+    rel_std: 3.9632777685609204
+    nullspace_weight: 0.5896298229707253
+    score: 0.0
+    quality: rank_deficient
+  - idx: 15
+    name: J14_SHOULDER_ROLL_L/Ixy
+    nominal: -0.00013097165200916922
+    abs_std: 0.010441000584782508
+    rel_std: 79.71345928704272
+    nullspace_weight: 3.931029584745221e-06
+    score: -1.0
+    quality: bad
+  - idx: 16
+    name: J14_SHOULDER_ROLL_L/Iyy
+    nominal: 0.002375423040450761
+    abs_std: 0.005820584708890347
+    rel_std: 2.4503257342020617
+    nullspace_weight: 0.5275286357358575
+    score: 0.0
+    quality: rank_deficient
+  - idx: 17
+    name: J14_SHOULDER_ROLL_L/Ixz
+    nominal: 0.0005151110166679502
+    abs_std: 0.00672691751535139
+    rel_std: 13.058907126065868
+    nullspace_weight: 0.0007015931449236436
+    score: 0.0
+    quality: ok
+  - idx: 18
+    name: J14_SHOULDER_ROLL_L/Iyz
+    nominal: -2.865515149368751e-05
+    abs_std: 0.005248896084546097
+    rel_std: 183.11070449782835
+    nullspace_weight: 0.0015704788846280706
+    score: 0.0
+    quality: small
+  - idx: 19
+    name: J14_SHOULDER_ROLL_L/Izz
+    nominal: 0.0016772764640881686
+    abs_std: 0.005155442268267209
+    rel_std: 3.073680244042205
+    nullspace_weight: 0.4567173000267343
+    score: 0.0
+    quality: rank_deficient
+  - idx: 20
+    name: J15_SHOULDER_YAW_L/mass
+    nominal: 0.90913792
+    abs_std: 0.0018212956362117592
+    rel_std: 0.0020033215820307476
+    nullspace_weight: 0.9967774102910094
+    score: 0.0
+    quality: rank_deficient
+  - idx: 21
+    name: J15_SHOULDER_YAW_L/mcx
+    nominal: -0.0007686306544639998
+    abs_std: 0.01972012705282925
+    rel_std: 25.655847031121176
+    nullspace_weight: 3.6902955737592854e-06
+    score: -1.0
+    quality: bad
+  - idx: 22
+    name: J15_SHOULDER_YAW_L/mcy
+    nominal: 0.0019945667740671994
+    abs_std: 0.0057404256638653815
+    rel_std: 2.8780168998759135
+    nullspace_weight: 0.49726481290169666
+    score: 0.0
+    quality: rank_deficient
+  - idx: 23
+    name: J15_SHOULDER_YAW_L/mcz
+    nominal: -0.04151573765990399
+    abs_std: 0.007359967010261788
+    rel_std: 0.17728133118436074
+    nullspace_weight: 0.5126723946292652
+    score: 0.0
+    quality: rank_deficient
+  - idx: 24
+    name: J15_SHOULDER_YAW_L/Ixx
+    nominal: 0.003521819984443926
+    abs_std: 0.005402224695715671
+    rel_std: 1.533925464766195
+    nullspace_weight: 0.4585417170577689
+    score: 0.0
+    quality: rank_deficient
+  - idx: 25
+    name: J15_SHOULDER_YAW_L/Ixy
+    nominal: 3.456306479135113e-06
+    abs_std: 0.006185005205826971
+    rel_std: 1784.3215085153718
+    nullspace_weight: 2.177254715989254e-06
+    score: 0.0
+    quality: small
+  - idx: 26
+    name: J15_SHOULDER_YAW_L/Iyy
+    nominal: 0.003405163923239449
+    abs_std: 0.006119873397391784
+    rel_std: 1.7972278466087148
+    nullspace_weight: 0.3525797573671053
+    score: 0.0
+    quality: rank_deficient
+  - idx: 27
+    name: J15_SHOULDER_YAW_L/Ixz
+    nominal: -2.5129480404565815e-05
+    abs_std: 0.007382774905557288
+    rel_std: 293.67253367004486
+    nullspace_weight: 4.9329169850020593e-08
+    score: 0.0
+    quality: small
+  - idx: 28
+    name: J15_SHOULDER_YAW_L/Iyz
+    nominal: 7.912179200943993e-05
+    abs_std: 0.005647213300929526
+    rel_std: 71.36465834434597
+    nullspace_weight: 0.008749702817312834
+    score: 0.0
+    quality: small
+  - idx: 29
+    name: J15_SHOULDER_YAW_L/Izz
+    nominal: 0.0007924257387781103
+    abs_std: 0.007141860924960412
+    rel_std: 9.012542690177938
+    nullspace_weight: 0.2915021682192103
+    score: 0.0
+    quality: ok
+  - idx: 30
+    name: J16_ELBOW_PITCH_L/mass
+    nominal: 1.38061447
+    abs_std: 0.002151359550316825
+    rel_std: 0.001558262340053702
+    nullspace_weight: 0.9840139336824857
+    score: 0.0
+    quality: rank_deficient
+  - idx: 31
+    name: J16_ELBOW_PITCH_L/mcx
+    nominal: 0.0041175031768938995
+    abs_std: 0.014133446167715176
+    rel_std: 3.4325199605983845
+    nullspace_weight: 0.022109433682227207
+    score: -0.9846949842755491
+    quality: bad
+  - idx: 32
+    name: J16_ELBOW_PITCH_L/mcy
+    nominal: 0.0025777590830817
+    abs_std: 0.005683006365797861
+    rel_std: 2.2046219745190974
+    nullspace_weight: 0.49709362975836247
+    score: 0.0
+    quality: rank_deficient
+  - idx: 33
+    name: J16_ELBOW_PITCH_L/mcz
+    nominal: -0.0899947881750173
+    abs_std: 0.008873071919049536
+    rel_std: 0.09859538661105322
+    nullspace_weight: 0.4631588731102014
+    score: 0.0
+    quality: rank_deficient
+  - idx: 34
+    name: J16_ELBOW_PITCH_L/Ixx
+    nominal: 0.011751326329086964
+    abs_std: 0.005128027506662158
+    rel_std: 0.4363782435508411
+    nullspace_weight: 0.4072011556817072
+    score: 0.0
+    quality: rank_deficient
+  - idx: 35
+    name: J16_ELBOW_PITCH_L/Ixy
+    nominal: 2.0472168643389634e-05
+    abs_std: 0.004478642040024702
+    rel_std: 218.66053922322956
+    nullspace_weight: 4.5859893540362025e-05
+    score: 0.0
+    quality: small
+  - idx: 36
+    name: J16_ELBOW_PITCH_L/Iyy
+    nominal: 0.011815913287275024
+    abs_std: 0.004336083351723934
+    rel_std: 0.36696949077128926
+    nullspace_weight: 0.2857136625765555
+    score: 0.5601354272407393
+    quality: good
+  - idx: 37
+    name: J16_ELBOW_PITCH_L/Ixz
+    nominal: -3.1722243590473725e-05
+    abs_std: 0.004947064316495508
+    rel_std: 155.90023763654253
+    nullspace_weight: 0.012215123974838668
+    score: 0.0
+    quality: small
+  - idx: 38
+    name: J16_ELBOW_PITCH_L/Iyz
+    nominal: -0.00029593983105054343
+    abs_std: 0.004500894935158315
+    rel_std: 15.208303783047725
+    nullspace_weight: 0.002811933400973303
+    score: 0.0
+    quality: ok
+  - idx: 39
+    name: J16_ELBOW_PITCH_L/Izz
+    nominal: 0.0008526228777112857
+    abs_std: 0.005373861493148814
+    rel_std: 6.302667459380429
+    nullspace_weight: 0.2853746886099957
+    score: 0.0
+    quality: ok
+  - idx: 40
+    name: J17_ELBOW_YAW_L/mass
+    nominal: 0.46651916
+    abs_std: 0.0021650448660975627
+    rel_std: 0.004640848662440951
+    nullspace_weight: 0.9722412606082743
+    score: 0.0
+    quality: rank_deficient
+  - idx: 41
+    name: J17_ELBOW_YAW_L/mcx
+    nominal: 0.009406911003006401
+    abs_std: 0.008672324685726856
+    rel_std: 0.9219089522443346
+    nullspace_weight: 0.022366898367932837
+    score: 0.07793269542946434
+    quality: ok
+  - idx: 42
+    name: J17_ELBOW_YAW_L/mcy
+    nominal: 0.00012167752731119999
+    abs_std: 0.009535834837721968
+    rel_std: 78.36328873159954
+    nullspace_weight: 0.0018588894867574313
+    score: 0.0
+    quality: ok
+  - idx: 43
+    name: J17_ELBOW_YAW_L/mcz
+    nominal: -0.0419434360871436
+    abs_std: 0.008461511918725465
+    rel_std: 0.20173621168717146
+    nullspace_weight: 0.46059538321990534
+    score: 0.0
+    quality: rank_deficient
+  - idx: 44
+    name: J17_ELBOW_YAW_L/Ixx
+    nominal: 0.005444529052341072
+    abs_std: 0.0031762479718704818
+    rel_std: 0.5833823472172069
+    nullspace_weight: 0.2596654599870957
+    score: 0.39407716654662006
+    quality: ok
+  - idx: 45
+    name: J17_ELBOW_YAW_L/Ixy
+    nominal: 6.676489472195872e-06
+    abs_std: 0.002092465504134344
+    rel_std: 312.9393253119367
+    nullspace_weight: 5.04819273729381e-05
+    score: 0.0
+    quality: small
+  - idx: 46
+    name: J17_ELBOW_YAW_L/Iyy
+    nominal: 0.00569163864614946
+    abs_std: 0.0032494299007637803
+    rel_std: 0.5709118926309865
+    nullspace_weight: 0.28320637240084034
+    score: 0.40455894510510804
+    quality: ok
+  - idx: 47
+    name: J17_ELBOW_YAW_L/Ixz
+    nominal: 0.001152329122998607
+    abs_std: 0.0032382059631624127
+    rel_std: 2.8101154413086147
+    nullspace_weight: 0.012508405071770201
+    score: 0.0
+    quality: ok
+  - idx: 48
+    name: J17_ELBOW_YAW_L/Iyz
+    nominal: -2.9930312999751205e-05
+    abs_std: 0.003380850303151354
+    rel_std: 112.91967132005092
+    nullspace_weight: 0.001039560438891823
+    score: 0.0
+    quality: small
+  - idx: 49
+    name: J17_ELBOW_YAW_L/Izz
+    nominal: 0.0005829630656737345
+    abs_std: 0.004342412119609252
+    rel_std: 7.4487354138578965
+    nullspace_weight: 0.0007125780029090271
+    score: 0.0
+    quality: ok
+  - idx: 50
+    name: J13_SHOULDER_PITCH_L/armature
+    nominal: 0.039175
+    abs_std: 0.003248936521256196
+    rel_std: 0.08293390406935942
+    nullspace_weight: 0.615912224294702
+    score: 0.0
+    quality: rank_deficient
+  - idx: 51
+    name: J14_SHOULDER_ROLL_L/armature
+    nominal: 0.039175
+    abs_std: 0.005479369638722245
+    rel_std: 0.13986900421269183
+    nullspace_weight: 0.5896298229707261
+    score: 0.0
+    quality: rank_deficient
+  - idx: 52
+    name: J15_SHOULDER_YAW_L/armature
+    nominal: 0.039175
+    abs_std: 0.0056182132104898716
+    rel_std: 0.1434131914832918
+    nullspace_weight: 1.3051579604863504e-31
+    score: 0.6944949279920501
+    quality: good
+  - idx: 53
+    name: J16_ELBOW_PITCH_L/armature
+    nominal: 0.039175
+    abs_std: 0.007863352100211872
+    rel_std: 0.20072367818698378
+    nullspace_weight: 2.8219989436687784e-31
+    score: 0.663631999796286
+    quality: good
+  - idx: 54
+    name: J17_ELBOW_YAW_L/armature
+    nominal: 0.039175
+    abs_std: 0.004395936510705772
+    rel_std: 0.11221277316089445
+    nullspace_weight: 1.4643015578758153e-31
+    score: 0.7102990798412734
+    quality: good
+  - idx: 55
+    name: J13_SHOULDER_PITCH_L/damping
+    nominal: 0.08
+    abs_std: 0.0379638455984851
+    rel_std: 0.4745480106625624
+    nullspace_weight: 5.215474977615703e-31
+    score: 0.48189690022791265
+    quality: ok
+  - idx: 56
+    name: J13_SHOULDER_PITCH_L/friction
+    nominal: 0.3
+    abs_std: 0.10918889777217682
+    rel_std: 0.3639629804418234
+    nullspace_weight: 2.166109019017303e-30
+    score: 0.5621951649393369
+    quality: good
+  - idx: 57
+    name: J14_SHOULDER_ROLL_L/damping
+    nominal: 0.08
+    abs_std: 0.06192429806283898
+    rel_std: 0.7740536290287836
+    nullspace_weight: 1.3091475060284367e-30
+    score: 0.2221783119033316
+    quality: ok
+  - idx: 58
+    name: J14_SHOULDER_ROLL_L/friction
+    nominal: 0.3
+    abs_std: 0.11442001944757378
+    rel_std: 0.3814000521119109
+    nullspace_weight: 5.383104439336395e-31
+    score: 0.5501524790958849
+    quality: good
+  - idx: 59
+    name: J15_SHOULDER_YAW_L/damping
+    nominal: 0.08
+    abs_std: 0.03833463951943085
+    rel_std: 0.4791829340950189
+    nullspace_weight: 5.222236127707223e-31
+    score: 0.47833037965819164
+    quality: ok
+  - idx: 60
+    name: J15_SHOULDER_YAW_L/friction
+    nominal: 0.3
+    abs_std: 0.11567338373803464
+    rel_std: 0.3855779329408511
+    nullspace_weight: 3.432978401350478e-30
+    score: 0.5472324133600089
+    quality: good
+  - idx: 61
+    name: J16_ELBOW_PITCH_L/damping
+    nominal: 0.08
+    abs_std: 0.05341496289073589
+    rel_std: 0.6676869526733296
+    nullspace_weight: 4.2140325194492605e-31
+    score: 0.3205976190655126
+    quality: ok
+  - idx: 62
+    name: J16_ELBOW_PITCH_L/friction
+    nominal: 0.3
+    abs_std: 0.11797983402369523
+    rel_std: 0.39326610030344744
+    nullspace_weight: 5.95634319327195e-31
+    score: 0.541823921954503
+    quality: good
+  - idx: 63
+    name: J17_ELBOW_YAW_L/damping
+    nominal: 0.08
+    abs_std: 0.03422342330499283
+    rel_std: 0.42779273783831817
+    nullspace_weight: 2.3264330948536378e-31
+    score: 0.5169784574662982
+    quality: good
+  - idx: 64
+    name: J17_ELBOW_YAW_L/friction
+    nominal: 0.3
+    abs_std: 0.11949197836760593
+    rel_std: 0.3983065812818004
+    nullspace_weight: 3.961908758890332e-31
+    score: 0.5382534700604711
+    quality: good
