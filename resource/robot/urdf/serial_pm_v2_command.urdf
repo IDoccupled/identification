@@ -12,7 +12,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_BASE.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_BASE.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -21,7 +21,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_BASE.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_BASE.STL"/>
             </geometry>
         </collision>
     </link>
@@ -34,7 +34,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HIP_PITCH_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HIP_PITCH_L.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -43,7 +43,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HIP_PITCH_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HIP_PITCH_L.STL"/>
             </geometry>
         </collision>
     </link>
@@ -63,7 +63,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HIP_ROLL_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HIP_ROLL_L.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -72,7 +72,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HIP_ROLL_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HIP_ROLL_L.STL"/>
             </geometry>
         </collision>
     </link>
@@ -92,7 +92,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HIP_YAW_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HIP_YAW_L.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -101,7 +101,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HIP_YAW_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HIP_YAW_L.STL"/>
             </geometry>
         </collision>
     </link>
@@ -121,7 +121,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_KNEE_PITCH_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_KNEE_PITCH_L.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -130,7 +130,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_KNEE_PITCH_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_KNEE_PITCH_L.STL"/>
             </geometry>
         </collision>
     </link>
@@ -150,7 +150,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ANKLE_PITCH_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ANKLE_PITCH_L.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -159,7 +159,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ANKLE_PITCH_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ANKLE_PITCH_L.STL"/>
             </geometry>
         </collision>
     </link>
@@ -179,7 +179,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ANKLE_ROLL_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ANKLE_ROLL_L.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -188,7 +188,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ANKLE_ROLL_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ANKLE_ROLL_L.STL"/>
             </geometry>
         </collision>
     </link>
@@ -230,7 +230,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HIP_PITCH_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HIP_PITCH_R.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -239,7 +239,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HIP_PITCH_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HIP_PITCH_R.STL"/>
             </geometry>
         </collision>
     </link>
@@ -259,7 +259,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HIP_ROLL_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HIP_ROLL_R.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -268,7 +268,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HIP_ROLL_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HIP_ROLL_R.STL"/>
             </geometry>
         </collision>
     </link>
@@ -288,7 +288,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HIP_YAW_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HIP_YAW_R.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -297,7 +297,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HIP_YAW_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HIP_YAW_R.STL"/>
             </geometry>
         </collision>
     </link>
@@ -317,7 +317,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_KNEE_PITCH_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_KNEE_PITCH_R.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -326,7 +326,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_KNEE_PITCH_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_KNEE_PITCH_R.STL"/>
             </geometry>
         </collision>
     </link>
@@ -346,7 +346,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ANKLE_PITCH_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ANKLE_PITCH_R.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -355,7 +355,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ANKLE_PITCH_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ANKLE_PITCH_R.STL"/>
             </geometry>
         </collision>
     </link>
@@ -375,7 +375,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ANKLE_ROLL_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ANKLE_ROLL_R.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -384,7 +384,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ANKLE_ROLL_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ANKLE_ROLL_R.STL"/>
             </geometry>
         </collision>
     </link>
@@ -404,7 +404,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_TORSO_YAW.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_TORSO_YAW.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -413,7 +413,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_TORSO_YAW.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_TORSO_YAW.STL"/>
             </geometry>
         </collision>
     </link>
@@ -455,7 +455,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_SHOULDER_PITCH_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_SHOULDER_PITCH_L.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -464,7 +464,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_SHOULDER_PITCH_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_SHOULDER_PITCH_L.STL"/>
             </geometry>
         </collision>
     </link>
@@ -484,7 +484,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_SHOULDER_ROLL_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_SHOULDER_ROLL_L.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -493,7 +493,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_SHOULDER_ROLL_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_SHOULDER_ROLL_L.STL"/>
             </geometry>
         </collision>
     </link>
@@ -513,7 +513,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_SHOULDER_YAW_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_SHOULDER_YAW_L.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -522,7 +522,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_SHOULDER_YAW_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_SHOULDER_YAW_L.STL"/>
             </geometry>
         </collision>
     </link>
@@ -542,7 +542,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ELBOW_PITCH_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ELBOW_PITCH_L.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -551,7 +551,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ELBOW_PITCH_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ELBOW_PITCH_L.STL"/>
             </geometry>
         </collision>
     </link>
@@ -571,7 +571,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ELBOW_YAW_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ELBOW_YAW_L.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -580,7 +580,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ELBOW_YAW_L.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ELBOW_YAW_L.STL"/>
             </geometry>
         </collision>
     </link>
@@ -622,7 +622,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_SHOULDER_PITCH_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_SHOULDER_PITCH_R.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -631,7 +631,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_SHOULDER_PITCH_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_SHOULDER_PITCH_R.STL"/>
             </geometry>
         </collision>
     </link>
@@ -651,7 +651,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_SHOULDER_ROLL_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_SHOULDER_ROLL_R.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -660,7 +660,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_SHOULDER_ROLL_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_SHOULDER_ROLL_R.STL"/>
             </geometry>
         </collision>
     </link>
@@ -680,7 +680,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_SHOULDER_YAW_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_SHOULDER_YAW_R.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -689,7 +689,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_SHOULDER_YAW_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_SHOULDER_YAW_R.STL"/>
             </geometry>
         </collision>
     </link>
@@ -709,7 +709,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ELBOW_PITCH_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ELBOW_PITCH_R.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -718,7 +718,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ELBOW_PITCH_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ELBOW_PITCH_R.STL"/>
             </geometry>
         </collision>
     </link>
@@ -738,7 +738,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ELBOW_YAW_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ELBOW_YAW_R.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -747,7 +747,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_ELBOW_YAW_R.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_ELBOW_YAW_R.STL"/>
             </geometry>
         </collision>
     </link>
@@ -789,7 +789,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HEAD_YAW.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HEAD_YAW.STL"/>
             </geometry>
             <material name="">
                 <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -798,7 +798,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://resource/robot/pm_v2/meshes/LINK_HEAD_YAW.STL"/>
+                <mesh filename="package://identification/resource/robot/meshes/LINK_HEAD_YAW.STL"/>
             </geometry>
         </collision>
     </link>
