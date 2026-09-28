@@ -4,24 +4,28 @@ robot" version of the nominal CAD model (``serial_pm_v2_identify.urdf``).
 
 The true URDF is the ground-truth model used to *simulate* measured data for the
 identification algorithms (they try to recover its 13 params/joint:
-10 inertial + armature + damping + friction).  This tool:
+10 inertial + armature + damping + friction).  It has to be known exactly, clearly
+different from the nominal values the ridge prior is built from, and itself
+physically consistent — a ground truth lying outside the identifier's own feasible
+set would turn the reported error into an artefact of the benchmark.  This tool:
 
 1. Normalises every ``<dynamics>`` tag to the standard URDF attributes
    ``armature`` + ``damping`` + ``friction`` (MuJoCo-style ``frictionloss`` is
    removed).  ``armature`` defaults match the pattern used in ``identify.urdf`` /
    ``resource/robot/xml/serial_links.xml``: ``0.045325`` for the large leg
    joints (damping 0.12), ``0.039175`` elsewhere.
-2. Perturbs the nominal values to mimic a real robot: mass stays close to CAD,
-   while COM and the inertia *shape/orientation* deviate clearly.  By default
-   (all relative to nominal):
-   - mass  : +1 % .. +5 %  (slightly heavier than CAD — small gap)
+2. Perturbs the nominal values to mimic a real robot.  The default preset
+   ("真实机分布") reproduces the CAD-vs-real gap measured on the hardware, where
+   the fitted parameters sit 20..50 % away from the prior:
+   - mass  : +20 % .. +25 % above CAD — one gain per mirrored L/R pair (the two
+             sides are the same part), plus a 2 % per-link jitter
    - COM   : shift scaled with each link's own radius of gyration (COM_REL),
              so physically bigger links shift more
    - inertia: principal moments change per axis (INERTIA_SHAPE_STD → shape) and
-             the ellipsoid's principal axes get a small rotation
-             (INERTIA_ORIENT_STD → direction micro-adjustment, not just size),
-             then projected so the tensor stays positive-definite AND obeys the
-             triangle inequality
+             the ellipsoid's principal axes get a rotation of ≈0.1 rad per axis
+             (INERTIA_ORIENT_STD → mean axis tilt ≈9°, i.e. direction and not
+             just size), then projected so the tensor stays positive-definite
+             AND obeys the triangle inequality
    - dynamics: small relative perturbation of armature / damping / friction per
              actuator class (+ tiny per-joint jitter, so same-model joints —
              mirrored L/R included — stay close).
@@ -31,11 +35,23 @@ identification algorithms (they try to recover its 13 params/joint:
    environment.  Elements already present are left untouched; disable with
    ``--no-env``.
 
-Reproducible: fixed default RNG seed (override with ``--seed``).
+Only the targeted numbers are rewritten; comments, tag layout and every other
+element of the file are left untouched.  The written file is then re-parsed and
+validated — every movable joint must carry armature + damping + friction and no
+``frictionloss``, and every non-dummy inertia must be positive-definite and
+satisfy the triangle inequality — so an unphysical ground truth aborts the run.
+
+Deviations realised by the shipped preset (25 links, 24 joints): mass
++17.6 .. +28.6 %, COM shift 1.9 .. 15.8 mm, inertia change ||dI||/||I||
+10.7 .. 47.1 %, armature ±1.5 %, damping +4.8 .. +7.7 %, friction −1.1 .. +3.8 %.
+
+Reproducible: fixed default RNG seed ``DEFAULT_SEED = 56`` (override with
+``--seed``); the same seed rewrites the file byte for byte.
 
 Run from ``src/identification``:
     python -m identification.make_true_urdf            # overwrite true URDF
     python -m identification.make_true_urdf --dry-run  # preview only
+    python -m identification.make_true_urdf --mass-lo 0.01 --mass-hi 0.05
 """
 
 from __future__ import annotations
@@ -65,16 +81,18 @@ MIN_GENERATED_MASS = 0.01  # kg — links below this are not perturbed
 # ---------------------------------------------------------------------------
 # Physical / perturbation defaults (tunable via CLI where marked)
 # ---------------------------------------------------------------------------
-DEFAULT_SEED = 233
-# "真实机分布" preset (2026-09-02): observed on the real robot —
-#   * mass stays close to CAD (small gap),
-#   * COM position and inertia SHAPE/ORIENTATION deviate clearly.
-MASS_LO, MASS_HI = 0.01, 0.05  # +1%..+5% heavier (small)
-MASS_JIT_STD = 0.002  # per-side mass jitter (L/R stay close)
-COM_REL = 0.04  # COM shift std = COM_REL * radius-of-gyration of the link
-INERTIA_SHAPE_STD = 0.05  # per-axis principal-moment noise -> ellipsoid shape
-INERTIA_JIT_STD = 0.01  # extra per-principal-moment jitter
-INERTIA_ORIENT_STD = 0.01  # rad; mean principal-axis tilt ≈ 1.6×this (0.01≈0.9°)
+DEFAULT_SEED = 56
+# "真实机分布" preset (2026-09-16): matches the CAD-vs-real gap measured on the
+# hardware — the fitted parameters sit 20..50 % away from the prior (e.g. J16:
+# mass +23 %, Ixx +24 %, Iyy +30 %), so mass, COM and the inertia shape AND
+# orientation all deviate by a comparable relative amount.  The earlier
+# 2026-09-02 preset used +1..+5 % mass with much smaller COM/inertia noise.
+MASS_LO, MASS_HI = 0.2, 0.25  # +20%..+25% heavier than CAD
+MASS_JIT_STD = 0.02  # per-side mass jitter (L/R stay close)
+COM_REL = 0.05  # COM shift std = COM_REL * radius-of-gyration of the link
+INERTIA_SHAPE_STD = 0.1  # per-axis principal-moment noise -> ellipsoid shape
+INERTIA_JIT_STD = 0.1  # extra per-principal-moment jitter
+INERTIA_ORIENT_STD = 0.1  # rad; mean principal-axis tilt ≈ 1.6×this ≈ 9°
 TRIANGLE_SAFETY = 0.02  # keep a >=2% triangle margin after projection
 # Dynamics relative perturbation (per-group ~N(0,s) + per-joint jitter).
 # *_JIT_STD  sets how far true dynamics drift from nominal (whole actuator class);
@@ -234,13 +252,13 @@ def _perturb_link(
 ) -> tuple[float, np.ndarray, np.ndarray]:
     """Return (mass, com, I) true values from a nominal link.
 
-    Real-robot behaviour vs CAD: mass stays close (``fm`` ≈ 1.01..1.05) while
-    COM and the inertia *ellipsoid* deviate clearly:
+    Real-robot behaviour vs CAD: the mass becomes ``fm`` ≈ 1.20..1.25, while COM
+    and the inertia *ellipsoid* deviate clearly:
       - COM shifts scaled with the link's own radius of gyration (COM_REL);
       - principal moments change independently per axis (INERTIA_SHAPE_STD)
         → different ellipsoid shape (not just an overall scale);
-      - the ellipsoid's principal axes get a small rotation (INERTIA_ORIENT_STD)
-        → direction micro-adjustment, so off-diagonal terms change too.
+      - the ellipsoid's principal axes get a rotation of INERTIA_ORIENT_STD
+        (≈0.1 rad per axis → ≈9° mean tilt), so off-diagonal terms change too.
     The result is projected onto the physical set (PD + triangle inequality).
     """
     # --- mass (small gap) ---
