@@ -16,8 +16,11 @@ def generate_launch_description():
         "resource",
         "robot",
         "urdf",
-        "serial_pm_v2_identify.urdf",
-        # pkg_share, "resource", "robot", "urdf", "serial_pm_v2_balance.urdf"
+        # "serial_pm_v2_identify.urdf",
+        # "serial_pm_v2_identify_260923_163458.urdf",
+        # "serial_pm_v2_command.urdf",
+        # "serial_pm_v2_identify_flat.urdf",
+        "serial_pm_v2_identify_result_arm.urdf",
     )
 
     # Read URDF content
