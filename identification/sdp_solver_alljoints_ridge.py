@@ -854,6 +854,7 @@ class SDPSolver:
         pi = cp.Variable(dof * N_PER_JOINT)  # all joints' parameters at once
         lam = cp.Variable(dof, nonneg=True)  # per-joint SOC objective terms
         t_shape = cp.Variable(dof) if shape_on else None  # per-joint slack bound
+        u = cp.Variable(nonneg=True)
 
         # --- Constraints ---
         cstr: list = []
@@ -891,7 +892,6 @@ class SDPSolver:
                 cstr.append(pi[g] == pi_prior_full[g])
 
         # --- Weighted ridge epigraph: obj += u,  u ≥ ‖√c ⊙ (pi − prior)‖₂ ---
-        u = cp.Variable(nonneg=True)
         cstr.append(cp.SOC(u, cp.multiply(c_sqrt, pi - pi_prior_full)))
 
         # --- Solve ---
@@ -1710,6 +1710,10 @@ def data_from_measurement(
         "joint_names": joint_names,
         "dof": dof,
         "t": t_sel,
+        # 辨识 bag 的来源信息（用作训练集扭矩对比图的标题，见
+        # plot_torque_comparison_measured_train）。
+        "bag_name": bag_name,
+        "trajectory_yaml": trajectory_yaml,
     }
 
 
@@ -2273,6 +2277,74 @@ def plot_torque_comparison_measured(
     return {"stats": stats, "figures": figures}
 
 
+def plot_torque_comparison_measured_train(
+    result: IdentificationResult,
+    Y_stack: np.ndarray,
+    tau_measured: np.ndarray,
+    joint_names: list[str] | None = None,
+    bag_name: str | None = None,
+    trajectory_yaml: str | None = None,
+    sample_rate: float = 100.0,
+    offset: float | None = None,
+    show_residual: bool = True,
+    twin: str | None = None,
+):
+    """Training-bag torque comparison — the **identification** bag (meas mode).
+
+    Same figure as ``plot_torque_comparison_measured`` (the held-out
+    validation), but drawn on the very samples the solver was fitted on:
+    ``Y_stack`` / ``tau_measured`` come straight from
+    ``data_from_measurement`` (identification bag, after the ``--twin-id``
+    window and the ~``sample_rate`` decimation), so
+
+        ``tau_prior = Y_stack @ pi_prior`` and
+        ``tau_ident = Y_stack @ pi_identified``
+
+    are compared against that bag's measured torque.  This shows the
+    **achieved training fit** — the prior error the identification removed on
+    the data it saw — and is therefore *not* evidence of generalisation
+    (that is what the held-out validation plot is for).  Because the ridge is
+    pulled toward the prior, the training fit is normally the best case; the
+    gap to the held-out numbers is the fit / generalisation split.
+
+    No RMSE table is printed here (the identification report already prints
+    the prior-vs-identified comparison on the identification data); the same
+    numbers are returned as ``stats``.
+    """
+    dof = len(result.joint_order)
+    if joint_names is None:
+        joint_names = [f"joint_{d}" for d in range(dof)]
+    if bag_name is None and trajectory_yaml is not None:
+        try:
+            bag_name = _yaml_source_bag(trajectory_yaml)
+        except (FileNotFoundError, ValueError):
+            bag_name = None
+
+    tau_prior = Y_stack @ result.pi_prior
+    tau_ident = Y_stack @ result.pi_identified
+    stats = _rmse_comparison(result, result.joint_order, Y_stack, tau_measured)
+
+    figures = _plot_torque_comparison_panels(
+        tau_measured,
+        tau_prior,
+        tau_ident,
+        joint_names,
+        result.joint_order,
+        dof,
+        sample_rate=sample_rate,
+        offset=offset,
+        show_residual=show_residual,
+        true_label="measured",
+        title=(
+            f"Joint Torque Comparison (identification bag): "
+            f"measured vs prior vs identified\n"
+            f"bag={bag_name or '?'}  yaml={trajectory_yaml or '?'}"
+        ),
+        twin=twin,
+    )
+    return {"stats": stats, "figures": figures}
+
+
 def plot_torque_comparison_simulated_validation(
     result: IdentificationResult,
     urdf_path: str | Path,
@@ -2519,22 +2591,27 @@ def plot_static_pose_errors(
     }
 
     fig, ax = plt.subplots(figsize=(max(9.5, 0.55 * n_poses + 4.5), 6.2))
+    # ``err`` / ``err_prior`` / ``tau_true`` columns follow the
+    # ``group_to_identify`` order (group-local joint index ``d``), whereas
+    # ``joint_order`` is a permutation of it (subtree-size sort, distal to
+    # proximal).  So the per-joint data must be indexed by ``d`` — ``j`` is
+    # only the palette index.  Indexing by ``j`` mirrored every label.
     for j, d in enumerate(joint_order):
         name = joint_names[d] if joint_names else f"joint_{d}"
         color = colors[j % 10]
         marker = markers[j % len(markers)]
         xj = x + off_map[d]  # <- horizontal fan inside the pose column
-        rms = float(np.sqrt(np.mean(err[:, j] ** 2)))
+        rms = float(np.sqrt(np.mean(err[:, d] ** 2)))
         t_rms = (
-            float(np.sqrt(np.mean(tau_true[:, j] ** 2)))
+            float(np.sqrt(np.mean(tau_true[:, d] ** 2)))
             if tau_true is not None
             else float("nan")
         )
         if err_prior is not None:
             ax.vlines(
                 xj,
-                err_prior[:, j],
-                err[:, j],
+                err_prior[:, d],
+                err[:, d],
                 color=color,
                 linewidth=0.9,
                 alpha=0.35,
@@ -2542,7 +2619,7 @@ def plot_static_pose_errors(
             )
             ax.scatter(
                 xj,
-                err_prior[:, j],
+                err_prior[:, d],
                 s=46,
                 marker=marker,
                 facecolors="none",
@@ -2551,7 +2628,7 @@ def plot_static_pose_errors(
                 alpha=0.9,
                 zorder=2,
             )
-            rms_p = float(np.sqrt(np.mean(err_prior[:, j] ** 2)))
+            rms_p = float(np.sqrt(np.mean(err_prior[:, d] ** 2)))
             label = (
                 f"{name}: ident RMS {rms:.3g} / prior {rms_p:.3g} Nm (true {t_rms:.3g})"
             )
@@ -2559,7 +2636,7 @@ def plot_static_pose_errors(
             label = f"{name}: err RMS {rms:.3g} Nm  (true RMS {t_rms:.3g})"
         ax.scatter(
             xj,
-            err[:, j],
+            err[:, d],
             s=68,
             marker=marker,
             color=color,
@@ -2681,23 +2758,26 @@ def run_static_pose_test(
         )
     print(hdr)
     print("-" * len(hdr))
-    for j, d in enumerate(joint_order):
+    # Index the per-joint columns by ``d`` (group-local joint index = column
+    # order of ``err``/``tau_true``), NOT by the loop position in
+    # ``joint_order`` — the latter mirrored every joint label (2026-09-23).
+    for d in joint_order:
         name = joint_names[d] if joint_names else f"joint_{d}"
-        rms = float(np.sqrt(np.mean(err[:, j] ** 2)))
-        rms_max = float(np.abs(err[:, j]).max())
-        t_rms = float(np.sqrt(np.mean(tau_true[:, j] ** 2)))
+        rms = float(np.sqrt(np.mean(err[:, d] ** 2)))
+        rms_max = float(np.abs(err[:, d]).max())
+        t_rms = float(np.sqrt(np.mean(tau_true[:, d] ** 2)))
         if err_prior is None:
             rel = rms / t_rms * 100 if t_rms > 1e-12 else float("nan")
             print(
                 f"{name:<22s} {rms:>9.4f} {rms_max:>9.4f} "
-                f"{float(err[:, j].mean()):>9.4f} {t_rms:>9.4f} {rel:>7.1f}%"
+                f"{float(err[:, d].mean()):>9.4f} {t_rms:>9.4f} {rel:>7.1f}%"
             )
         else:
-            rms_p = float(np.sqrt(np.mean(err_prior[:, j] ** 2)))
+            rms_p = float(np.sqrt(np.mean(err_prior[:, d] ** 2)))
             imp = (1 - rms / rms_p) * 100 if rms_p > 1e-12 else float("nan")
             print(
                 f"{name:<22s} {rms:>9.4f} {rms_max:>9.4f} {rms_p:>9.4f} "
-                f"{float(np.abs(err_prior[:, j]).max()):>9.4f} {imp:>7.1f}% "
+                f"{float(np.abs(err_prior[:, d]).max()):>9.4f} {imp:>7.1f}% "
                 f"{t_rms:>8.4f}"
             )
     print("-" * len(hdr))
@@ -3622,6 +3702,19 @@ def main(argv: list[str] | None = None) -> None:
                 twin=args.twin,
             )
         else:
+            # 辨识 bag 自身（即求解时真正用到的样本）的训练拟合图：与下面的
+            # 留出验证图同种样式，便于对照阅读。
+            plot_torque_comparison_measured_train(
+                result,
+                Y_stack=data["Y_stack"],
+                tau_measured=data["tau_measured"],
+                joint_names=data["joint_names"],
+                bag_name=data.get("bag_name"),
+                trajectory_yaml=data.get("trajectory_yaml"),
+                sample_rate=args.sample_rate,
+                twin=args.twin,
+            )
+
             # 逐条验证轨迹：每条 yaml 的验证 bag 用它**自己** bag 读到的机体系重力/
             # 腰关节角度（不同录制场次的姿态不同，不能沿用辨识 bag 的值）；
             # --gravity / --waist-offset 显式覆盖时沿用用户给的值。
