@@ -161,13 +161,15 @@ def plot_joint_residual(
     joint_number,
     joint_name,
     out_png=None,
+    t_shift=0.0,
 ):
-    """单个关节一张图：5 子图 —— 位置/速度、位置/速度残差、残差频谱。"""
+    """单个关节一张图：5 子图 —— 位置/速度、位置/速度残差、残差频谱"""
     import matplotlib.pyplot as plt
 
     C_ACT = "C0"  # 实际
     C_REC = "C3"  # 还原
 
+    t_plot = t - t_shift
     phase = np.mod(t, period)
     q_t = np.interp(phase, t_th, q_th, period=period)
     v_t = np.interp(phase, t_th, v_th, period=period)
@@ -188,14 +190,16 @@ def plot_joint_residual(
 
     # ① 位置：原始 vs 理论
     axs[0].plot(
-        t,
+        t_plot,
         q_raw,
         lw=0.5,
         alpha=0.7,
         color=C_ACT,
         label=f"actual q_{joint_number} (joint_state)",
     )
-    axs[0].plot(t, q_t, lw=1.2, color=C_REC, label="recovered q (fourier_trajectory)")
+    axs[0].plot(
+        t_plot, q_t, lw=1.2, color=C_REC, label="recovered q (fourier_trajectory)"
+    )
     axs[0].set_ylabel("q (rad)")
     axs[0].set_title(
         f"Position — {joint_name} (joint {joint_number})  f0={f0:.2f} Hz  "
@@ -208,9 +212,9 @@ def plot_joint_residual(
 
     # ② 速度：原始 vs 理论
     axs[1].plot(
-        t, v_raw, lw=0.5, alpha=0.7, color=C_ACT, label=f"actual v_{joint_number}"
+        t_plot, v_raw, lw=0.5, alpha=0.7, color=C_ACT, label=f"actual v_{joint_number}"
     )
-    axs[1].plot(t, v_t, lw=1.2, color=C_REC, alpha=0.8, label="recovered v")
+    axs[1].plot(t_plot, v_t, lw=1.2, color=C_REC, alpha=0.8, label="recovered v")
     axs[1].set_ylabel("v (rad/s)")
     axs[1].set_title(
         f"Velocity — v resid RMS {np.sqrt(np.mean(rv**2)):.4f} = "
@@ -222,25 +226,154 @@ def plot_joint_residual(
     axs[1].grid(alpha=0.3)
 
     # ③ 位置残差
-    axs[2].plot(t, rq, lw=0.6, color="C2")
+    axs[2].plot(t_plot, rq, lw=0.6, color="C2")
     axs[2].set_ylabel("q residual (rad)")
     axs[2].axhline(0, color="gray", lw=0.6)
     axs[2].grid(alpha=0.3)
 
     # ④ 速度残差
-    axs[3].plot(t, rv, lw=0.6, color="C4")
+    axs[3].plot(t_plot, rv, lw=0.6, color="C4")
     axs[3].set_ylabel("v residual (rad/s)")
     axs[3].set_xlabel("t (s)")
     axs[3].axhline(0, color="gray", lw=0.6)
     axs[3].grid(alpha=0.3)
 
     # ⑤ 残差频谱
-    _plot_residual_spectrum(axs[4], t, rq, rv, f0)
+    _plot_residual_spectrum(axs[4], t_plot, rq, rv, f0)
 
     fig.tight_layout()
     if out_png:
         fig.savefig(out_png, dpi=150)
         print(f"残差图已保存: {out_png}")
+    return fig
+
+
+def plot_residual_summary(
+    t,
+    q,
+    v,
+    q_th,
+    v_th,
+    t_th,
+    period,
+    f0,
+    tc,
+    joints,
+    joint_names,
+    out_png=None,
+    t_shift=0.0,
+    spectrum=True,
+    harmonic_max=20.0,
+    title=None,
+):
+    """全部关节合成**一张**图：① q 残差 ② v 残差 ③（可选）残差频谱。
+
+    与 ``plot_joint_residual``（一个关节一张 5 子图，占整整一页）相比，这里把
+    所有关节叠在同一个坐标轴里，整张图一页装得下（约 10x7.5 in），适合放论文
+    正文；每个关节单独的那张留给附录/自查。
+
+    为什么能叠：残差都是同量纲（rad / rad·s⁻¹），且实测里各关节 RMS 只差
+    3~5 倍，叠在一起不会被某一条盖住；图例里直接给出每个关节的 RMS 数值。
+
+    频谱横轴按 f0 归一化（= 谐波序号），这样标 f0 整数倍的竖线等距、看得清，
+    且 ``harmonic_max`` 之外的噪声底可以省掉。
+
+    ``t_shift`` 只平移横轴（画图用 ``t - t_shift``），相位折叠与残差计算仍用
+    绝对时间 ``t``：理论轨迹的相位参考是录制起点（同 ``plot_joint_residual``）。
+    """
+    import matplotlib.pyplot as plt
+
+    t_plot = t - t_shift  # 横轴：即使裁剪了时间窗也从 0 开始
+    phase = np.mod(t, period)  # 注意：必须用绝对时间 t，不能用 t_plot
+
+    n = len(joints)
+    tags = [nm.split("_")[0] for nm in joint_names]  # 'J13_SHOULDER_PITCH_L' -> 'J13'
+    colors = [f"C{i}" for i in range(n)]
+    rq = np.empty((n, t.size))
+    rv = np.empty((n, t.size))
+    for i, j in enumerate(joints):
+        rq[i] = q[:, j] - np.interp(phase, t_th, q_th[i], period=period)
+        rv[i] = v[:, j] - np.interp(phase, t_th, v_th[i], period=period)
+    rms_q = np.sqrt((rq**2).mean(axis=1))
+    rms_v = np.sqrt((rv**2).mean(axis=1))
+
+    nrows = 3 if spectrum else 2
+    fig, axs = plt.subplots(
+        nrows,
+        1,
+        figsize=(9.5, 2.5 * nrows + 0.8),
+        squeeze=False,
+    )
+    axs = [a[0] for a in axs]
+
+    def _strip_legend(ax, labels):
+        """单行图例贴在坐标轴上方（不遮曲线），标签里带 RMS 数值。
+
+        ``mode='expand'`` 需要 4 元组 bbox（带宽度），否则会挤在左边。
+        """
+        ax.legend(
+            handles=[
+                plt.Line2D([], [], color=c, lw=1.2, label=lab)
+                for c, lab in zip(colors, labels)
+            ],
+            loc="lower left",
+            bbox_to_anchor=(0.0, 1.0, 1.0, 0.08),
+            ncol=n,
+            mode="expand",
+            fontsize=7.5,
+            frameon=False,
+            borderaxespad=0.0,
+            handlelength=1.3,
+            handletextpad=0.4,
+            columnspacing=0.8,
+        )
+
+    # ① q 残差（全部关节叠在一起）—— x 刻度与下方面板共用，这里不重复标
+    for i in range(n):
+        axs[0].plot(t_plot, rq[i], lw=0.7, color=colors[i])
+    axs[0].axhline(0, color="gray", lw=0.6)
+    axs[0].set_ylabel("q residual (rad)")
+    axs[0].tick_params(labelbottom=False)
+    axs[0].grid(alpha=0.3)
+    _strip_legend(
+        axs[0],
+        [f"{tags[i]}  {rms_q[i]:.1e}" for i in range(n)],
+    )
+
+    # ② v 残差
+    for i in range(n):
+        axs[1].plot(t_plot, rv[i], lw=0.7, color=colors[i])
+    axs[1].axhline(0, color="gray", lw=0.6)
+    axs[1].set_ylabel("v residual (rad/s)")
+    axs[1].set_xlabel("t (s)")
+    axs[1].grid(alpha=0.3)
+    _strip_legend(
+        axs[1],
+        [f"{tags[i]}  {rms_v[i]:.1e}" for i in range(n)],
+    )
+
+    # ③ 残差频谱（横轴 = f/f0 = 谐波序号）
+    if spectrum:
+        dt = np.median(np.diff(t_plot))
+        for i in range(n):
+            freq = np.fft.rfftfreq(rq[i].size, dt) / f0
+            mag = np.maximum(np.abs(np.fft.rfft(rq[i])), 1e-18)
+            axs[2].semilogy(freq, mag, lw=0.8, color=colors[i])
+        for k in range(1, int(harmonic_max) + 1):
+            axs[2].axvline(k, color="gray", lw=0.6, ls="--", alpha=0.5)
+        axs[2].set_xlim(0.0, harmonic_max)
+        axs[2].set_xlabel(f"harmonic order  (f / f0, f0 = {f0:.2f} Hz)")
+        axs[2].set_ylabel("|FFT(q residual)|")
+        axs[2].grid(alpha=0.3, which="both")
+
+    if title:
+        fig.suptitle(title, fontsize=10)
+    fig.subplots_adjust(
+        left=0.085, right=0.985, top=0.90 if title else 0.94, bottom=0.075, hspace=0.62
+    )
+    if out_png:
+        fig.savefig(out_png, dpi=150)
+        print(f"残差汇总图已保存: {out_png}")
     return fig
 
 
@@ -251,7 +384,7 @@ def main():
     ap.add_argument(
         "--yaml",
         "-y",
-        default=None,
+        default="recovered_exc_arm_1.yaml",
         help="trajectory_coefficients 下的 YAML（默认最新 recovered_*.yaml）",
     )
     ap.add_argument(
@@ -285,7 +418,19 @@ def main():
     ap.add_argument(
         "--save",
         default=None,
-        help="保存到该路径（每关节一张，自动加 _J# 后缀）",
+        help="保存到该路径（summary=一张；per-joint=每关节一张，自动加 _J# 后缀）",
+    )
+    ap.add_argument(
+        "--layout",
+        choices=["summary", "per-joint"],
+        default="summary",
+        help="summary=全部关节合成一张图（q 残差 / v 残差 / 频谱，默认，省地方）；"
+        "per-joint=每关节一张 5 子图（旧行为，详细，适合附录或自查）",
+    )
+    ap.add_argument(
+        "--no-spectrum",
+        action="store_true",
+        help="[summary] 省掉第三张频谱子图（图更矮）",
     )
     args = ap.parse_args()
 
@@ -332,30 +477,59 @@ def main():
     mask_t = (t >= t0w) & (t <= t1w)
     if not np.any(mask_t):
         raise ValueError(f"时间窗 [{t0w}, {t1w}] 内没有数据点")
+    # 横轴起点：无 --twin 时为 0（bag 已归零）；只用于画图，不参与相位折叠。
+    t_shift = float(t[mask_t][0])
     t, q, v = t[mask_t], q[mask_t], v[mask_t]
 
-    figs = []
-    for i, (j, name) in enumerate(zip(joints, joint_names)):
-        out_path = None
-        if args.save:
-            p = Path(args.save)
-            out_path = str(p.with_name(f"{p.stem}_J{j}{p.suffix}"))
-        figs.append(
-            plot_joint_residual(
+    if args.layout == "summary":
+        figs = [
+            plot_residual_summary(
                 t,
-                q[:, j],
-                v[:, j],
-                q_th[i],
-                v_th[i],
+                q,
+                v,
+                q_th,
+                v_th,
                 t_th,
                 period,
                 f0,
                 tc,
-                joint_number=j,
-                joint_name=name,
-                out_png=out_path,
+                joints,
+                joint_names,
+                out_png=args.save,
+                t_shift=t_shift,
+                spectrum=not args.no_spectrum,
+                title=(
+                    f"Excitation trajectory residual — {group}   "
+                    f"bag={bag_name}   yaml={yaml_name}   "
+                    f"f0={f0:.2f} Hz   time_coeffs={tc:.2f}"
+                ),
             )
-        )
+        ]
+    else:
+        # per-joint：一个关节一张 5 子图（附录/自查）
+        figs = []
+        for i, (j, name) in enumerate(zip(joints, joint_names)):
+            out_path = None
+            if args.save:
+                p = Path(args.save)
+                out_path = str(p.with_name(f"{p.stem}_J{j}{p.suffix}"))
+            figs.append(
+                plot_joint_residual(
+                    t,
+                    q[:, j],
+                    v[:, j],
+                    q_th[i],
+                    v_th[i],
+                    t_th,
+                    period,
+                    f0,
+                    tc,
+                    joint_number=j,
+                    joint_name=name,
+                    out_png=out_path,
+                    t_shift=t_shift,
+                )
+            )
     if figs:
         import matplotlib.pyplot as plt
 
