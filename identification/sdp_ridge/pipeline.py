@@ -503,6 +503,7 @@ def run_validation_plots(
                 pi_reference=data["pi_true"],
                 sample_rate=args.sample_rate,
                 twin=args.twin,
+                layout=args.fig_layout,
             )
         else:
             # Training fit on the **identification** bag itself: the samples the
@@ -518,6 +519,7 @@ def run_validation_plots(
                 trajectory_yaml=data.get("trajectory_yaml"),
                 sample_rate=args.sample_rate,
                 twin=args.twin,
+                layout=args.fig_layout,
             )
 
             # Per validation trajectory: each yaml's bag contributes its **own**
@@ -560,6 +562,7 @@ def run_validation_plots(
                         waist_yaw_offset=val_waist,
                         tau_delay=args.tau_delay,  # same delay as in the ID
                         twin=args.twin,  # time-window zoom, e.g. "0:13.4"
+                        layout=args.fig_layout,
                     )
                     cv_rows.append(
                         {
@@ -632,6 +635,7 @@ def cross_validate_sim_heldout(
                     waist_yaw_offset=waist_yaw,
                     twin=args.twin,  # time-window zoom, e.g. "0:13.4"
                     plot=not args.no_plot,
+                    layout=args.fig_layout,
                 )
                 cv_rows.append(
                     {"yaml": Path(val_yaml).name, "note": note, "stats": out["stats"]}

@@ -137,8 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--csv-topic",
         default="hardware_joint_state",
-        help="[meas] CSV topic under <bag>/csv/ (holds the measured torque "
-        "columns)",
+        help="[meas] CSV topic under <bag>/csv/ (holds the measured torque columns)",
     )
     ap.add_argument(
         "--sample-rate",
@@ -234,6 +233,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip the torque comparison figures",
     )
     ap.add_argument(
+        "--fig-layout",
+        choices=["olympic", "per-joint", "row"],
+        default="olympic",
+        help="[plot] arrangement of the torque comparison figures: "
+        "olympic = all joints in one figure — 5-DoF arm: 3 on top, 2 below "
+        "shifted half a panel (like the Olympic rings); 6-DoF leg: 2x3; fits a "
+        "full landscape page (default); per-joint = one figure per joint (old "
+        "behaviour); row = all joints in one figure, one column per joint "
+        "(widest and flattest)",
+    )
+    ap.add_argument(
         "--static-test",
         "-static",
         action="store_true",
@@ -265,8 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-save-urdf",
         "-no",
         action="store_true",
-        help="Do not write the identified parameters out as a URDF (default: "
-        "write)",
+        help="Do not write the identified parameters out as a URDF (default: write)",
     )
     ap.add_argument(
         "--urdf-out-dir",
@@ -292,7 +301,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.static_test and not is_sim:
         raise SystemExit(
             "--static-test is only available in --sim mode (the meas mode "
-            "has no pi_true, so the joint torques of the \"actual URDF\" "
+            'has no pi_true, so the joint torques of the "actual URDF" '
             "cannot be computed)"
         )
 
