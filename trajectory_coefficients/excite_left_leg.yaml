@@ -768,7 +768,7 @@ _diagnostics:
     rel_std: 0.034750901652247215
     nullspace_weight: 0.8490971590891501
     score: 0.0
-    quality: rank_deficient
+    quality: ok
   - idx: 41
     name: J04_ANKLE_PITCH_L/mcx
     nominal: 0.0001458095295228
@@ -776,7 +776,7 @@ _diagnostics:
     rel_std: 26.62319275168742
     nullspace_weight: 0.49994375632741317
     score: 0.0
-    quality: rank_deficient
+    quality: ok
   - idx: 42
     name: J04_ANKLE_PITCH_L/mcy
     nominal: 0.0
@@ -784,7 +784,7 @@ _diagnostics:
     rel_std: 457186.1015353381
     nullspace_weight: 0.6074264607322544
     score: 0.0
-    quality: small
+    quality: ok
   - idx: 43
     name: J04_ANKLE_PITCH_L/mcz
     nominal: -0.0007629416847705
@@ -792,7 +792,7 @@ _diagnostics:
     rel_std: 19.244726244965168
     nullspace_weight: 0.00019101002781904335
     score: -0.9999999999999998
-    quality: bad
+    quality: ok
   - idx: 44
     name: J04_ANKLE_PITCH_L/Ixx
     nominal: 1.8506439626830235e-05
@@ -800,7 +800,7 @@ _diagnostics:
     rel_std: 439.02255331249097
     nullspace_weight: 0.3768415119820724
     score: 0.0
-    quality: small
+    quality: ok
   - idx: 45
     name: J04_ANKLE_PITCH_L/Ixy
     nominal: 0.0
@@ -808,7 +808,7 @@ _diagnostics:
     rel_std: 636325.3782612445
     nullspace_weight: 3.4057066502927564e-31
     score: 0.0
-    quality: small
+    quality: ok
   - idx: 46
     name: J04_ANKLE_PITCH_L/Iyy
     nominal: 2.0340760369290594e-05
@@ -816,7 +816,7 @@ _diagnostics:
     rel_std: 444.9979444086747
     nullspace_weight: 0.27355042764964344
     score: 0.0
-    quality: small
+    quality: ok
   - idx: 47
     name: J04_ANKLE_PITCH_L/Ixz
     nominal: 2.0944498425520846e-06
@@ -824,7 +824,7 @@ _diagnostics:
     rel_std: 3988.84900120654
     nullspace_weight: 0.00011248734517367019
     score: 0.0
-    quality: small
+    quality: ok
   - idx: 48
     name: J04_ANKLE_PITCH_L/Iyz
     nominal: 0.0
@@ -832,7 +832,7 @@ _diagnostics:
     rel_std: 955216.4939220288
     nullspace_weight: 3.920952625529364e-31
     score: 0.0
-    quality: small
+    quality: ok
   - idx: 49
     name: J04_ANKLE_PITCH_L/Izz
     nominal: 1.2714320742460363e-05
@@ -840,7 +840,7 @@ _diagnostics:
     rel_std: 657.031217519394
     nullspace_weight: 0.46196676398769587
     score: 0.0
-    quality: small
+    quality: ok
   - idx: 50
     name: J05_ANKLE_ROLL_L/mass
     nominal: 0.71886765
