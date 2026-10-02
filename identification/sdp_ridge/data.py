@@ -415,15 +415,21 @@ def yaml_source_bag(trajectory_yaml: str) -> str:
 
 
 def latest_pso_yaml_for_group(group: str, exclude: str | None = None) -> str | None:
-    """Latest ``pso_unified_*.yaml`` whose ``_meta.group`` matches ``group``.
+    """Latest PSO/excitation YAML whose ``_meta.group`` matches ``group``.
 
     Used to auto-link the parameter-quality YAML (from the PSO excitation
     design) to a recovered (measured) trajectory YAML, which carries no
-    ``_diagnostics``.  Returns ``None`` if no match is found.
+    ``_diagnostics``.  The quality YAMLs are the PSO outputs, historically
+    named ``pso_unified_*.yaml`` but shipped as the case-run ``excite_*.yaml``
+    (``excite_left_arm.yaml`` / ``excite_left_leg.yaml``), so both prefixes are
+    searched.  Returns ``None`` if no match is found.
     """
     from identification.fourier_trajectory import FourierTrajectory
 
-    matches = sorted(FourierTrajectory._coeffs_dir.glob("pso_unified_*.yaml"))
+    matches = []
+    for pattern in ("pso_unified_*.yaml", "excite_*.yaml"):
+        matches.extend(FourierTrajectory._coeffs_dir.glob(pattern))
+    matches = sorted(matches)
     for m in reversed(matches):
         if exclude and m.name == exclude:
             continue

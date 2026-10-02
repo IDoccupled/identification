@@ -74,8 +74,8 @@ def resolve_yamls(args, is_sim):
             )
         else:
             print(
-                f"  [quality] no pso_unified_*.yaml found for group='{group}'"
-                " → every parameter keeps the default tier weight"
+                f"  [quality] no pso_unified_*.yaml / excite_*.yaml found for "
+                f"group='{group}' → every parameter keeps the default tier weight"
             )
 
     return traj_yaml, quality_yaml
@@ -254,12 +254,25 @@ def configure_ridge(args, data, quality_yaml):
     #    from the quality labels by build_ridge_weights.  The link shape is
     #    handled separately by the soft hinge of step 2c (see LMI_SHAPE_FRAC);
     #    the LMI itself keeps only the numerical floor LMI_EPS.
+    dof_ = int(data["dof"])
     quality_map = None
     if quality_yaml is not None:
         quality_path = FourierTrajectory._coeffs_dir / quality_yaml
         if quality_path.is_file():
             quality_map = load_yaml_param_quality(quality_path)
-    freeze_mask = build_freeze_mask(quality_map, dof=int(data["dof"]))
+    # Guard: a quality YAML from a different limb group silently maps onto the
+    # wrong joint block — e.g. the arm YAML (5 joints, 65 params) on a 6-DoF leg
+    # (78 params) labels joints 0..4 with the arm's tiers and leaves the last
+    # joint unlabelled (printed as "?").  Fail loudly instead.
+    if quality_map is not None and len(quality_map) != dof_ * N_PER_JOINT:
+        raise ValueError(
+            f"quality YAML '{quality_yaml}' has {len(quality_map)} labelled "
+            f"parameters but this trajectory has {dof_} joints "
+            f"({dof_ * N_PER_JOINT} params) — it belongs to a different limb "
+            f"group.  Pass --quality-yaml with the matching file (or --yaml "
+            f"the quality YAML itself)."
+        )
+    freeze_mask = build_freeze_mask(quality_map, dof=dof_)
     # freeze_mask is the **single source of truth**: a frozen parameter also
     # drops out of the ridge norm (c = 0).  Conversely c = 0 without freezing
     # would mean "no penalty and free to move", which the solver rejects.
@@ -271,7 +284,6 @@ def configure_ridge(args, data, quality_yaml):
     )
     from collections import Counter
 
-    dof_ = int(data["dof"])
     n_freeze = int(freeze_mask.sum())
     n_dyn = dof_ * len(RIDGE_FREEZE_LOCAL_INDICES)
     n_qual = int(

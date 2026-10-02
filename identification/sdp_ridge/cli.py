@@ -20,7 +20,6 @@ from datetime import datetime
 
 from .config import (
     DEFAULT_URDF_PATH,
-    QUALITY_YAML_PATH,
     TAU_DELAY,
     TRAJ_YAML_PATH,
     TRUE_URDF_PATH,
@@ -88,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--quality-yaml",
         "-q-y",
-        default=QUALITY_YAML_PATH,
+        default=None,
         metavar="NAME",
         help="pso_unified YAML carrying the _diagnostics.per_param quality "
         "labels: each parameter's quality tier sets its ridge weight (L2 pull "
