@@ -15,7 +15,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
   · dof: 6 (J00_HIP_PITCH_L, J01_HIP_ROLL_L, J02_HIP_YAW_L, J03_KNEE_PITCH_L, J04_ANKLE_PITCH_L, J05_ANKLE_ROLL_L)
   · gravity: [-9.769356, 0.39413, -0.98616]
   · waist_yaw_offset: 0.02079
-  · generated: 2026-10-02 14:25:13
+  · generated: 2026-10-02 15:16:52
     -->
 
     <link name="LINK_BASE">
@@ -117,9 +117,9 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
 
     <link name="LINK_HIP_PITCH_L">
         <inertial>
-            <origin xyz="0.01067864 0.04356577 -0.01488831" rpy="0 0 0"/>
+            <origin xyz="0.01049752 0.04357990 -0.01486370" rpy="0 0 0"/>
             <mass value="1.68628239"/>
-            <inertia ixx="0.00242202" ixy="0.00007911" ixz="-0.00008476" iyy="0.00187581" iyz="-0.00022092" izz="0.00243699"/>
+            <inertia ixx="0.00242118" ixy="0.00006605" ixz="-0.00007978" iyy="0.00188402" iyz="-0.00021950" izz="0.00244159"/>
         </inertial>
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -143,13 +143,13 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_HIP_PITCH_L"/>
         <axis xyz="0 0.96593 -0.25882"/>
         <limit lower="-3.141" upper="2.443" effort="164" velocity="26.3"/>
-        <dynamics armature="0.04743899" damping="0.12763828" friction="0.56299295"/>
+        <dynamics armature="0.04762950" damping="0.12814407" friction="0.55663100"/>
     </joint>
     <link name="LINK_HIP_ROLL_L">
         <inertial>
-            <origin xyz="-0.01619634 0.00210635 -0.04233357" rpy="0 0 0"/>
-            <mass value="0.69765009"/>
-            <inertia ixx="0.00142906" ixy="-0.00037873" ixz="0.00025380" iyy="0.00155798" iyz="-0.00020751" izz="0.00129566"/>
+            <origin xyz="-0.01683569 0.00216903 -0.04349112" rpy="0 0 0"/>
+            <mass value="0.67890190"/>
+            <inertia ixx="0.00139993" ixy="-0.00026279" ixz="0.00027234" iyy="0.00151335" iyz="-0.00032079" izz="0.00128826"/>
         </inertial>
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -173,13 +173,13 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_HIP_ROLL_L"/>
         <axis xyz="1 0 0"/>
         <limit lower="-0.436" upper="2.094" effort="164" velocity="26.3"/>
-        <dynamics armature="0.04510843" damping="0.11951119" friction="0.57383655"/>
+        <dynamics armature="0.04511258" damping="0.11346022" friction="0.58030627"/>
     </joint>
     <link name="LINK_HIP_YAW_L">
         <inertial>
-            <origin xyz="-0.00276711 0.00104366 -0.08286067" rpy="0 0 0"/>
-            <mass value="2.24915685"/>
-            <inertia ixx="0.01545452" ixy="0.00051472" ixz="0.00099517" iyy="0.01656536" iyz="-0.00040468" izz="0.00332556"/>
+            <origin xyz="-0.00300257 0.00106668 -0.08497460" rpy="0 0 0"/>
+            <mass value="2.19717081"/>
+            <inertia ixx="0.01487171" ixy="0.00109241" ixz="0.00104038" iyy="0.01592560" iyz="-0.00040540" izz="0.00334914"/>
         </inertial>
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -203,13 +203,13 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_HIP_YAW_L"/>
         <axis xyz="0 0 1"/>
         <limit lower="-1.57" upper="4.014" effort="61" velocity="35.2"/>
-        <dynamics armature="0.03921795" damping="0.08722043" friction="0.30155218"/>
+        <dynamics armature="0.03930483" damping="0.08812096" friction="0.30254599"/>
     </joint>
     <link name="LINK_KNEE_PITCH_L">
         <inertial>
-            <origin xyz="-0.00227388 0.00221928 -0.12255250" rpy="0 0 0"/>
-            <mass value="5.46857805"/>
-            <inertia ixx="0.05886748" ixy="0.00013412" ixz="0.00250805" iyy="0.06394592" iyz="0.00029681" izz="0.00625813"/>
+            <origin xyz="-0.00212385 0.00226033 -0.12143656" rpy="0 0 0"/>
+            <mass value="5.46181275"/>
+            <inertia ixx="0.05833252" ixy="0.00013571" ixz="0.00238903" iyy="0.06346726" iyz="0.00086459" izz="0.00634054"/>
         </inertial>
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -233,13 +233,13 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_KNEE_PITCH_L"/>
         <axis xyz="0 1 0"/>
         <limit lower="-0.3491" upper="2.3911" effort="164" velocity="26.3"/>
-        <dynamics armature="0.04573772" damping="0.12686774" friction="0.56639013"/>
+        <dynamics armature="0.04572900" damping="0.12999258" friction="0.56197293"/>
     </joint>
     <link name="LINK_ANKLE_PITCH_L">
         <inertial>
-            <origin xyz="0.00126322 0.06157056 -0.00662603" rpy="0 0 0"/>
-            <mass value="0.11598679"/>
-            <inertia ixx="0.00055339" ixy="-0.00007315" ixz="0.00080766" iyy="0.00174441" iyz="0.00004942" izz="0.00120324"/>
+            <origin xyz="0.00136046 0.00003196 -0.00722355" rpy="0 0 0"/>
+            <mass value="0.11034853"/>
+            <inertia ixx="0.00001200" ixy="-0.00000082" ixz="0.00000312" iyy="0.00001598" iyz="0.00000120" izz="0.00001259"/>
         </inertial>
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -263,13 +263,13 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_ANKLE_PITCH_L"/>
         <axis xyz="0 1 0"/>
         <limit lower="-0.6807" upper="0.7243" effort="61" velocity="35.2"/>
-        <dynamics armature="0.03779399" damping="0.07981443" friction="0.29990469"/>
+        <dynamics armature="0.03816505" damping="0.07923184" friction="0.29926452"/>
     </joint>
     <link name="LINK_ANKLE_ROLL_L">
         <inertial>
-            <origin xyz="0.01899433 0.00635192 -0.02628490" rpy="0 0 0"/>
-            <mass value="0.74198853"/>
-            <inertia ixx="0.00039640" ixy="-0.00011316" ixz="0.00060299" iyy="0.00301039" iyz="-0.00004166" izz="0.00290619"/>
+            <origin xyz="0.01816187 0.00982462 -0.02606931" rpy="0 0 0"/>
+            <mass value="0.76462791"/>
+            <inertia ixx="0.00041779" ixy="-0.00020404" ixz="0.00096523" iyy="0.00368065" iyz="0.00006013" izz="0.00340893"/>
         </inertial>
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -293,7 +293,7 @@ For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
         <child link="LINK_ANKLE_ROLL_L"/>
         <axis xyz="1 0 0"/>
         <limit lower="-0.2618" upper="0.2618" effort="61" velocity="35.2"/>
-        <dynamics armature="0.04107574" damping="0.08069974" friction="0.30232841"/>
+        <dynamics armature="0.04213727" damping="0.08066165" friction="0.30054707"/>
     </joint>
 
     <link name="LINK_FOOT_L">
