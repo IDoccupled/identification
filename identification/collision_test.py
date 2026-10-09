@@ -213,6 +213,12 @@ def main():
         ("LINK_ELBOW_YAW_L_0", "LINK_HIP_YAW_L_0"),
         ("LINK_ELBOW_PITCH_L_0", "LINK_TORSO_YAW_0"),
         ("LINK_SHOULDER_YAW_L_0", "LINK_TORSO_YAW_0"),
+        ("LINK_HIP_YAW_L_0", "table2_0"),
+        ("LINK_HIP_YAW_L_0", "LINK_BASE_0"),
+        ("LINK_HIP_YAW_L_0", "LINK_TORSO_YAW_0"),
+        ("LINK_KNEE_PITCH_L_0", "LINK_SHOULDER_ROLL_L_0"),
+        ("LINK_ANKLE_PITCH_L_0", "LINK_SHOULDER_ROLL_L_0"),
+        ("LINK_ANKLE_ROLL_L_0", "LINK_SHOULDER_ROLL_L_0"),
         # table
         ("LINK_ELBOW_YAW_L_0", "table_0"),
         ("LINK_ELBOW_PITCH_L_0", "table_0"),
@@ -226,6 +232,12 @@ def main():
         ("LINK_KNEE_PITCH_R_0", "table_0"),
         ("LINK_ANKLE_PITCH_R_0", "table_0"),
         ("LINK_ANKLE_ROLL_R_0", "table_0"),
+        ("LINK_KNEE_PITCH_L_0", "table2_0"),
+        ("LINK_ANKLE_PITCH_L_0", "table2_0"),
+        ("LINK_ANKLE_ROLL_L_0", "table2_0"),
+        ("LINK_KNEE_PITCH_R_0", "table2_0"),
+        ("LINK_ANKLE_PITCH_R_0", "table2_0"),
+        ("LINK_ANKLE_ROLL_R_0", "table2_0"),
     ]
 
     ct.add_collision_pairs(collision_pairs)
