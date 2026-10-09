@@ -16,11 +16,11 @@ def generate_launch_description():
         "resource",
         "robot",
         "urdf",
-        # "serial_pm_v2_identify.urdf",
-        # "serial_pm_v2_identify_260923_163458.urdf",
-        # "serial_pm_v2_command.urdf",
-        # "serial_pm_v2_identify_flat.urdf",
-        "serial_pm_v2_identify_result_arm.urdf",
+        # "serial_pm_v2_identify.urdf",  # Original
+        # "serial_pm_v2_command.urdf",  # Command version (Original)
+        # "serial_pm_v2_identify_flat.urdf",  # sim identified without shape constraint
+        # "serial_pm_v2_identify_sim_arm.urdf",  # sim identified arm
+        "serial_pm_v2_identify_sim_leg.urdf",  # sim identified leg
     )
 
     # Read URDF content
