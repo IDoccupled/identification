@@ -1980,67 +1980,6 @@ def _parse_window(s: str | None, t_end: float) -> tuple[float, float]:
     return t0, t1
 
 
-def _torque_layout_axes(fig, dof: int, show_residual: bool, layout: str) -> list:
-    """Build the sub-axes grid for the combined torque-comparison layouts.
-
-    Returns ``(ax, ax_r)`` pairs — one per joint, in the same order as
-    ``joint_order`` (``ax_r`` is ``None`` when ``show_residual`` is false).
-
-    * ``"row"``     — one column per joint: torque row on top, Δτ row below.
-      Very wide and short: ideal for a full **landscape** LaTeX page.
-    * ``"olympic"`` — always two rows:
-
-      * **odd** ``dof`` (5-DoF arm) → 3-over-2 **stagger**: the top row takes
-        ``ceil(dof/2)`` panels and the bottom row is shifted right by half a
-        panel width, so it nests under the gaps of the top row, exactly like
-        the Olympic rings.  (The rings interlock in reality; here the panels
-        only *interlock visually* — nothing is drawn on top of a neighbour, so
-        no curve is ever hidden.)
-      * **even** ``dof`` (6-DoF leg) → plain ``2 × dof/2`` grid, i.e. **2×3**
-        for a leg; no half-panel shift exists, so both rows line up.
-    """
-    if layout == "row":
-        nrows = 2 if show_residual else 1
-        outer = fig.add_gridspec(nrows, dof, hspace=0.28, wspace=0.30)
-        pairs = []
-        for j in range(dof):
-            ax = fig.add_subplot(outer[0, j])
-            ax_r = fig.add_subplot(outer[1, j], sharex=ax) if show_residual else None
-            pairs.append((ax, ax_r))
-        return pairs
-
-    # --- "olympic" ---
-    n_top = (dof + 1) // 2  # dof=5 -> 3 on top ; dof=6 -> 3 on top
-    n_bottom = dof - n_top  # dof=5 -> 2 below   ; dof=6 -> 3 below
-    if n_bottom < n_top:
-        # Half-panel stagger ("rings"): every panel spans 2 columns, so half a
-        # panel = 1 GridSpec column.  wspace stays large because each panel
-        # needs room for its own y-label plus the tick labels of the *next* one.
-        ncols, wspace = 2 * n_top, 0.55
-        slots = [(0, 2 * i, 2 * i + 2) for i in range(n_top)]
-        slots += [(1, 2 * j + 1, 2 * j + 3) for j in range(n_bottom)]
-    else:
-        # Even dof (6-DoF leg -> 2x3): both rows share the same columns.
-        ncols, wspace = n_top, 0.30
-        slots = [(0, i, i + 1) for i in range(n_top)]
-        slots += [(1, j, j + 1) for j in range(n_bottom)]
-
-    outer = fig.add_gridspec(2 if n_bottom else 1, ncols, hspace=0.26, wspace=wspace)
-
-    pairs = []
-    for row_i, c0, c1 in slots:
-        cell = outer[row_i, c0:c1]
-        if show_residual:
-            inner = cell.subgridspec(2, 1, height_ratios=[2.2, 1.0], hspace=0.10)
-            ax = fig.add_subplot(inner[0])
-            ax_r = fig.add_subplot(inner[1], sharex=ax)
-        else:
-            ax = fig.add_subplot(cell)
-            ax_r = None
-        pairs.append((ax, ax_r))
-    return pairs
-
-
 def _plot_torque_comparison_panels(
     tau_true: np.ndarray,
     tau_prior: np.ndarray,
@@ -2054,47 +1993,27 @@ def _plot_torque_comparison_panels(
     true_label: str = "true",
     title: str = "Joint Torque Comparison",
     twin: str | None = None,
-    layout: str = "per-joint",
-    figsize: tuple[float, float] | None = None,
-    show: bool = True,
 ) -> list:
-    """Torque comparison plots — one figure per joint, or every joint in one.
+    """Per-joint torque comparison plots — **one figure per joint**.
 
-    ``layout`` selects the arrangement:
+    Each figure has the main torque panel and (optionally) a residual panel
+    below it.  ``twin`` is an optional ``'START:END'`` time window (seconds)
+    applied to the time axis (either end may be omitted; ``None`` = full),
+    matching ``compare_torque.py -w/--twin``.
 
-    * ``"per-joint"`` (default, unchanged behaviour): **one figure per joint**,
-      each with the main torque panel and (optionally) a residual panel below.
-    * ``"olympic"``: **one single figure** containing every joint, staggered
-      3-over-2 like the Olympic rings — the top row holds ``ceil(dof/2)``
-      joints, the bottom row is shifted half a panel width so it nests under
-      the gaps of the top row.  Each joint keeps its own torque + Δτ pair; the
-      three curves share **one** figure-level legend and every Δτ panel shows
-      its two RMSE values in a corner box.  Default size ≈ 1.9:1 (landscape).
-    * ``"row"``: one single figure, one column per joint (torque row + Δτ row) —
-      the widest, flattest variant.
-
-    ``twin`` is an optional ``'START:END'`` time window (seconds) applied to the
-    time axis (either end may be omitted; ``None`` = full), matching
-    ``compare_torque.py -w/--twin``.
-
-    The three curves often nearly overlap when identification is good, so this
-    version improves readability via:
+    The three curves often nearly overlap when identification is good,
+    so this version improves readability via:
 
     * **Residual panels** (default on): a sub-panel below each torque plot
       shows ``τ_true − τ_prior`` and ``τ_true − τ_identified`` with per-curve
-      RMSE — even sub-0.1 Nm gaps become clearly visible.
+      RMSE in the legend — even sub-0.1 Nm gaps become clearly visible.
     * **offset** (optional, Nm): shift the curves vertically
       (prior +offset, identified −offset) to fully separate them.
       Residuals are always computed from the un-shifted data.
 
-    ``figsize`` overrides the per-layout default; ``show=False`` skips the
-    interactive window (useful for batch/headless runs).  Saving is left to the
-    caller (interactive window → manual export).
-
     Returns the list of created ``matplotlib.figure.Figure`` objects.
     """
     import matplotlib.pyplot as plt
-    from matplotlib.lines import Line2D
 
     N_total = len(tau_true)
     N = N_total // dof
@@ -2105,29 +2024,9 @@ def _plot_torque_comparison_panels(
     mask = (t >= t0) & (t <= t1)
     if not np.any(mask):
         raise ValueError(f"Time window [{t0:.3g}, {t1:.3g}] contains no samples")
-    # Re-base the plotted time axis on the window start: a ``--twin`` segment is
-    # always drawn from 0 s, so the x numbers stay small and comparable between
-    # figures (the absolute window is still in the figure title / the CLI call).
-    # Without ``twin`` this is a no-op (t[0] is already 0).
-    t = t[mask] - t[mask][0]
+    t = t[mask]
 
-    combined = layout != "per-joint"
-    if combined:
-        if layout not in ("olympic", "row"):
-            raise ValueError(
-                f"layout must be 'per-joint', 'olympic' or 'row', got {layout!r}"
-            )
-        if figsize is None:
-            figsize = (
-                (14.5, 7.8) if layout == "olympic" else (max(11.0, 3.4 * dof), 4.9)
-            )
-        fig = plt.figure(figsize=figsize)
-        axes_pairs = _torque_layout_axes(fig, dof, show_residual, layout)
-        figs: list = [fig]
-    else:
-        axes_pairs = None
-        figs = []
-
+    figs: list = []
     for idx, d in enumerate(joint_order):
         row = np.arange(d, N_total, dof)[mask]
         y_true = tau_true[row]
@@ -2138,12 +2037,7 @@ def _plot_torque_comparison_panels(
             y_prior = y_prior + offset
             y_ident = y_ident - offset
 
-        if combined:
-            ax, ax_r = axes_pairs[idx]
-            if ax_r is not None:
-                # sharex() does not hide the upper panel's labels by itself.
-                ax.tick_params(labelbottom=False)
-        elif show_residual:
+        if show_residual:
             fig, (ax, ax_r) = plt.subplots(
                 2,
                 1,
@@ -2156,19 +2050,11 @@ def _plot_torque_comparison_panels(
             ax_r = None
 
         # --- Torque comparison panel ---
-        # In the combined layout the panels are ~3x smaller, so the curves and
-        # the (shared) legend are thinned down accordingly.
-        lw = 0.85 if combined else 1.0
-        ax.plot(t, y_true, "r-", linewidth=2.2 * lw, label=true_label)
-        ax.plot(t, y_prior, "b--", linewidth=1.6 * lw, alpha=0.9, label="prior")
-        ax.plot(t, y_ident, "g-", linewidth=2.0 * lw, label="identified")
-        if combined:
-            ax.set_title(joint_names[d], fontsize=10, pad=3)
-            ax.set_ylabel("[Nm]", fontsize=9)
-            ax.tick_params(labelsize=8)
-        else:
-            ax.set_ylabel(f"{joint_names[d]}\n[Nm]")
-            ax.legend(loc="upper right", fontsize=8, ncol=3)
+        ax.plot(t, y_true, "r-", linewidth=2.2, label=true_label)
+        ax.plot(t, y_prior, "b--", linewidth=1.6, alpha=0.9, label="prior")
+        ax.plot(t, y_ident, "g-", linewidth=2.0, label="identified")
+        ax.set_ylabel(f"{joint_names[d]}\n[Nm]")
+        ax.legend(loc="upper right", fontsize=8, ncol=3)
         ax.grid(True, alpha=0.3)
         ax.set_xlim(t[0], t[-1])
 
@@ -2193,68 +2079,20 @@ def _plot_torque_comparison_panels(
                 label=f"{true_label}−identified   RMSE {rmse_ident:.3g}",
             )
             ax_r.set_ylabel("Δτ [Nm]")
-            if combined:
-                ax_r.tick_params(labelsize=8)
-                ax_r.text(
-                    0.99,
-                    0.94,
-                    f"RMSE prior {rmse_prior:.3g}\nRMSE ident {rmse_ident:.3g}",
-                    transform=ax_r.transAxes,
-                    ha="right",
-                    va="top",
-                    fontsize=7,
-                    linespacing=1.3,
-                    bbox={
-                        "boxstyle": "round,pad=0.22",
-                        "fc": "white",
-                        "ec": "0.75",
-                        "alpha": 0.9,
-                    },
-                )
-            else:
-                ax_r.legend(loc="upper right", fontsize=7)
+            ax_r.legend(loc="upper right", fontsize=7)
             ax_r.grid(True, alpha=0.3)
             ax_r.set_xlim(t[0], t[-1])
-            ax_r.set_xlabel("Time [s]", fontsize=9 if combined else None)
+            ax_r.set_xlabel("Time [s]")
         else:
-            ax.set_xlabel("Time [s]", fontsize=9 if combined else None)
+            ax.set_xlabel("Time [s]")
 
-        if not combined:
-            figs.append(fig)
+        figs.append(fig)
 
-    if combined:
-        # One shared legend instead of five identical ones.
-        fig.suptitle(title, fontsize=13, y=0.99)
-        handles = [
-            Line2D([], [], color="r", linewidth=2.2 * 0.85, label=true_label),
-            Line2D(
-                [], [], color="b", linestyle="--", linewidth=1.6 * 0.85, label="prior"
-            ),
-            Line2D([], [], color="g", linewidth=2.0 * 0.85, label="identified"),
-        ]
-        fig.legend(
-            handles=handles,
-            loc="upper center",
-            bbox_to_anchor=(0.5, 0.955),
-            ncol=3,
-            frameon=False,
-            fontsize=11,
-        )
-        # Explicit margins instead of tight_layout(): the nested GridSpec used by
-        # these layouts is not tight_layout-compatible, so spacing is chosen here
-        # (the per-panel wspace/hspace live in _torque_layout_axes).
-        # ``top`` must clear suptitle *and* the shared legend above the panels.
-        if layout == "olympic":
-            fig.subplots_adjust(left=0.045, right=0.995, top=0.87, bottom=0.075)
-        else:
-            fig.subplots_adjust(left=0.045, right=0.995, top=0.82, bottom=0.13)
-    else:
-        for fig in figs:
-            fig.suptitle(title, fontsize=13)
-            fig.tight_layout(rect=[0, 0, 1, 0.95])
+    for fig in figs:
+        fig.suptitle(title, fontsize=13)
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
 
-    if show:
-        plt.show()
+    plt.show()
     return figs
 
 
@@ -2267,16 +2105,12 @@ def plot_torque_comparison_simulated(
     offset: float | None = None,
     show_residual: bool = True,
     twin: str | None = None,
-    layout: str = "per-joint",
 ):
     """Plot τ_true vs τ_prior vs τ_identified — simulation case (pi_true known).
 
     ``tau_true = Y_stack @ pi_reference`` (falls back to the prior when no
     reference is given).  This is the original ``plot_torque_comparison``
     behaviour for URDF-synthesized data.
-
-    ``layout`` is forwarded to ``_plot_torque_comparison_panels``
-    (``"per-joint"`` | ``"olympic"`` | ``"row"``).
     """
     dof = len(result.joint_order)
     pi_true = pi_reference if pi_reference is not None else result.pi_prior
@@ -2297,7 +2131,6 @@ def plot_torque_comparison_simulated(
         true_label="true",
         title="Joint Torque Comparison (simulated): true vs prior vs identified",
         twin=twin,
-        layout=layout,
     )
 
 
@@ -2318,7 +2151,6 @@ def plot_torque_comparison_measured(
     show_residual: bool = True,
     verbose: bool = True,
     twin: str | None = None,
-    layout: str = "per-joint",
 ):
     """Cross-validation plot on a held-out measurement (pi_true unknown).
 
@@ -2441,7 +2273,6 @@ def plot_torque_comparison_measured(
             f"bag={val_bag_name}  yaml={val_yaml}"
         ),
         twin=twin,
-        layout=layout,
     )
     return {"stats": stats, "figures": figures}
 
@@ -2457,7 +2288,6 @@ def plot_torque_comparison_measured_train(
     offset: float | None = None,
     show_residual: bool = True,
     twin: str | None = None,
-    layout: str = "per-joint",
 ):
     """Training-bag torque comparison — the **identification** bag (meas mode).
 
@@ -2511,7 +2341,6 @@ def plot_torque_comparison_measured_train(
             f"bag={bag_name or '?'}  yaml={trajectory_yaml or '?'}"
         ),
         twin=twin,
-        layout=layout,
     )
     return {"stats": stats, "figures": figures}
 
@@ -2532,7 +2361,6 @@ def plot_torque_comparison_simulated_validation(
     verbose: bool = True,
     twin: str | None = None,
     plot: bool = True,
-    layout: str = "per-joint",
 ):
     """Held-out cross-validation of sim identification on a different YAML.
 
@@ -2628,7 +2456,6 @@ def plot_torque_comparison_simulated_validation(
                 "(identified on a different training yaml)"
             ),
             twin=twin,
-            layout=layout,
         )
     return {"stats": stats, "figures": figures}
 
@@ -3330,7 +3157,6 @@ def _build_parser() -> argparse.ArgumentParser:
     # ---- 模式 / 数据来源 ----
     ap.add_argument(
         "--sim",
-        "-s",
         action="store_true",
         help="仿真模式：tau 由 URDF 合成（prepare_data_from_urdf），pi_true 已知；"
         "不加 --sim 即实测模式（data_from_measurement，默认）",
@@ -3474,22 +3300,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-plot",
         action="store_true",
         help="跳过力矩对比图",
-    )
-    ap.add_argument(
-        "--fig-layout",
-        choices=["olympic", "per-joint", "row"],
-        default="olympic",
-        help="[plot] 力矩对比图排布：olympic=全部关节合到一张图——5 自由度手臂上 3 下 2 "
-        "半格错开（奥运五环式），6 自由度腿 2×3，适合横放一整页（默认）；"
-        "per-joint=每个关节单独一张（旧行为）；row=合到一张图、每关节一列（最扁最宽）",
-    )
-    ap.add_argument(
-        "--fig-out",
-        default=None,
-        metavar="PATH",
-        help="[plot] 把图存盘以便 \\includegraphics：给目录则存 <目录>/torque_<标签>.pdf；"
-        "给 .pdf/.png/.svg 等文件名则直接用该名字（多张时自动加 _2/_3）。"
-        "推荐 .pdf（矢量，缩放到整页也不糊）；省略则只弹窗显示",
     )
     ap.add_argument(
         "--static-test",
@@ -3890,7 +3700,6 @@ def main(argv: list[str] | None = None) -> None:
                 pi_reference=data["pi_true"],
                 sample_rate=args.sample_rate,
                 twin=args.twin,
-                layout=args.fig_layout,
             )
         else:
             # 辨识 bag 自身（即求解时真正用到的样本）的训练拟合图：与下面的
@@ -3904,7 +3713,6 @@ def main(argv: list[str] | None = None) -> None:
                 trajectory_yaml=data.get("trajectory_yaml"),
                 sample_rate=args.sample_rate,
                 twin=args.twin,
-                layout=args.fig_layout,
             )
 
             # 逐条验证轨迹：每条 yaml 的验证 bag 用它**自己** bag 读到的机体系重力/
@@ -3946,7 +3754,6 @@ def main(argv: list[str] | None = None) -> None:
                         waist_yaw_offset=val_waist,
                         tau_delay=args.tau_delay,  # 与辨识一致的时延补偿
                         twin=args.twin,  # 时间窗缩放，如 "0:13.4"
-                        layout=args.fig_layout,
                     )
                     cv_rows.append(
                         {
@@ -4002,7 +3809,6 @@ def main(argv: list[str] | None = None) -> None:
                     waist_yaw_offset=waist_yaw,
                     twin=args.twin,  # 时间窗缩放，如 "0:13.4"
                     plot=not args.no_plot,
-                    layout=args.fig_layout,
                 )
                 cv_rows.append(
                     {"yaml": Path(val_yaml).name, "note": note, "stats": out["stats"]}
