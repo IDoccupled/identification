@@ -30,7 +30,7 @@ RIDGE_QUALITY_WEIGHTS = {
     "ok": 3.0,
     "bad": 10.0,
     "rank_deficient": 20.0,
-    "small": 1e-3,
+    "small": 1.0,
 }
 # RIDGE_FREEZE_QUALITIES = frozenset({"null", "small"})
 RIDGE_FREEZE_QUALITIES = frozenset({"null"})

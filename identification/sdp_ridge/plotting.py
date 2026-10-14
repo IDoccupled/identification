@@ -324,6 +324,7 @@ def plot_torque_comparison_simulated(
     show_residual: bool = True,
     twin: str | None = None,
     layout: str = "per-joint",
+    show: bool = True,
 ):
     """Plot τ_true vs τ_prior vs τ_identified — simulation case (pi_true known).
 
@@ -351,6 +352,7 @@ def plot_torque_comparison_simulated(
         title="Joint Torque Comparison (simulated): true vs prior vs identified",
         twin=twin,
         layout=layout,
+        show=show,
     )
 
 
@@ -372,6 +374,7 @@ def plot_torque_comparison_measured(
     verbose: bool = True,
     twin: str | None = None,
     layout: str = "per-joint",
+    show: bool = True,
 ):
     """Cross-validation plot on a held-out measurement (pi_true unknown).
 
@@ -495,6 +498,7 @@ def plot_torque_comparison_measured(
         ),
         twin=twin,
         layout=layout,
+        show=show,
     )
     return {"stats": stats, "figures": figures}
 
@@ -511,6 +515,7 @@ def plot_torque_comparison_measured_train(
     show_residual: bool = True,
     twin: str | None = None,
     layout: str = "per-joint",
+    show: bool = True,
 ):
     """Training-bag torque comparison — the **identification** bag (meas mode).
 
@@ -565,6 +570,7 @@ def plot_torque_comparison_measured_train(
         ),
         twin=twin,
         layout=layout,
+        show=show,
     )
     return {"stats": stats, "figures": figures}
 
@@ -586,6 +592,7 @@ def plot_torque_comparison_simulated_validation(
     twin: str | None = None,
     plot: bool = True,
     layout: str = "per-joint",
+    show: bool = True,
 ):
     """Held-out cross-validation of sim identification on a different YAML.
 
@@ -682,5 +689,6 @@ def plot_torque_comparison_simulated_validation(
             ),
             twin=twin,
             layout=layout,
+            show=show,
         )
     return {"stats": stats, "figures": figures}

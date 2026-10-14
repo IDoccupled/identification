@@ -117,6 +117,7 @@ def plot_static_pose_errors(
     joint_names: list[str],
     joint_order: list[int],
     title: str = "Static-pose gravity test",
+    show: bool = True,
 ):
     """Diverging scatter of the static-pose torque error.
 
@@ -257,7 +258,8 @@ def plot_static_pose_errors(
         ]
     ax.legend(handles=handles, loc="best", fontsize=8)
     fig.tight_layout()
-    plt.show()
+    if show:
+        plt.show()
     return fig
 
 
@@ -272,6 +274,7 @@ def run_static_pose_test(
     seed: int = STATIC_TEST_SEED,
     plot: bool = True,
     verbose: bool = True,
+    show: bool = True,
 ):
     """Static-pose gravity test: identified / prior vs true joint torques.
 
@@ -372,5 +375,6 @@ def run_static_pose_test(
             f"RMS: identified {rms_all:.4f} Nm"
             + (f" vs prior {rms_all_p:.4f} Nm" if rms_all_p is not None else "")
         ),
+        show=show,
     )
     return err, err_prior, fig

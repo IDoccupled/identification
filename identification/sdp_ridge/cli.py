@@ -344,9 +344,20 @@ def main(argv: list[str] | None = None) -> None:
         is_sim,
         urdf_ts,
     )
-    run_static_test(args, result, data)
-    run_validation_plots(args, result, data, is_sim, val_yamls, gravity, waist_yaw)
-    cross_validate_sim_heldout(
+    static_fig = run_static_test(args, result, data)
+    # Collect every figure and call plt.show() **once** at the end: calling
+    # plt.show() several times in one process is unreliable (typically only one
+    # batch of figures ends up visible), which is why the identification-bag
+    # torque comparison used to "disappear" behind the validation figure.
+    figs = [static_fig] if static_fig is not None else []
+    figs += run_validation_plots(
         args, result, data, is_sim, val_yamls, gravity, waist_yaw
     )
+    figs += cross_validate_sim_heldout(
+        args, result, data, is_sim, val_yamls, gravity, waist_yaw
+    )
+    if figs:
+        import matplotlib.pyplot as plt
+
+        plt.show()
     print_finished()

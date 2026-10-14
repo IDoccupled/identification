@@ -462,7 +462,11 @@ def export_identified_urdf(
 
 
 def run_static_test(args, result, data):
-    """Static-pose gravity test (--static-test, sim only)."""
+    """Static-pose gravity test (--static-test, sim only).
+
+    Returns the created figure (or None) — the caller shows it along with the
+    other figures in a single ``plt.show()``.
+    """
     # 4d. Static-pose gravity test (--static-test, sim only) — sample random
     #     collision-free, within-limit static poses (v = a = 0 ⇒ only the
     #     gravity term survives) and compare the joint torques of the true URDF
@@ -472,21 +476,24 @@ def run_static_test(args, result, data):
     #     **same regressor** (the prior URDF geometry), matching how the
     #     training torque is synthesised ⇒ the difference comes purely from the
     #     parameter error.
-    if args.static_test:
-        print("\n" + "=" * 100)
-        print("STATIC-POSE GRAVITY TEST (--static-test)".center(100))
-        print("=" * 100)
-        run_static_pose_test(
-            reg=data["reg"],
-            pi_true=data["pi_true"],
-            pi_identified=result.pi_identified,
-            pi_prior=data["pi_prior"],  # overlay the URDF prior error too
-            joint_names=data["joint_names"],
-            joint_order=result.joint_order,
-            n_poses=args.static_poses,
-            seed=args.static_seed,
-            plot=not args.no_plot,
-        )
+    if not args.static_test:
+        return None
+    print("\n" + "=" * 100)
+    print("STATIC-POSE GRAVITY TEST (--static-test)".center(100))
+    print("=" * 100)
+    _err, _err_prior, fig = run_static_pose_test(
+        reg=data["reg"],
+        pi_true=data["pi_true"],
+        pi_identified=result.pi_identified,
+        pi_prior=data["pi_prior"],  # overlay the URDF prior error too
+        joint_names=data["joint_names"],
+        joint_order=result.joint_order,
+        n_poses=args.static_poses,
+        seed=args.static_seed,
+        plot=not args.no_plot,
+        show=False,  # 由 cli.main 统一 plt.show()
+    )
+    return fig
 
 
 def run_validation_plots(
@@ -497,8 +504,15 @@ def run_validation_plots(
     val_yamls,
     gravity,
     waist_yaw,
-):
-    """Training plot (sim) / bag-wise measured cross-validation + summary."""
+) -> list:
+    """Training plot (sim) / bag-wise measured cross-validation + summary.
+
+    Every figure is created with ``show=False`` and returned as a list; the
+    caller (``cli.main``) opens them all with a **single** ``plt.show()``.
+    Calling ``plt.show()`` once per figure batch is unreliable — typically only
+    one batch ends up visible — which made the identification-bag curve vanish.
+    """
+    figs: list = []
     # 5. Cross-validation / comparison plot
     #    sim: true vs prior vs identified on the training trajectory.
     #    meas: validate the identification on another trajectory/bag — pi_prior
@@ -508,7 +522,7 @@ def run_validation_plots(
     #          _meta.source_bag.
     if not args.no_plot:
         if is_sim:
-            plot_torque_comparison_simulated(
+            figs += plot_torque_comparison_simulated(
                 result,
                 joint_names=data["joint_names"],
                 Y_stack=data["Y_stack"],
@@ -516,13 +530,14 @@ def run_validation_plots(
                 sample_rate=args.sample_rate,
                 twin=args.twin,
                 layout=args.fig_layout,
+                show=False,
             )
         else:
             # Training fit on the **identification** bag itself: the samples the
             # solver was fitted on (same Y / tau as the solve), plotted in the
             # same layout as the held-out validation below so the two figures
             # can be read side by side.
-            plot_torque_comparison_measured_train(
+            figs += plot_torque_comparison_measured_train(
                 result,
                 Y_stack=data["Y_stack"],
                 tau_measured=data["tau_measured"],
@@ -532,7 +547,8 @@ def run_validation_plots(
                 sample_rate=args.sample_rate,
                 twin=args.twin,
                 layout=args.fig_layout,
-            )
+                show=False,
+            )["figures"]
 
             # Per validation trajectory: each yaml's bag contributes its **own**
             # base-frame gravity / waist angle (different recording sessions
@@ -575,7 +591,9 @@ def run_validation_plots(
                         tau_delay=args.tau_delay,  # same delay as in the ID
                         twin=args.twin,  # time-window zoom, e.g. "0:13.4"
                         layout=args.fig_layout,
+                        show=False,
                     )
+                    figs += out["figures"]
                     cv_rows.append(
                         {
                             "yaml": Path(val_yaml).name,
@@ -597,6 +615,7 @@ def run_validation_plots(
                         }
                     )
             print_cv_summary(cv_rows, data["joint_names"], result.joint_order)
+    return figs
 
 
 def cross_validate_sim_heldout(
@@ -608,9 +627,14 @@ def cross_validate_sim_heldout(
     gravity,
     waist_yaw,
 ):
-    """Sim held-out cross-validation on extra --val-yaml yamls."""
+    """Sim held-out cross-validation on extra --val-yaml yamls.
+
+    Returns the created figures (empty list when skipped) so ``cli.main`` can
+    open everything with a single ``plt.show()``.
+    """
     from identification.fourier_trajectory import FourierTrajectory
 
+    figs: list = []
     # 5b. sim held-out cross-validation (optional) — only run when --val-yaml
     #     was given explicitly (one or several *different* trajectories):
     #     recompute the true torque on each of them with the same pi_true and
@@ -648,7 +672,9 @@ def cross_validate_sim_heldout(
                     twin=args.twin,  # time-window zoom, e.g. "0:13.4"
                     plot=not args.no_plot,
                     layout=args.fig_layout,
+                    show=False,
                 )
+                figs += out["figures"]
                 cv_rows.append(
                     {"yaml": Path(val_yaml).name, "note": note, "stats": out["stats"]}
                 )
@@ -665,6 +691,7 @@ def cross_validate_sim_heldout(
                     }
                 )
         print_cv_summary(cv_rows, data["joint_names"], result.joint_order)
+    return figs
 
 
 def print_finished():
