@@ -84,7 +84,8 @@ RIDGE_QUALITY_WEIGHTS = {
     "ok": 3.0,
     "bad": 10.0,
     "rank_deficient": 20.0,
-    "small": 1e-3,
+    # "small": 1e-3,
+    "small": 1.0,
 }
 # RIDGE_FREEZE_QUALITIES = frozenset({"null", "small"})
 RIDGE_FREEZE_QUALITIES = frozenset({"null"})
@@ -1993,6 +1994,7 @@ def _plot_torque_comparison_panels(
     true_label: str = "true",
     title: str = "Joint Torque Comparison",
     twin: str | None = None,
+    show: bool = True,
 ) -> list:
     """Per-joint torque comparison plots — **one figure per joint**.
 
@@ -2092,7 +2094,8 @@ def _plot_torque_comparison_panels(
         fig.suptitle(title, fontsize=13)
         fig.tight_layout(rect=[0, 0, 1, 0.95])
 
-    plt.show()
+    if show:
+        plt.show()
     return figs
 
 
@@ -2105,6 +2108,7 @@ def plot_torque_comparison_simulated(
     offset: float | None = None,
     show_residual: bool = True,
     twin: str | None = None,
+    show: bool = True,
 ):
     """Plot τ_true vs τ_prior vs τ_identified — simulation case (pi_true known).
 
@@ -2131,6 +2135,7 @@ def plot_torque_comparison_simulated(
         true_label="true",
         title="Joint Torque Comparison (simulated): true vs prior vs identified",
         twin=twin,
+        show=show,
     )
 
 
@@ -2151,6 +2156,7 @@ def plot_torque_comparison_measured(
     show_residual: bool = True,
     verbose: bool = True,
     twin: str | None = None,
+    show: bool = True,
 ):
     """Cross-validation plot on a held-out measurement (pi_true unknown).
 
@@ -2273,6 +2279,7 @@ def plot_torque_comparison_measured(
             f"bag={val_bag_name}  yaml={val_yaml}"
         ),
         twin=twin,
+        show=show,
     )
     return {"stats": stats, "figures": figures}
 
@@ -2288,6 +2295,7 @@ def plot_torque_comparison_measured_train(
     offset: float | None = None,
     show_residual: bool = True,
     twin: str | None = None,
+    show: bool = True,
 ):
     """Training-bag torque comparison — the **identification** bag (meas mode).
 
@@ -2341,6 +2349,7 @@ def plot_torque_comparison_measured_train(
             f"bag={bag_name or '?'}  yaml={trajectory_yaml or '?'}"
         ),
         twin=twin,
+        show=show,
     )
     return {"stats": stats, "figures": figures}
 
@@ -2361,6 +2370,7 @@ def plot_torque_comparison_simulated_validation(
     verbose: bool = True,
     twin: str | None = None,
     plot: bool = True,
+    show: bool = True,
 ):
     """Held-out cross-validation of sim identification on a different YAML.
 
@@ -2456,6 +2466,7 @@ def plot_torque_comparison_simulated_validation(
                 "(identified on a different training yaml)"
             ),
             twin=twin,
+            show=show,
         )
     return {"stats": stats, "figures": figures}
 
@@ -2553,6 +2564,7 @@ def plot_static_pose_errors(
     joint_names: list[str],
     joint_order: list[int],
     title: str = "Static-pose gravity test",
+    show: bool = True,
 ):
     """Diverging scatter of the static-pose torque error.
 
@@ -2691,7 +2703,8 @@ def plot_static_pose_errors(
         ]
     ax.legend(handles=handles, loc="best", fontsize=8)
     fig.tight_layout()
-    plt.show()
+    if show:
+        plt.show()
     return fig
 
 
@@ -2706,6 +2719,7 @@ def run_static_pose_test(
     seed: int = STATIC_TEST_SEED,
     plot: bool = True,
     verbose: bool = True,
+    show: bool = True,
 ):
     """Static-pose gravity test: identified / prior vs true joint torques.
 
@@ -2806,6 +2820,7 @@ def run_static_pose_test(
             f"RMS: identified {rms_all:.4f} Nm"
             + (f" vs prior {rms_all_p:.4f} Nm" if rms_all_p is not None else "")
         ),
+        show=show,
     )
     return err, err_prior, fig
 
@@ -3670,11 +3685,14 @@ def main(argv: list[str] | None = None) -> None:
     #     出的关节力矩”之差，画成以 0 为中心纵轴的散点图（每列一个姿势，每个关节
     #     在纵向上一个点；误差为 0 则停在最中间）。两者用**同一个回归器**（prior URDF
     #     的几何），与训练数据的合成方式一致 ⇒ 差异纯粹来自参数误差。
+    # 收集所有图，末尾只调用一次 plt.show()：同一个进程里多次 plt.show() 不可靠
+    # （通常只有一批图能显示出来），会让辨识 bag 的力矩对比图“消失”。
+    figs: list = []
     if args.static_test:
         print("\n" + "=" * 100)
         print("STATIC-POSE GRAVITY TEST (--static-test)".center(100))
         print("=" * 100)
-        run_static_pose_test(
+        _err_static, _err_prior_static, _fig_static = run_static_pose_test(
             reg=data["reg"],
             pi_true=data["pi_true"],
             pi_identified=result.pi_identified,
@@ -3684,7 +3702,10 @@ def main(argv: list[str] | None = None) -> None:
             n_poses=args.static_poses,
             seed=args.static_seed,
             plot=not args.no_plot,
+            show=False,  # 由 main 末尾统一 plt.show()
         )
+        if _fig_static is not None:
+            figs.append(_fig_static)
 
     # 5. Cross-validation / comparison plot
     #    sim：真值 vs prior vs identified 对比（训练轨迹上）。
@@ -3693,18 +3714,19 @@ def main(argv: list[str] | None = None) -> None:
     #          从验证 YAML 的 _meta.source_bag 读取。
     if not args.no_plot:
         if is_sim:
-            plot_torque_comparison_simulated(
+            figs += plot_torque_comparison_simulated(
                 result,
                 joint_names=data["joint_names"],
                 Y_stack=data["Y_stack"],
                 pi_reference=data["pi_true"],
                 sample_rate=args.sample_rate,
                 twin=args.twin,
+                show=False,
             )
         else:
             # 辨识 bag 自身（即求解时真正用到的样本）的训练拟合图：与下面的
             # 留出验证图同种样式，便于对照阅读。
-            plot_torque_comparison_measured_train(
+            figs += plot_torque_comparison_measured_train(
                 result,
                 Y_stack=data["Y_stack"],
                 tau_measured=data["tau_measured"],
@@ -3713,7 +3735,8 @@ def main(argv: list[str] | None = None) -> None:
                 trajectory_yaml=data.get("trajectory_yaml"),
                 sample_rate=args.sample_rate,
                 twin=args.twin,
-            )
+                show=False,
+            )["figures"]
 
             # 逐条验证轨迹：每条 yaml 的验证 bag 用它**自己** bag 读到的机体系重力/
             # 腰关节角度（不同录制场次的姿态不同，不能沿用辨识 bag 的值）；
@@ -3754,7 +3777,9 @@ def main(argv: list[str] | None = None) -> None:
                         waist_yaw_offset=val_waist,
                         tau_delay=args.tau_delay,  # 与辨识一致的时延补偿
                         twin=args.twin,  # 时间窗缩放，如 "0:13.4"
+                        show=False,
                     )
+                    figs += out["figures"]
                     cv_rows.append(
                         {
                             "yaml": Path(val_yaml).name,
@@ -3809,7 +3834,9 @@ def main(argv: list[str] | None = None) -> None:
                     waist_yaw_offset=waist_yaw,
                     twin=args.twin,  # 时间窗缩放，如 "0:13.4"
                     plot=not args.no_plot,
+                    show=False,
                 )
+                figs += out["figures"]
                 cv_rows.append(
                     {"yaml": Path(val_yaml).name, "note": note, "stats": out["stats"]}
                 )
@@ -3825,6 +3852,11 @@ def main(argv: list[str] | None = None) -> None:
                     }
                 )
         print_cv_summary(cv_rows, data["joint_names"], result.joint_order)
+
+    if figs:
+        import matplotlib.pyplot as plt
+
+        plt.show()
 
     print("\n" + "=" * 100)
     print("SDP identification finished.".center(100))

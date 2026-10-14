@@ -152,6 +152,34 @@ class FourierTrajectory:
         coeffs = self.load_coeffs(yaml_filename)
         return self.generate_trajectory(coeffs, t=t)
 
+    @staticmethod
+    def infer_n_harmonics(n_coeffs: int, dim: int) -> int:
+        """Infer the per-joint Fourier harmonic order from a flat coeff count.
+
+        ``load_coeffs`` flattens each joint to ``2n+1`` numbers
+        (``a1,b1,...,an,bn,q0``), so ``n = (n_coeffs/dim - 1) / 2``.  Making the
+        order data-driven lets 5-harmonic design YAMLs (``excite_*.yaml``) and
+        higher-order recovered YAMLs (``recovered_*.yaml`` from
+        ``fourier_fit.py --n-harmonics K``) coexist, without touching the
+        module-level :data:`N_HARMONICS` default.
+
+        :param n_coeffs: Total length of the flat coefficient array.
+        :param dim: Number of joints/dimensions.
+        :return: Harmonic order ``n``.
+        :raises ValueError: If ``n_coeffs`` is not ``dim * (2n + 1)``.
+        """
+        if dim <= 0 or n_coeffs % dim:
+            raise ValueError(
+                f"coefficient array length {n_coeffs} is not divisible by dim={dim}"
+            )
+        per_joint = n_coeffs // dim
+        if per_joint < 3 or (per_joint - 1) % 2:
+            raise ValueError(
+                f"per-joint coefficient count {per_joint} is not 2n+1; "
+                "cannot infer the harmonic order"
+            )
+        return (per_joint - 1) // 2
+
     def generate_trajectory(self, coeffs: np.ndarray, t: np.ndarray | None = None):
         """
         Generate joint trajectories (q, v, a) from Fourier coefficients.
@@ -173,6 +201,10 @@ class FourierTrajectory:
                   ``t = time_coeffs * t_phys``.
         :return: Tuple of (q_traj, v_traj, a_traj), each of shape (len(t), dim)
         """
+        # 阶数从 coeffs 长度推断（2n+1 个/joint），不再依赖 self.n_harmonics：
+        # 这样 5 阶的设计 YAML 与高阶的 recovered YAML 可以共存，下游无需改动。
+        coeffs = np.asarray(coeffs, dtype=float)
+        self.n_harmonics = self.infer_n_harmonics(len(coeffs), self.dim)
         params = coeffs.reshape(self.dim, self.n_harmonics * 2 + 1)
         if t is None:
             t = self.t_array * self.time_coeffs

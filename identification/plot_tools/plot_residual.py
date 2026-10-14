@@ -14,6 +14,10 @@ plot_residual.py — 直接从已保存的轨迹系数 YAML 画出与 fourier_fi
     python -m identification.plot_residual -y X.yaml --bag 13_57_28
     python -m identification.plot_residual -y X.yaml --time-coeffs 0.75 -w 0:15 --save /tmp/resid.png
         # --save 时每关节一张 -> /tmp/resid_J13.png ... J17.png
+
+时间窗：默认用 YAML `_meta.twin_s`（fourier_fit 拟合时自动跳过的开头瞬变段），
+否则那个瞬变会重新出现在残差里，并在频域变成 ~1/f 衰减的 sinc 旁瓣（"波浪形"）。
+要强制看全程用 `-w 0:`；`-w` 显式给出时以 `-w` 为准。
 """
 
 import argparse
@@ -413,7 +417,8 @@ def main():
         "--twin",
         default=None,
         metavar="START:END",
-        help="只画时间窗，如 '0:13.4'（两端可省略）",
+        help="只画时间窗，如 '0:13.4'（两端可省略）。不给则用 YAML _meta.twin_s"
+        "（fourier_fit 拟合时自动跳过的瞬变段）；要强制看全程用 --twin 0:",
     )
     ap.add_argument(
         "--save",
@@ -472,14 +477,28 @@ def main():
     period = traj.duration
     print(f"  理论轨迹: 采样点={q_th.shape[1]}  周期={period:.4f}s")
 
-    # 时间窗裁剪
-    t0w, t1w = _parse_window(args.twin, t[-1])
+    # 时间窗裁剪：--twin 显式给出时用它；否则优先用 fourier_fit 存进 YAML 的
+    # _meta.twin_s（拟合时已自动跳过开头的瞬变段）。不这样做的话，那个被裁掉的
+    # 瞬变会重新出现在残差里，并在频域变成 ~1/f 衰减的 sinc 旁瓣（"波浪形"）。
+    # 想看全程就显式给 --twin 0: 。
+    if args.twin is not None:
+        t0w, t1w = _parse_window(args.twin, t[-1])
+        win_src = f"--twin {args.twin}"
+    else:
+        twin_s = meta.get("twin_s")
+        if twin_s:
+            t0w, t1w = float(twin_s[0]), float(twin_s[1])
+            win_src = f"YAML _meta.twin_s [{t0w:.3f}, {t1w:.3f}]（拟合时的窗口）"
+        else:
+            t0w, t1w = 0.0, float(t[-1])
+            win_src = "全程（YAML _meta 里没有 twin_s）"
     mask_t = (t >= t0w) & (t <= t1w)
     if not np.any(mask_t):
         raise ValueError(f"时间窗 [{t0w}, {t1w}] 内没有数据点")
-    # 横轴起点：无 --twin 时为 0（bag 已归零）；只用于画图，不参与相位折叠。
+    # 横轴起点：裁剪后从 0 开始画；只用于画图，不参与相位折叠。
     t_shift = float(t[mask_t][0])
     t, q, v = t[mask_t], q[mask_t], v[mask_t]
+    print(f"  时间窗: {win_src}  ->  [{t0w:.3f}, {t1w:.3f}] s  {len(t)} 样本")
 
     if args.layout == "summary":
         figs = [
